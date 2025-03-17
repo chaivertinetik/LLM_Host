@@ -1,0 +1,39 @@
+# This is a basic workflow that is manually triggered
+
+
+# Controls when the action will run. Workflow runs when manually triggered using the UI
+# or API.
+# This is a basic workflow that is manually triggered
+
+name: Run LLM-Geo
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+    # Allows manual triggering of the workflow
+
+jobs:
+  run-llm-geo:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v3
+      
+    - name: Setup Micromamba
+      uses: mamba-org/setup-micromamba@v1
+      with:
+        environment-file: environment.yml
+        init-shell: bash
+        cache-environment: true
+        post-cleanup: 'all'
+        
+    - name: Run LLM-Geo Script
+      shell: bash -l {0}
+      run: |
+        micromamba activate llm-geo
+        pip install -r requirements.txt
+        python LLM_Geo_Executable.py
