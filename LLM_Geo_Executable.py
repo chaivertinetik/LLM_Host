@@ -15,6 +15,7 @@ import helper
 from LLM_Geo_kernel import Solution
 import vertexai
 from vertexai.generative_models import GenerativeModel
+from google import genai
 
 isReview = False
 
@@ -35,6 +36,7 @@ os.makedirs(save_dir, exist_ok=True)
 # create graph
 # model=r"gpt-4"
 # model = "gemini-1.5-flash-002"
+
 
 vertexai.init(project="llmgis", location="us-central1")
 solution = Solution(
@@ -81,7 +83,13 @@ solution.assembly_LLM_response = assembly_LLM_response
 solution.save_solution()
 
 
+# API_KEY-"AIzaSyC3QRe3_V5BfqlNkhbS6r7wFhIn8IGBkcw"
+# client = genai.Client(vertexai=True, api_key=API_KEY)
 
+# response = client.models.generate_content(
+#     model="gemini-2.0-flash-001",
+#     contents="""Explain bubble sort to me.""",
+# )
 
 # TODO(developer): Update and un-comment below line
 PROJECT_ID = "llmgis"
@@ -106,9 +114,9 @@ for attempt in range(10):
         else:
             raise
 
-response = model.generate_content(
-    solution.assembly_prompt
-)
+# response = model.generate_content(
+#     solution.assembly_prompt
+# )
 
 code_for_assembly = helper.extract_code(response.text)
 
