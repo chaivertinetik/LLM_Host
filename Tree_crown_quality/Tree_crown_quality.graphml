@@ -1,0 +1,33 @@
+<?xml version='1.0' encoding='utf-8'?>
+<graphml xmlns="http://graphml.graphdrawing.org/xmlns" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://graphml.graphdrawing.org/xmlns http://graphml.graphdrawing.org/xmlns/1.0/graphml.xsd">
+  <key id="d2" for="node" attr.name="description" attr.type="string" />
+  <key id="d1" for="node" attr.name="data_path" attr.type="string" />
+  <key id="d0" for="node" attr.name="node_type" attr.type="string" />
+  <graph edgedefault="directed">
+    <node id="geojson_data">
+      <data key="d0">data</data>
+      <data key="d1">https://raw.githubusercontent.com/pchaitanya21/VertinetikLLM/main/data/Hicks_Lodge_Trial_pred.geojson</data>
+      <data key="d2">Tree crown GeoJSON data</data>
+    </node>
+    <node id="load_geojson">
+      <data key="d0">operation</data>
+      <data key="d2">Load GeoJSON file into GeoDataFrame</data>
+    </node>
+    <node id="tree_gdf">
+      <data key="d0">data</data>
+      <data key="d2">GeoDataFrame containing tree data</data>
+    </node>
+    <node id="filter_ash">
+      <data key="d0">operation</data>
+      <data key="d2">Filter GeoDataFrame to include only Ash species ('Predicted Tree Species':'Ash')</data>
+    </node>
+    <node id="ash_tree_ids">
+      <data key="d0">data</data>
+      <data key="d2">List of 'Tree ID' for Ash trees</data>
+    </node>
+    <edge source="geojson_data" target="load_geojson" />
+    <edge source="load_geojson" target="tree_gdf" />
+    <edge source="tree_gdf" target="filter_ash" />
+    <edge source="filter_ash" target="ash_tree_ids" />
+  </graph>
+</graphml>

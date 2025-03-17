@@ -1,0 +1,74 @@
+import geopandas as gpd
+import pandas as pd
+import matplotlib.pyplot as plt
+
+def load_geojson(geojson_url='https://raw.githubusercontent.com/pchaitanya21/VertinetikLLM/main/data/Hicks_Lodge_Trial_pred.geojson'):
+    #Load GeoJSON data into a GeoDataFrame.
+    try:
+        tree_gdf = gpd.read_file(geojson_url)
+        return tree_gdf
+    except Exception as e:
+        print(f"An error occurred while loading the GeoJSON file: {e}")
+        return None
+
+def filter_ash(tree_gdf=None):
+    #Filter GeoDataFrame to select only Ash trees ('Predicted Tree Species':'Ash').
+    if tree_gdf is None:
+        return None
+
+    tree_gdf = tree_gdf.dropna(subset=['Predicted Tree Species'])
+    ash_trees_gdf = tree_gdf[tree_gdf['Predicted Tree Species'] == 'Ash']
+    return ash_trees_gdf
+
+import geopandas as gpd
+import matplotlib.pyplot as plt
+
+def create_map(tree_gdf=None, ash_trees_gdf=None):
+    #Create a map using Matplotlib and GeoPandas, highlighting Ash trees in red.
+    if tree_gdf is None or ash_trees_gdf is None:
+        return None
+
+    fig, ax = plt.subplots(figsize=(15, 10))
+
+    tree_gdf.plot(ax=ax, color='lightgray', edgecolor='black', linewidth=0.2)
+    ash_trees_gdf.plot(ax=ax, color='red', edgecolor='black', linewidth=0.2, label='Ash Trees')
+
+    ax.set_title('Tree Crown Map')
+    ax.set_xlabel('Longitude')
+    ax.set_ylabel('Latitude')
+    ax.legend()
+    map_figure = fig
+    
+    plt.savefig('tree_crown_map.png')
+    return map_figure
+
+import matplotlib.pyplot as plt
+
+def set_map_size(map_figure=None):
+    #Set the figure size of the map to 15x10 inches.
+    if map_figure is None:
+        return None
+    
+    fig = map_figure
+    fig.set_size_inches(15, 10)
+    sized_map_figure = fig
+    sized_map_figure.savefig('Tree_crown_quality/tree_crown_map.png')
+    return sized_map_figure
+
+def assembely_solution():
+    tree_gdf = load_geojson()
+    if tree_gdf is None:
+        return None
+    ash_trees_gdf = filter_ash(tree_gdf)
+    if ash_trees_gdf is None:
+        return None
+    map_figure = create_map(tree_gdf, ash_trees_gdf)
+    if map_figure is None:
+        return None
+    final_map = set_map_size(map_figure)
+    return final_map
+
+result=assembely_solution()
+print(result)
+
+
