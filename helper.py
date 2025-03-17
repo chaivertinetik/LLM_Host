@@ -20,12 +20,12 @@ from pyvis.network import Network
 import LLM_Geo_Constants as constants
 
 #load config
-config = configparser.ConfigParser()
-config.read('config.ini')
+# config = configparser.ConfigParser()
+# config.read('config.ini')
 
 # use your KEY.
-OpenAI_key = config.get('API_Key', 'OpenAI_key')
-client = OpenAI(api_key=OpenAI_key)
+# OpenAI_key = config.get('API_Key', 'OpenAI_key')
+# client = OpenAI(api_key=OpenAI_key)
 
 
 def extract_content_from_LLM_reply(response):
