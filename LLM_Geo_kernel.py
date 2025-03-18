@@ -24,7 +24,17 @@ import textwrap
 # use your KEY.
 # OpenAI_key = config.get('API_Key', 'OpenAI_key')
 # client = OpenAI(api_key=OpenAI_key)
+def get_credentials():
+    if 'GOOGLE_CREDENTIALS' in os.environ:
+        # For GitHub Actions - load from environment secret
+        credentials_info = json.loads(os.environ['GOOGLE_CREDENTIALS'])
+        return service_account.Credentials.from_service_account_info(credentials_info)
+    else:
+        # For local development - load from file
+        return service_account.Credentials.from_service_account_file('path/to/your-key.json')
 
+# Initialize Vertex AI with the credentials
+credentials = get_credentials()
   
 
 class Solution():
@@ -42,7 +52,8 @@ class Solution():
                  stream=True,
                  verbose=True,
                  project_id="llmgis",
-                 location="us-central1"):
+                 location="us-central1", 
+                 credentials=credentials):
         self.task = task
         self.solution_graph = None
         self.graph_response = None
@@ -88,7 +99,7 @@ class Solution():
         self.chat_history = [{'role': 'system', 'content': role}]
         
         # Initialize Vertex AI
-        vertexai.init(project=project_id, location=location)
+        vertexai.init(project=project_id, location=location, credentials=credentials)
         # self.model = GenerativeModel(model_name)
     # def __init__(self, 
     #              task, 
