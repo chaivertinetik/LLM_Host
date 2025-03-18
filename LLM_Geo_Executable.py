@@ -82,15 +82,6 @@ assembly_LLM_response = solution.get_LLM_assembly_response(review=isReview)
 solution.assembly_LLM_response = assembly_LLM_response
 solution.save_solution()
 
-
-# API_KEY-"AIzaSyC3QRe3_V5BfqlNkhbS6r7wFhIn8IGBkcw"
-# client = genai.Client(vertexai=True, api_key=API_KEY)
-
-# response = client.models.generate_content(
-#     model="gemini-2.0-flash-001",
-#     contents="""Explain bubble sort to me.""",
-# )
-
 # TODO(developer): Update and un-comment below line
 PROJECT_ID = "llmgis"
 vertexai.init(project=PROJECT_ID, location="us-central1")
