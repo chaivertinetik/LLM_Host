@@ -20,13 +20,10 @@ from google.oauth2 import service_account
 
 # Load credentials from environment variable or file
 def get_credentials():
-    if 'GOOGLE_CREDENTIALS' in os.environ:
-        # For GitHub Actions - load from environment secret
-        credentials_info = json.loads(os.environ['GOOGLE_CREDENTIALS'])
-        return service_account.Credentials.from_service_account_info(credentials_info)
-    else:
-        # For local development - load from file
-        return service_account.Credentials.from_service_account_file('path/to/your-key.json')
+    # For GitHub Actions - load from environment secret
+    credentials_info = json.loads(os.environ['GOOGLE_CREDENTIALS'])
+    
+    return service_account.Credentials.from_service_account_info(credentials_info)
 
 
 
