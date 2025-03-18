@@ -17,6 +17,19 @@ import vertexai
 from vertexai.generative_models import GenerativeModel
 from google import genai
 
+
+# Load credentials from environment variable or file
+def get_credentials():
+    if 'GOOGLE_CREDENTIALS' in os.environ:
+        # For GitHub Actions - load from environment secret
+        credentials_info = json.loads(os.environ['GOOGLE_CREDENTIALS'])
+        return service_account.Credentials.from_service_account_info(credentials_info)
+    else:
+        # For local development - load from file
+        return service_account.Credentials.from_service_account_file('path/to/your-key.json')
+
+
+
 isReview = False
 
 #change this section so its using the API request sent by a user : 
@@ -37,8 +50,8 @@ os.makedirs(save_dir, exist_ok=True)
 # model=r"gpt-4"
 # model = "gemini-1.5-flash-002"
 
-
-vertexai.init(project="llmgis", location="us-central1")
+credentials = get_credentials()
+vertexai.init(project="llmgis", location="us-central1", credentials=credentials)
 solution = Solution(
                     task=TASK,
                     task_name=task_name,
@@ -84,7 +97,8 @@ solution.save_solution()
 
 # TODO(developer): Update and un-comment below line
 PROJECT_ID = "llmgis"
-vertexai.init(project=PROJECT_ID, location="us-central1")
+
+vertexai.init(project=PROJECT_ID, location="us-central1", credentials=credentials)
 
 model = GenerativeModel("gemini-1.5-flash-002")
 
