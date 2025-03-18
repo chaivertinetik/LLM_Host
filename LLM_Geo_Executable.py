@@ -17,6 +17,7 @@ import vertexai
 from vertexai.generative_models import GenerativeModel
 from google import genai
 from google.oauth2 import service_account
+import json
 
 # Load credentials from environment variable or file
 def get_credentials():
