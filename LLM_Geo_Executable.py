@@ -16,7 +16,7 @@ from LLM_Geo_kernel import Solution
 import vertexai
 from vertexai.generative_models import GenerativeModel
 from google import genai
-
+from google.oauth2 import service_account
 
 # Load credentials from environment variable or file
 def get_credentials():
