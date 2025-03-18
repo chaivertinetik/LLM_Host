@@ -17,6 +17,7 @@ import vertexai
 from vertexai.generative_models import GenerativeModel
 import textwrap
 from google.oauth2 import service_account
+import json
 
 #load config
 # config = configparser.ConfigParser()
