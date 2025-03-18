@@ -25,14 +25,12 @@ from google.oauth2 import service_account
 # use your KEY.
 # OpenAI_key = config.get('API_Key', 'OpenAI_key')
 # client = OpenAI(api_key=OpenAI_key)
+
 def get_credentials():
-    if 'GOOGLE_CREDENTIALS' in os.environ:
-        # For GitHub Actions - load from environment secret
-        credentials_info = json.loads(os.environ['GOOGLE_CREDENTIALS'])
-        return service_account.Credentials.from_service_account_info(credentials_info)
-    else:
-        # For local development - load from file
-        return service_account.Credentials.from_service_account_file('path/to/your-key.json')
+    # For GitHub Actions - load from environment secret
+    credentials_info = json.loads(os.environ['GOOGLE_CREDENTIALS'])
+    
+    return service_account.Credentials.from_service_account_info(credentials_info)
 
 # Initialize Vertex AI with the credentials
 credentials = get_credentials()
