@@ -1,0 +1,9 @@
+steps:
+- name: 'gcr.io/cloud-builders/docker'
+  args: ['build', '-t', 'gcr.io/llmgis/llm-host', '.']
+- name: 'gcr.io/cloud-builders/docker'
+  args: ['push', 'gcr.io/llmgis/llm-host']
+- name: 'gcr.io/cloud-builders/gcloud'
+  args: ['run', 'deploy', 'llm-host', '--image', 'gcr.io/llmgis/llm-host', '--platform', 'managed', '--region', 'us-central1']
+images:
+- 'gcr.io/llmgis/llm-host'
