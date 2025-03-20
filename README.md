@@ -11,3 +11,6 @@ and
 
 
 The worflow automation triggers when: Someone opens a pull request against the main branch or You manually trigger it via the GitHub Actions UI using the "workflow_dispatch" event
+
+
+https://docs.google.com/document/d/1yaeu1pjWm-B51a8NmYapWe1_28ITkxCHbAruwEJ1gq8/edit?usp=sharing
