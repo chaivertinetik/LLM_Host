@@ -27,11 +27,12 @@ import json
 # OpenAI_key = config.get('API_Key', 'OpenAI_key')
 # client = OpenAI(api_key=OpenAI_key)
 
+import google.auth
+
 def get_credentials():
-    # For GitHub Actions - load from environment secret
-    credentials_info = json.loads(os.environ['GOOGLE_CREDENTIALS'])
-    
-    return service_account.Credentials.from_service_account_info(credentials_info)
+    """Load Google credentials using Application Default Credentials (ADC)."""
+    credentials, project = google.auth.default()
+    return credentials
 
 # Initialize Vertex AI with the credentials
 credentials = get_credentials()
