@@ -3,7 +3,7 @@ name: Deploy Frontend to GitHub Pages
 on:
   push:
     branches:
-      - main  # Change if your default branch is 'master'
+      - main  # or 'master' if that's your default
 
 jobs:
   build-and-deploy:
@@ -20,12 +20,14 @@ jobs:
 
       - name: 📦 Install dependencies
         run: npm install
+        working-directory: ./llm-geo-frontend  # ✅ Your frontend folder
 
       - name: 🛠️ Build the frontend
         run: npm run build
+        working-directory: ./llm-geo-frontend
 
       - name: 🚀 Deploy to GitHub Pages
         uses: peaceiris/actions-gh-pages@v3
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
-          publish_dir: ./dist
+          publish_dir: ./llm-geo-frontend/dist  # ✅ built files path
