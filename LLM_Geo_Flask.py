@@ -7,9 +7,11 @@ from vertexai.generative_models import GenerativeModel
 from google.oauth2 import service_account
 from LLM_Geo_kernel import Solution
 import helper
-
+from flask_cors import CORS
 # Initialize Flask app
+
 app = Flask(__name__)
+CORS(app)
 
 # Load credentials from environment variable or file
 def get_credentials():
