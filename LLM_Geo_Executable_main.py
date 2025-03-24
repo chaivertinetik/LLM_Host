@@ -17,6 +17,8 @@ import vertexai
 from vertexai.generative_models import GenerativeModel
 from google.oauth2 import service_account
 import json
+import time
+from google.api_core.exceptions import ResourceExhausted
 
 def get_credentials():
     credentials_info = json.loads(os.environ['GOOGLE_CREDENTIALS'])
@@ -113,11 +115,15 @@ code_for_assembly = helper.extract_code(response.text)
 
 all_code = all_operation_code_str + '\n' + code_for_assembly +  '\n' + 'assembely_solution()'
 
-with open('all_code.txt', 'r') as file:
+with open('all_code_id.py', 'r') as file:
     all_code = file.read()
 
+print("Starting execution...")
 
-
+# Execute the code directly - this is the simplest approach
 exec(all_code)
+
+print("Execution completed.")
+
 # display(Code(all_code, language='python'))
 # output=solution.execute_complete_program(code=all_code, try_cnt=10)
