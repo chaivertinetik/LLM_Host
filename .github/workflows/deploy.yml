@@ -32,21 +32,21 @@ jobs:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           publish_dir: ./llm-geo-frontend/dist  # ✅ built files path
   
-  deploy-backend-to-heroku:
-      runs-on: ubuntu-latest
-      needs: build-and-deploy  # Ensures frontend job finishes first
-      steps:
-        - name: Checkout code
-          uses: actions/checkout@v3
+  # deploy-backend-to-heroku:
+  #     runs-on: ubuntu-latest
+  #     needs: build-and-deploy  # Ensures frontend job finishes first
+  #     steps:
+  #       - name: Checkout code
+  #         uses: actions/checkout@v3
 
-        - name: Install Heroku CLI
-          run: curl https://cli-assets.heroku.com/install.sh | sh
+  #       - name: Install Heroku CLI
+  #         run: curl https://cli-assets.heroku.com/install.sh | sh
 
-        - name: Deploy to Heroku
-          env:
-            HEROKU_API_KEY: ${{ secrets.HEROKU_API_KEY }}
-            HEROKU_EMAIL: ${{ secrets.HEROKU_EMAIL }}
-          run: |
-            heroku auth:token > ~/.netrc
-            heroku git:remote -a dry-garden-99647  
-            git push heroku main  
+  #       - name: Deploy to Heroku
+  #         env:
+  #           HEROKU_API_KEY: ${{ secrets.HEROKU_API_KEY }}
+  #           HEROKU_EMAIL: ${{ secrets.HEROKU_EMAIL }}
+  #         run: |
+  #           heroku auth:token > ~/.netrc
+  #           heroku git:remote -a dry-garden-99647  
+  #           git push heroku main  
