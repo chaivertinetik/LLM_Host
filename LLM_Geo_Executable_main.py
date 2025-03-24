@@ -58,7 +58,7 @@ response_for_graph = solution.get_LLM_response_for_graph()
 solution.graph_response = response_for_graph
 solution.save_solution()
 
-file_path = "debug_ash_generated_code.py"
+file_path = "debug_tree_id.py"
 
 # Read the file content
 with open(file_path, "r") as file:
