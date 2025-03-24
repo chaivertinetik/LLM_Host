@@ -45,6 +45,8 @@ jobs:
         - name: Deploy to Heroku
           env:
             HEROKU_API_KEY: ${{ secrets.HEROKU_API_KEY }}
+            HEROKU_EMAIL: ${{ secrets.HEROKU_EMAIL }}
           run: |
+            heroku auth:token > ~/.netrc
             heroku git:remote -a dry-garden-99647  
             git push heroku main  
