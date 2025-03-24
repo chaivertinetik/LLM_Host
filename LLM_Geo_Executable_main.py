@@ -1,0 +1,106 @@
+import os
+import requests
+import networkx as nx
+import pandas as pd
+import geopandas as gpd
+import os
+import vertexai
+from vertexai.generative_models import GenerativeModel
+from pyvis.network import Network
+from openai import OpenAI
+from IPython.display import display, HTML, Code
+from IPython.display import clear_output
+import LLM_Geo_Constants as constants
+import helper
+from LLM_Geo_kernel import Solution
+import vertexai
+from vertexai.generative_models import GenerativeModel
+
+isReview = True
+
+#change this section so its using the API request sent by a user : 
+
+task_name ='Tree_crown_quality'
+
+TASK = r"""1) To plot out the tree crown using geoJSON file and highlight the trees that are ash species ('Predicted Tree Species':'Ash') using red. Please draw all polygons, not only the ones with poor condition and belonging to the Ash species. The map size is 15*10
+"""
+
+DATA_LOCATIONS = ["Tree crown geoJSON shape file: https://raw.githubusercontent.com/pchaitanya21/VertinetikLLM/main/data/Hicks_Lodge_Trial_pred.geojson."]
+
+save_dir = os.path.join(os.getcwd(), task_name)
+os.makedirs(save_dir, exist_ok=True)
+
+# create graph
+# model=r"gpt-4"
+# model = "gemini-1.5-flash-002"
+
+vertexai.init(project="llmgis", location="us-central1")
+solution = Solution(
+                    task=TASK,
+                    task_name=task_name,
+                    save_dir=save_dir,
+                    data_locations=DATA_LOCATIONS,
+                    )
+print("*"*100)
+print("Prompt to get solution graph:\n")
+print(solution.graph_prompt)
+
+
+response_for_graph = solution.get_LLM_response_for_graph() 
+solution.graph_response = response_for_graph
+solution.save_solution()
+
+file_path = "debug_ash_generated_code.py"
+
+# Read the file content
+with open(file_path, "r") as file:
+    debugged_code = file.read()
+
+# Store the code into solution.code_for_graph
+solution.code_for_graph = debugged_code
+
+exec(solution.code_for_graph)
+
+solution_graph = solution.load_graph_file()
+
+
+# Show the graph
+G = nx.read_graphml(solution.graph_file)  
+nt = helper.show_graph(G)
+html_name = os.path.join(os.getcwd(), solution.task_name + '.html') 
+
+operations = solution.get_LLM_responses_for_operations(review=isReview)
+solution.save_solution()
+
+all_operation_code_str = '\n'.join([operation['operation_code'] for operation in operations])
+
+assembly_LLM_response = solution.get_LLM_assembly_response(review=isReview)
+solution.assembly_LLM_response = assembly_LLM_response
+solution.save_solution()
+
+
+
+
+# TODO(developer): Update and un-comment below line
+PROJECT_ID = "llmgis"
+vertexai.init(project=PROJECT_ID, location="us-central1")
+
+model = GenerativeModel("gemini-1.5-flash-002")
+
+response = model.generate_content(
+    solution.assembly_prompt
+)
+
+code_for_assembly = helper.extract_code(response.text)
+
+
+all_code = all_operation_code_str + '\n' + code_for_assembly +  '\n' + 'assembely_solution()'
+
+with open('all_code.txt', 'r') as file:
+    all_code = file.read()
+
+
+
+exec(all_code)
+# display(Code(all_code, language='python'))
+# output=solution.execute_complete_program(code=all_code, try_cnt=10)
