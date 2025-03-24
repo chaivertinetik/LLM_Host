@@ -8,6 +8,11 @@ from google.oauth2 import service_account
 from LLM_Geo_kernel import Solution
 import helper
 from flask_cors import CORS
+import time
+from google.api_core.exceptions import ResourceExhausted
+import LLM_Geo_Constants as constants
+from pyvis.network import Network
+import requests
 # Initialize Flask app
 
 app = Flask(__name__)
@@ -34,7 +39,9 @@ def process_request():
         # Initialize Vertex AI
         credentials = get_credentials()
         vertexai.init(project="llmgis", location="us-central1", credentials=credentials)
-
+        user_task = r"""1) To plot out the tree crown using geoJSON file and highlight the trees that are ash species ('Predicted Tree Species':'Ash') using red. Please draw all polygons, not only the ones with poor condition and belonging to the Ash species. The map size is 15*10
+        """
+        task_name ='Tree_crown_quality'
         # Create Solution object
         solution = Solution(
             task=user_task,
@@ -48,10 +55,21 @@ def process_request():
         solution.graph_response = response_for_graph
         solution.save_solution()
 
+        file_path = "debug_tree_id.py"
+
+        # Read the file content
+        with open(file_path, "r") as file:
+            debugged_code = file.read()
+
+        # Store the code into solution.code_for_graph
+        solution.code_for_graph = debugged_code
+
+        exec(solution.code_for_graph)
         # Load graph file
         solution_graph = solution.load_graph_file()
-        G = nx.read_graphml(solution.graph_file)
-        helper.show_graph(G)
+        G = nx.read_graphml(solution.graph_file) 
+        nt = helper.show_graph(G)
+        html_name = os.path.join(os.getcwd(), solution.task_name + '.html') 
 
         # Generate operations
         operations = solution.get_LLM_responses_for_operations(review=False)
@@ -65,7 +83,16 @@ def process_request():
 
         # Run the generated code
         model = GenerativeModel("gemini-1.5-flash-002")
-        response = model.generate_content(solution.assembly_prompt)
+        for attempt in range(10):
+            try: 
+                response = model.generate_content(solution.assembly_prompt)
+                break
+            except ResourceExhausted: 
+                if attempt<10:
+                    time.sleep(10)
+                else:
+                    raise
+        # response = model.generate_content(solution.assembly_prompt)
         code_for_assembly = helper.extract_code(response.text)
 
         # Combine all code
@@ -80,7 +107,7 @@ def process_request():
 
         print("Execution completed.")
 
-        # Return a success response
+        # Change this to return the output to return the values generated. 
         return jsonify({"status": "success", "task_name": task_name, "message": "Task executed successfully."})
 
     except Exception as e:
