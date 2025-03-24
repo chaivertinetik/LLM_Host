@@ -70,10 +70,15 @@ def process_request():
 
         # Combine all code
         all_code = all_operation_code_str + '\n' + code_for_assembly + '\n' + 'assembely_solution()'
-        with open('all_code.txt', 'r') as file:
-             all_code = file.read()
-             
+        with open('all_code_id.py', 'r') as file:
+            all_code = file.read()
+
+        print("Starting execution...")
+
+        # Execute the code directly - this is the simplest approach
         exec(all_code)
+
+        print("Execution completed.")
 
         # Return a success response
         return jsonify({"status": "success", "task_name": task_name, "message": "Task executed successfully."})
