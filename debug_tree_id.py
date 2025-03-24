@@ -27,4 +27,4 @@ G.add_edge("filter_ash", "ash_tree_ids")
 #print(G.edges())
 
 #This part is not required by the prompt, but included for completeness.
-nx.write_graphml(G, "C:\\Users\\chait\\Projects\\LLM_Geo_GCP\\Hosting env\\Tree_crown_quality\\Tree_crown_quality.graphml")
+# nx.write_graphml(G, "C:\\Users\\chait\\Projects\\LLM_Geo_GCP\\Hosting env\\Tree_crown_quality\\Tree_crown_quality.graphml")
