@@ -93,9 +93,20 @@ vertexai.init(project=PROJECT_ID, location="us-central1", credentials=credential
 
 model = GenerativeModel("gemini-1.5-flash-002")
 
-response = model.generate_content(
-    solution.assembly_prompt
-)
+for attempt in range(10):
+    try:
+        response = model.generate_content(solution.assembly_prompt)
+        break  # If successful, break out of the loop
+    except ResourceExhausted:
+        if attempt < 10:  # If not the last attempt
+            print(f"Resource exhausted. Retrying in 10 seconds... (Attempt {attempt + 1}/10)")
+            time.sleep(10)  # Wait 10 seconds before retrying
+        else:
+            raise
+
+# response = model.generate_content(
+#     solution.assembly_prompt
+# )
 
 code_for_assembly = helper.extract_code(response.text)
 
