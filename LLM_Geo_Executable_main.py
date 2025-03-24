@@ -22,7 +22,7 @@ def get_credentials():
     credentials_info = json.loads(os.environ['GOOGLE_CREDENTIALS'])
     return service_account.Credentials.from_service_account_info(credentials_info)
 
-isReview = True
+isReview = False
 
 #change this section so its using the API request sent by a user : 
 
