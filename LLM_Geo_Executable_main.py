@@ -21,10 +21,10 @@ import json
  
 # Load credentials from environment variable or file
 def get_credentials():
-     # For GitHub Actions - load from environment secret
-     credentials_info = json.loads(os.environ['GOOGLE_CREDENTIALS'])
+    # For GitHub Actions - load from environment secret
+    credentials_info = json.loads(os.environ['GOOGLE_CREDENTIALS'])
      
-     return service_account.Credentials.from_service_account_info(credentials_info)
+    return service_account.Credentials.from_service_account_info(credentials_info)
  
  
  
@@ -51,11 +51,11 @@ os.makedirs(save_dir, exist_ok=True)
 credentials = get_credentials()
 vertexai.init(project="llmgis", location="us-central1", credentials=credentials)
 solution = Solution(
-                     task=TASK,
-                     task_name=task_name,
-                     save_dir=save_dir,
-                     data_locations=DATA_LOCATIONS,
-                     )
+                    task=TASK,
+                    task_name=task_name,
+                    save_dir=save_dir,
+                    data_locations=DATA_LOCATIONS,
+                    )
 print("*"*100)
 print("Prompt to get solution graph:\n")
 print(solution.graph_prompt)
@@ -69,7 +69,7 @@ file_path = "debug_tree_id.py"
  
 # Read the file content
 with open(file_path, "r") as file:
-     debugged_code = file.read()
+    debugged_code = file.read()
  
 # Store the code into solution.code_for_graph
 solution.code_for_graph = debugged_code
@@ -107,15 +107,15 @@ import time
 from google.api_core.exceptions import ResourceExhausted
  
 for attempt in range(10):
-     try:
-         response = model.generate_content(solution.assembly_prompt)
-         break  # If successful, break out of the loop
-     except ResourceExhausted:
-         if attempt < 10:  # If not the last attempt
-             print(f"Resource exhausted. Retrying in 10 seconds... (Attempt {attempt + 1}/10)")
-             time.sleep(10)  # Wait 10 seconds before retrying
-         else:
-             raise
+    try:
+        response = model.generate_content(solution.assembly_prompt)
+        break  # If successful, break out of the loop
+    except ResourceExhausted:
+        if attempt < 10:  # If not the last attempt
+            print(f"Resource exhausted. Retrying in 10 seconds... (Attempt {attempt + 1}/10)")
+            time.sleep(10)  # Wait 10 seconds before retrying
+        else:
+            raise
 # response = model.generate_content(
 #     solution.assembly_prompt
 # )
@@ -126,7 +126,7 @@ code_for_assembly = helper.extract_code(response.text)
 all_code = all_operation_code_str + '\n' + code_for_assembly +  '\n' + 'assembely_solution()'
  
 with open('all_code_id.py', 'r') as file:
-     all_code = file.read()
+    all_code = file.read()
  
 print("Starting execution...")
  
