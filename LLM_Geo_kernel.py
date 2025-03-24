@@ -29,11 +29,15 @@ import json
 
 import google.auth
 
-def get_credentials():
-    """Load Google credentials using Application Default Credentials (ADC)."""
-    credentials, project = google.auth.default()
-    return credentials
-
+# def get_credentials():
+#     """Load Google credentials using Application Default Credentials (ADC)."""
+#     credentials, project = google.auth.default()
+#     return credentials
+ def get_credentials():
+     # For GitHub Actions - load from environment secret
+     credentials_info = json.loads(os.environ['GOOGLE_CREDENTIALS'])
+     
+     return service_account.Credentials.from_service_account_info(credentials_info)
 # Initialize Vertex AI with the credentials
 credentials = get_credentials()
   
