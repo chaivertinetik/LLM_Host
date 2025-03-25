@@ -14,8 +14,10 @@ openai==1.55.3
 patsy==0.5.3
 pyvis==0.3.2
 # pywin32==306
-scipy==1.11.2
-seaborn==0.13.0
+# scipy==1.11.2
+scipy
+# seaborn==0.13.0
+seaborn
 statsmodels==0.14.0
 tqdm==4.66.1
 yarl==1.9.2
