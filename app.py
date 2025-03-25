@@ -44,8 +44,7 @@ def process_request():
         # credentials = get_credentials()
     
         credentials_json = os.getenv("GOOGLE_CREDENTIALS")
-        parsed_json = json.loads(credentials_json.replace("\\n", "\n"))
-        credentials = Credentials.from_service_account_info(json.loads(parsed_json))
+        credentials = Credentials.from_service_account_info(json.loads(credentials_json))
         vertexai.init(project="llmgis", location="us-central1", credentials=credentials)
         user_task = r"""1) To plot out the tree crown using geoJSON file and highlight the trees that are ash species ('Predicted Tree Species':'Ash') using red. Please draw all polygons, not only the ones with poor condition and belonging to the Ash species. The map size is 15*10
         """
