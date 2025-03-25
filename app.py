@@ -5,7 +5,7 @@ import networkx as nx
 import vertexai
 from vertexai.generative_models import GenerativeModel
 from google.oauth2 import service_account
-from LLM_Heroku_kernel import Solution
+from LLM_Heroku_Kernel import Solution
 import helper
 from flask_cors import CORS
 import time
