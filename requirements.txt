@@ -19,7 +19,6 @@ scipy
 # seaborn==0.13.0
 seaborn
 #statsmodels==0.14.0
-statsmodels
 #tqdm==4.66.1
 tqdm
 #yarl==1.9.2
