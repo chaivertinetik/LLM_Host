@@ -43,8 +43,7 @@ import google.auth
 print("GOOGLE_CREDENTIALS:", os.getenv("GOOGLE_CREDENTIALS"))
 try:
     credentials_json = os.getenv("GOOGLE_CREDENTIALS")
-    parsed_json = json.loads(credentials_json.replace("\\n", "\n"))
-    credentials = Credentials.from_service_account_info(json.loads(parsed_json))
+    credentials = Credentials.from_service_account_info(json.loads(credentials_json))
     print("Service account credentials loaded successfully.")
 except:
     print("Error loading service account:", e)
