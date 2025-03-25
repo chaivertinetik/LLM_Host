@@ -40,8 +40,15 @@ import google.auth
 #  credentials_info = json.loads(os.environ['GOOGLE_CREDENTIALS'])
 #  return service_account.Credentials.from_service_account_info(credentials_info)
 # Initialize Vertex AI with the credentials
-credentials_json = os.getenv("GOOGLE_CREDENTIALS")
-credentials = Credentials.from_service_account_info(json.loads(credentials_json))
+print("GOOGLE_CREDENTIALS:", os.getenv("GOOGLE_CREDENTIALS"))
+try:
+    credentials_json = os.getenv("GOOGLE_CREDENTIALS")
+    parsed_json = json.loads(credentials_json.replace("\\n", "\n"))
+    credentials = Credentials.from_service_account_info(json.loads(parsed_json))
+    print("Service account credentials loaded successfully.")
+except:
+    print("Error loading service account:", e)
+    
 
 
 class Solution():
