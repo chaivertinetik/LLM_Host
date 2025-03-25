@@ -41,21 +41,37 @@ import google.auth
 #  return service_account.Credentials.from_service_account_info(credentials_info)
 # Initialize Vertex AI with the credentials
 
-try:
-    # Fetch the credentials JSON from the environment variable
-    credentials_json = os.getenv("GOOGLE_CREDENTIALS")
-    if not credentials_json:
-        raise ValueError("Environment variable 'GOOGLE_CREDENTIALS' is not set.")
+# try:
+#     # Fetch the credentials JSON from the environment variable
+#     credentials_json = os.getenv("GOOGLE_CREDENTIALS")
+#     if not credentials_json:
+#         raise ValueError("Environment variable 'GOOGLE_CREDENTIALS' is not set.")
 
-    # Replace escaped newlines with actual newlines and parse the JSON
-    parsed_json = json.loads(credentials_json.replace("\\n", "\n"))
+#     # Replace escaped newlines with actual newlines and parse the JSON
+#     parsed_json = json.loads(credentials_json.replace("\\n", "\n"))
     
+#     # Create credentials object
+#     credentials = Credentials.from_service_account_info(parsed_json)
+#     print("Service account credentials loaded successfully.")
+# except Exception as e:
+#     print("Error loading service account:", e)
+try:
+    # Define the path to the credentials file
+    credentials_file_path = "GOOGLE_CREDENTIALS.json"  # Ensure this file is in your app directory
+
+    # Check if the file exists
+    if not os.path.exists(credentials_file_path):
+        raise FileNotFoundError(f"Credentials file '{credentials_file_path}' not found.")
+
+    # Load the credentials JSON from the file
+    with open(credentials_file_path, "r") as file:
+        credentials_data = json.load(file)
+
     # Create credentials object
-    credentials = Credentials.from_service_account_info(parsed_json)
+    credentials = Credentials.from_service_account_info(credentials_data)
     print("Service account credentials loaded successfully.")
 except Exception as e:
-    print("Error loading service account:", e)
-    
+    print("Error loading service account:", e)    
 
 
 class Solution():
