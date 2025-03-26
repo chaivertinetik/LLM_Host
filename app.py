@@ -101,14 +101,16 @@ def long_running_task(job_id, user_task, task_name, data_locations):
         all_code = all_operation_code_str + '\n' + code_for_assembly + '\n' + 'assembely_solution()'
         with open('all_code_id.py', 'r') as file:
             all_code = file.read()
-
+            
+        
         print("Starting execution...")
-
+        exec_globals = {}
         # Execute the code directly - this is the simplest approach
         exec(all_code, globals())
-
+        result = globals().get('result', None)
+        print("Final result:", result)
         print("Execution completed.")
-        job_status[job_id] = {"status": "completed", "message": f"Task '{task_name}' executed successfully."}
+        job_status[job_id] = {"status": "completed", "message": f"Task '{task_name}' executed successfully, adding it to the map shortly."}
         
     except Exception as e: 
         job_status[job_id] = {"status": "failed", "message": str(e)}
