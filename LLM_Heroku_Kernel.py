@@ -96,7 +96,7 @@ class Solution():
 
         # Example Graph Requirement (you might need to update this with your constants module)
         graph_requirement = constants.graph_requirement.copy()
-        graph_requirement.append(f"Save the network into GraphML format, save it at: {self.graph_file}")
+        # graph_requirement.append(f"Save the network into GraphML format, save it at: {self.graph_file}")
         graph_requirement_str =  '\n'.join([f"{idx + 1}. {line}" for idx, line in enumerate(graph_requirement)])
         
         graph_prompt = f'Your role: {self.role} \n\n' + \
