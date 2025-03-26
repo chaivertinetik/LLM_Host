@@ -135,7 +135,7 @@ def process_request():
         thread.start()
         
         # Change this to return the output to return the values generated. 
-        return jsonify({"status": "success", "task_name": task_name, "message": "Task executed successfully."})
+        return jsonify({"status": "success", "job_id": job_id, "message": "Task has been queued. Use the status endpoint to check progress."})
 
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)})
