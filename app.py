@@ -22,28 +22,21 @@ from google.oauth2.service_account import Credentials
 app = Flask(__name__)
 CORS(app)
 
+# Global dictionary to track job statuses
+job_status = {}
+
 # Load credentials from environment variable or file
 # def get_credentials():
 #     credentials_info = json.loads(os.environ['GOOGLE_CREDENTIALS'])
 #     return service_account.Credentials.from_service_account_info(credentials_info)
 
-@app.route('/process', methods=['POST'])
-def process_request():
+def long_running_task(job_id, user_task, task_name, data_locations):
     try:
-        # Parse request data
-        request_data = request.get_json()
-        user_task = request_data.get('task', "No task provided.")
-        task_name = request_data.get('task_name', "default_task")
-
+        job_status[job_id] = {"status": "running", "message": "Task is in progress"}
         # Set up task and directories
         save_dir = os.path.join(os.getcwd(), task_name)
         os.makedirs(save_dir, exist_ok=True)
-        data_locations = ["Tree crown geoJSON shape file: https://raw.githubusercontent.com/pchaitanya21/VertinetikLLM/main/data/Hicks_Lodge_Trial_pred.geojson."]
-
         # Initialize Vertex AI
-        # credentials = get_credentials()
-    
-        
         credentials_data = json.loads(os.getenv("GOOGLE_CREDENTIALS"))
         credentials = service_account.Credentials.from_service_account_info(credentials_data)
         vertexai.init(project="llmgis", location="us-central1", credentials=credentials)
@@ -114,13 +107,45 @@ def process_request():
         exec(all_code)
 
         print("Execution completed.")
+        job_status[job_id] = {"status": "completed", "message": f"Task '{task_name}' executed successfully."}
+        
+    except Exception as e: 
+        job_status[job_id] = {"status": "failed", "message": str(e)}
+        
+@app.route('/process', methods=['POST'])
+def process_request():
+    try:
+        # Parse request data
+        request_data = request.get_json()
+        user_task = request_data.get('task', "No task provided.")
+        task_name = request_data.get('task_name', "default_task")
 
+        
+        data_locations = ["Tree crown geoJSON shape file: https://raw.githubusercontent.com/pchaitanya21/VertinetikLLM/main/data/Hicks_Lodge_Trial_pred.geojson."]
+        
+        # Generate a unique job ID
+        
+        job_id = str(uuid.uuid4())
+        job_status[job_id] = {"status": "queued", "message": "Task is queued for processing"}    
+        
+        
+        # Start the task in a separate thread
+        thread = threading.Thread(target=long_running_task, args=(job_id, user_task, task_name, data_locations))
+        thread.start()
+        
         # Change this to return the output to return the values generated. 
         return jsonify({"status": "success", "task_name": task_name, "message": "Task executed successfully."})
 
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)})
-
+        
+@app.route('/status/<job_id>', methods=['GET'])
+def get_status(job_id):
+    """
+    Endpoint to fetch the status of a background job using its job ID.
+    """
+    status = job_status.get(job_id, {"status": "unknown", "message": "Job ID not found"})
+    return jsonify(status)
 # Run the Flask app
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 8080)))
