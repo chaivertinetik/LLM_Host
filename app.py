@@ -178,7 +178,7 @@ def long_running_task(job_id, user_task, task_name, data_locations):
         credentials_data = json.loads(os.getenv("GOOGLE_CREDENTIALS"))
         credentials = service_account.Credentials.from_service_account_info(credentials_data)
         vertexai.init(project="llmgis", location="us-central1", credentials=credentials)
-        user_task = r"""1) To use a geoJSON file and return all the "Tree ID" that are ash species ('Predicted Tree Species':'Ash').
+        user_task = r"""1) To use a geoJSON file and return all the "Tree_ID" that are ash species ('Predicted Tree Species':'Ash').
         """
         task_name ='Tree_crown_quality'
         # Create Solution object
