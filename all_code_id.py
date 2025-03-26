@@ -10,9 +10,9 @@ def filter_ash(tree_gdf=None):
     #Filter GeoDataFrame to include only Ash species ('Predicted Tree Species':'Ash')
     if tree_gdf is None:
         raise ValueError("Input GeoDataFrame is None.")
-    tree_gdf = tree_gdf.dropna(subset=['Predicted Tree Species'])
-    ash_tree_gdf = tree_gdf[tree_gdf['Predicted Tree Species'] == 'Ash']
-    ash_tree_ids = ash_tree_gdf['Tree ID'].tolist()
+    tree_gdf = tree_gdf.dropna(subset=['Species'])
+    ash_tree_gdf = tree_gdf[tree_gdf['Species'] == 'Ash']
+    ash_tree_ids = ash_tree_gdf['Tree_ID'].tolist()
     print(f"Found {len(ash_tree_ids)} ash trees")
     return ash_tree_ids
 
