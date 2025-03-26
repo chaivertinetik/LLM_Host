@@ -105,7 +105,7 @@ def long_running_task(job_id, user_task, task_name, data_locations):
         print("Starting execution...")
 
         # Execute the code directly - this is the simplest approach
-        exec(all_code)
+        exec(all_code, globals())
 
         print("Execution completed.")
         job_status[job_id] = {"status": "completed", "message": f"Task '{task_name}' executed successfully."}
