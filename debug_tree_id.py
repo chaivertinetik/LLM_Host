@@ -14,11 +14,11 @@ G.add_node("tree_gdf", node_type="data", description="GeoDataFrame containing tr
 G.add_edge("load_geojson", "tree_gdf")
 
 # Node 4: Filter Ash species operation
-G.add_node("filter_ash", node_type="operation", description="Filter GeoDataFrame to include only Ash species ('Predicted Tree Species':'Ash')")
+G.add_node("filter_ash", node_type="operation", description="Filter GeoDataFrame to include only Ash species ('Species':'Ash')")
 G.add_edge("tree_gdf", "filter_ash")
 
 # Node 5: Ash tree IDs
-G.add_node("ash_tree_ids", node_type="data", description="List of 'Tree ID' for Ash trees")
+G.add_node("ash_tree_ids", node_type="data", description="List of 'Tree_ID' for Ash trees")
 G.add_edge("filter_ash", "ash_tree_ids")
 
 
