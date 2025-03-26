@@ -155,10 +155,10 @@ def filter(FIDS):
 
     print("Columns in GDF:", gdf.columns.tolist())
 
-    if "TREE_ID" in gdf.columns:
+    if "Tree_ID" in gdf.columns:
         # Ensure TREE_ID is treated as integers for matching
-        gdf["TREE_ID"] = gdf["TREE_ID"].astype(int)
-        ash_gdf = gdf[gdf["TREE_ID"].isin(FIDS)]
+        gdf["Tree_ID"] = gdf["Tree_ID"].astype(int)
+        ash_gdf = gdf[gdf["Tree_ID"].isin(FIDS)]
 
         # ❌ Delete all features before posting new ones
         delete_all_features(chat_output_url)
