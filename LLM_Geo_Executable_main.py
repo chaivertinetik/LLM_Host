@@ -30,7 +30,7 @@ isReview = False
 
 task_name ='Tree_crown_quality'
 
-TASK = r"""1) To plot out the tree crown using geoJSON file and highlight the trees that are ash species ('Predicted Tree Species':'Ash') using red. Please draw all polygons, not only the ones with poor condition and belonging to the Ash species. The map size is 15*10
+TASK = r""" 1) To use a geoJSON file and return all the "Tree ID" that are ash species ('Predicted Tree Species':'Ash').
 """
 
 DATA_LOCATIONS = ["Tree crown geoJSON shape file: https://raw.githubusercontent.com/pchaitanya21/VertinetikLLM/main/data/Hicks_Lodge_Trial_pred.geojson."]
