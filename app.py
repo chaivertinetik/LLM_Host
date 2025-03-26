@@ -262,7 +262,7 @@ def process_request():
         task_name = request_data.get('task_name', "default_task")
 
         
-        data_locations = ["Tree crown geoJSON shape file: https://raw.githubusercontent.com/pchaitanya21/VertinetikLLM/main/data/Hicks_Lodge_Trial_pred.geojson."]
+        data_locations = ["Tree crown geoJSON shape file: https://raw.githubusercontent.com/pchaitanya21/VertinetikLLM/main/data/TreeCrowns_Foxholes_21032025.geojson."]
         
         # Generate a unique job ID
         
