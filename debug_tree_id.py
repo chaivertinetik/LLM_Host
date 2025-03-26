@@ -3,7 +3,7 @@ import networkx as nx
 G = nx.DiGraph()
 
 # Node 1: GeoJSON data
-G.add_node("geojson_data", node_type="data", data_path="https://raw.githubusercontent.com/pchaitanya21/VertinetikLLM/main/data/Hicks_Lodge_Trial_pred.geojson", description="Tree crown GeoJSON data")
+G.add_node("geojson_data", node_type="data", data_path="https://raw.githubusercontent.com/pchaitanya21/VertinetikLLM/main/data/TreeCrowns_Foxholes_21032025.geojson", description="Tree crown GeoJSON data")
 
 # Node 2: Load GeoJSON operation
 G.add_node("load_geojson", node_type="operation", description="Load GeoJSON file into GeoDataFrame")
