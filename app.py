@@ -16,7 +16,12 @@ import requests
 from google.oauth2.service_account import Credentials
 import uuid
 import threading
-    
+import requests
+import geopandas as gpd
+import json
+from shapely.geometry import mapping
+
+
    
 # Initialize Flask app
 
@@ -30,6 +35,138 @@ job_status = {}
 # def get_credentials():
 #     credentials_info = json.loads(os.environ['GOOGLE_CREDENTIALS'])
 #     return service_account.Credentials.from_service_account_info(credentials_info)
+def shapely_to_arcgis_geometry(geom):
+    if geom.geom_type == "Polygon":
+        return {
+            "rings": mapping(geom)["coordinates"],
+            "spatialReference": {"wkid": 27700}
+        }
+    elif geom.geom_type == "MultiPolygon":
+        # Flatten the list of polygons
+        rings = []
+        for polygon in mapping(geom)["coordinates"]:
+            rings.extend(polygon)
+        return {
+            "rings": rings,
+            "spatialReference": {"wkid": 27700}
+        }
+    else:
+        raise ValueError(f"Unsupported geometry type: {geom.geom_type}")
+
+def get_project_urls(project_name):
+    query_url = "https://services-eu1.arcgis.com/8uHkpVrXUjYCyrO4/arcgis/rest/services/Project_index/FeatureServer/0/query"
+    params = {
+        "where": f"PROJECT_NAME = '{project_name}'",
+        "outFields": "TREE_CROWNS,CHAT_OUTPUT",
+        "f": "json",
+    }
+
+    response = requests.get(query_url, params=params, timeout=10)
+    data = response.json()
+
+    if not data.get("features"):
+        raise ValueError(f"No project found with the name '{project_name}'.")
+
+    attributes = data["features"][0]["attributes"]
+    return attributes.get("TREE_CROWNS"), attributes.get("CHAT_OUTPUT")
+
+
+def extract_geojson(url):
+    try:
+        response = requests.get(f"{url}/0/query?where=1%3D1&outFields=*&f=geojson", timeout=10)
+        if response.status_code == 200:
+            geojson = response.json()
+            gdf = gpd.GeoDataFrame.from_features(geojson["features"])
+            gdf.set_crs("EPSG:4326", inplace=True)
+            return gdf.to_crs("EPSG:27700")
+        else:
+            print(f"Failed to fetch GeoJSON: {response.status_code}")
+            return None
+    except Exception as e:
+        print(f"GeoJSON fetch error: {e}")
+        return None
+
+
+def post_features_to_layer(gdf, target_url):
+    add_url = f"{target_url}/0/addFeatures"
+    headers = {"Content-Type": "application/x-www-form-urlencoded"}
+
+    allowed_fields = {"Health", "Tree_ID", "Species"}
+
+    features = []
+    for _, row in gdf.iterrows():
+        try:
+            arcgis_geom = shapely_to_arcgis_geometry(row.geometry)
+            attributes = {k: v for k, v in row.items() if k in allowed_fields}
+            features.append({
+                "geometry": arcgis_geom,
+                "attributes": attributes
+            })
+        except Exception as e:
+            print(f"Skipping row due to geometry error: {e}")
+
+    payload = {
+        "features": json.dumps(features),
+        "f": "json"
+    }
+
+    response = requests.post(add_url, data=payload, headers=headers)
+    if response.status_code == 200:
+        print("Features added successfully:", response.json())
+    else:
+        print("Failed to add features:", response.text)
+
+def delete_all_features(target_url):
+    query_url = f"{target_url}/0/query"
+    delete_url = f"{target_url}/0/deleteFeatures"
+
+    # Step 1: Get all existing OBJECTIDs
+    params = {
+        "where": "1=1",
+        "returnIdsOnly": "true",
+        "f": "json"
+    }
+    response = requests.get(query_url, params=params)
+    data = response.json()
+
+    object_ids = data.get("objectIds", [])
+    if not object_ids:
+        print("No features to delete.")
+        return
+
+    print(f"Deleting {len(object_ids)} existing features...")
+
+    # Step 2: Delete by OBJECTIDs
+    delete_params = {
+        "objectIds": ",".join(map(str, object_ids)),
+        "f": "json"
+    }
+    delete_response = requests.post(delete_url, data=delete_params)
+    print("Delete response:", delete_response.json())
+
+def filter(FIDS):
+    project_name = "FOXHOLES"
+    tree_crowns_url, chat_output_url = get_project_urls(project_name)
+
+    if not tree_crowns_url or not chat_output_url:
+        raise ValueError("Required URLs missing in Project Index.")
+
+    gdf = extract_geojson(tree_crowns_url)
+
+    print("Columns in GDF:", gdf.columns.tolist())
+
+    if "TREE_ID" in gdf.columns:
+        # Ensure TREE_ID is treated as integers for matching
+        gdf["TREE_ID"] = gdf["TREE_ID"].astype(int)
+        ash_gdf = gdf[gdf["TREE_ID"].isin(FIDS)]
+
+        # ❌ Delete all features before posting new ones
+        delete_all_features(chat_output_url)
+
+        # ✅ Then post
+        post_features_to_layer(ash_gdf, chat_output_url)
+    else:
+        print("Column 'Species' not found in GeoDataFrame.")    
 
 def long_running_task(job_id, user_task, task_name, data_locations):
     try:
@@ -109,6 +246,7 @@ def long_running_task(job_id, user_task, task_name, data_locations):
         exec(all_code, globals())
         result = globals().get('result', None)
         print("Final result:", result)
+        filter(result)
         print("Execution completed.")
         job_status[job_id] = {"status": "completed", "message": f"Task '{task_name}' executed successfully, adding it to the map shortly."}
         
@@ -137,7 +275,7 @@ def process_request():
         thread.start()
         
         # Change this to return the output to return the values generated. 
-        return jsonify({"status": "success", "job_id": job_id, "message": "Task has been queued. Use the status endpoint to check progress."})
+        return jsonify({"status": "success", "job_id": job_id, "message": "Updating ERDO..."})
 
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)})
