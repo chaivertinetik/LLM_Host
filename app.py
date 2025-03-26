@@ -205,10 +205,10 @@ def long_running_task(job_id, user_task, task_name, data_locations):
 
         exec(solution.code_for_graph)
         # Load graph file
-        # solution_graph = solution.load_graph_file()
-        # G = nx.read_graphml(solution.graph_file) 
-        # nt = helper.show_graph(G)
-        # html_name = os.path.join(os.getcwd(), solution.task_name + '.html') 
+        solution_graph = solution.load_graph_file()
+        G = nx.read_graphml(solution.graph_file) 
+        nt = helper.show_graph(G)
+        html_name = os.path.join(os.getcwd(), solution.task_name + '.html') 
 
         # Generate operations
         operations = solution.get_LLM_responses_for_operations(review=False)
