@@ -1,7 +1,7 @@
 import geopandas as gpd
 import pandas as pd
 
-def load_geojson(geojson_data='https://raw.githubusercontent.com/pchaitanya21/VertinetikLLM/main/data/Hicks_Lodge_Trial_pred.geojson'):
+def load_geojson(geojson_data='https://raw.githubusercontent.com/pchaitanya21/VertinetikLLM/main/data/TreeCrowns_Foxholes_21032025.geojson'):
     #Load GeoJSON file into GeoDataFrame
     tree_gdf = gpd.read_file(geojson_data)
     return tree_gdf
