@@ -199,10 +199,10 @@ def long_running_task(job_id, user_task, task_name, data_locations):
         # Read the file content
         with open(file_path, "r") as file:
             debugged_code = file.read()
-
+        
         # Store the code into solution.code_for_graph
         solution.code_for_graph = debugged_code
-
+        print("The debugged code is:",debugged_code)
         exec(solution.code_for_graph)
         # Load graph file
         solution_graph = solution.load_graph_file()
