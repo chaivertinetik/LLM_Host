@@ -21,7 +21,7 @@ G.add_edge("tree_gdf", "filter_ash")
 G.add_node("ash_tree_ids", node_type="data", description="List of 'Tree ID' for Ash trees")
 G.add_edge("filter_ash", "ash_tree_ids")
 
-
+nx.write_graphml(G, "/app/test_task/Tree_crown_quality.graphml")
 #Print graph information for verification (optional)
 #print(G.nodes(data=True))
 #print(G.edges())
