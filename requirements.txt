@@ -31,3 +31,7 @@ vertexai
 Flask==2.2.5
 gunicorn==21.2.0
 flask_cors
+google-auth
+google-auth-oauthlib
+google-auth-httplib2
+google-api-python-client
