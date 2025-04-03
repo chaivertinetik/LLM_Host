@@ -10,9 +10,8 @@ COPY . .
 # Install dependencies
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Expose the port Cloud Run will listen on
-# ENV PORT=8080
+# Expose Cloud Run port (optional but doesn't hurt)
 EXPOSE 8080
 
-# Run the application
-CMD ["gunicorn", "-b", "0.0.0.0:8080", "app:app"]
+# Start FastAPI server with Uvicorn
+CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8080"]

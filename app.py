@@ -1,4 +1,4 @@
-from flask import Flask, request, jsonify
+
 import os
 import json
 import networkx as nx
@@ -20,21 +20,36 @@ import requests
 import geopandas as gpd
 import json
 from shapely.geometry import mapping
-
+from fastapi import FastAPI, BackgroundTasks, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+from typing import Dict
+from pydantic import BaseModel
 
    
-# Initialize Flask app
+# Initialize FastAPI app
+app = FastAPI()
 
-app = Flask(__name__)
-CORS(app)
+# Enable CORS (same as Flask-CORS)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # Adjust based on security needs
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # Global dictionary to track job statuses
-job_status = {}
+job_status: Dict[str, Dict[str, str]] = {}
 
 # Load credentials from environment variable or file
 # def get_credentials():
 #     credentials_info = json.loads(os.environ['GOOGLE_CREDENTIALS'])
 #     return service_account.Credentials.from_service_account_info(credentials_info)
+
+class RequestData(BaseModel):
+    task: str = "No task provided."
+    task_name: str = "default_task"
+
 def shapely_to_arcgis_geometry(geom):
     if geom.geom_type == "Polygon":
         return {
@@ -167,8 +182,8 @@ def filter(FIDS):
         post_features_to_layer(ash_gdf, chat_output_url)
     else:
         print("Column 'Species' not found in GeoDataFrame.")    
-
-def long_running_task(job_id, user_task, task_name, data_locations):
+    
+def long_running_task(job_id: str, user_task: str, task_name: str, data_locations: list):
     try:
         job_status[job_id] = {"status": "running", "message": "Task is in progress"}
         # Set up task and directories
@@ -253,40 +268,35 @@ def long_running_task(job_id, user_task, task_name, data_locations):
     except Exception as e: 
         job_status[job_id] = {"status": "failed", "message": str(e)}
         
-@app.route('/process', methods=['POST'])
-def process_request():
+@app.post("/process")
+async def process_request(request_data: RequestData, background_tasks: BackgroundTasks):
     try:
-        # Parse request data
-        request_data = request.get_json()
-        user_task = request_data.get('task', "No task provided.")
-        task_name = request_data.get('task_name', "default_task")
+        # Extract request data
+        user_task = request_data.task
+        task_name = request_data.task_name
 
-        
-        data_locations = ["Tree crown geoJSON shape file: https://raw.githubusercontent.com/pchaitanya21/VertinetikLLM/main/data/TreeCrowns_Foxholes_21032025.geojson."]
-        
+        data_locations = [
+            "Tree crown geoJSON shape file: https://raw.githubusercontent.com/pchaitanya21/VertinetikLLM/main/data/TreeCrowns_Foxholes_21032025.geojson."
+        ]
+
         # Generate a unique job ID
-        
         job_id = str(uuid.uuid4())
-        job_status[job_id] = {"status": "queued", "message": "Task is queued for processing"}    
-        
-        
-        # Start the task in a separate thread
-        thread = threading.Thread(target=long_running_task, args=(job_id, user_task, task_name, data_locations))
-        thread.start()
-        
-        # Change this to return the output to return the values generated. 
-        return jsonify({"status": "success", "job_id": job_id, "message": "Updating ERDO..."})
+        job_status[job_id] = {"status": "queued", "message": "Task is queued for processing"}
+
+        # Run the long task in the background
+        background_tasks.add_task(long_running_task, job_id, user_task, task_name, data_locations)
+
+        return {"status": "success", "job_id": job_id, "message": "Processing started..."}
 
     except Exception as e:
-        return jsonify({"status": "error", "message": str(e)})
-        
-@app.route('/status/<job_id>', methods=['GET'])
-def get_status(job_id):
-    """
-    Endpoint to fetch the status of a background job using its job ID.
-    """
-    status = job_status.get(job_id, {"status": "unknown", "message": "Job ID not found"})
-    return jsonify(status)
-# Run the Flask app
-if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 8080)))
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/status/{job_id}")
+async def get_status(job_id: str):
+    """Fetch the status of a background job using its job ID"""
+    return job_status.get(job_id, {"status": "unknown", "message": "Job ID not found"})
+
+# Run the FastAPI app using Uvicorn (for Cloud Run)
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=int(os.environ.get("PORT", 8080)))
