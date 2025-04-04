@@ -39,7 +39,7 @@ app.add_middleware(
 )
 
 # Global dictionary to track job statuses
-job_status: Dict[str, Dict[str, str]] = {}
+# job_status: Dict[str, Dict[str, str]] = {}
 
 # Load credentials from environment variable or file
 # def get_credentials():
@@ -182,10 +182,10 @@ def filter(FIDS):
         post_features_to_layer(ash_gdf, chat_output_url)
     else:
         print("Column 'Species' not found in GeoDataFrame.")    
-    
-def long_running_task(job_id: str, user_task: str, task_name: str, data_locations: list):
+# job_id: str, 
+def long_running_task(user_task: str, task_name: str, data_locations: list):
     try:
-        job_status[job_id] = {"status": "running", "message": "Task is in progress"}
+        # job_status[job_id] = {"status": "running", "message": "Task is in progress"}
         # Set up task and directories
         save_dir = os.path.join(os.getcwd(), task_name)
         os.makedirs(save_dir, exist_ok=True)
@@ -263,13 +263,16 @@ def long_running_task(job_id: str, user_task: str, task_name: str, data_location
         print("Final result:", result)
         filter(result)
         print("Execution completed.")
-        job_status[job_id] = {"status": "completed", "message": f"Task '{task_name}' executed successfully, adding it to the map shortly."}
-        
+        # job_status[job_id] = {"status": "completed", "message": f"Task '{task_name}' executed successfully, adding it to the map shortly."}
+        return result 
+
     except Exception as e: 
-        job_status[job_id] = {"status": "failed", "message": str(e)}
-        
+        #job_status[job_id] = {"status": "failed", "message": str(e)}
+        return f"Error during execution: {str(e)}"
+
+#, background_tasks: BackgroundTasks
 @app.post("/process")
-async def process_request(request_data: RequestData, background_tasks: BackgroundTasks):
+async def process_request(request_data: RequestData):
     try:
         # Extract request data
         user_task = request_data.task
@@ -280,13 +283,21 @@ async def process_request(request_data: RequestData, background_tasks: Backgroun
         ]
 
         # Generate a unique job ID
-        job_id = str(uuid.uuid4())
-        job_status[job_id] = {"status": "queued", "message": "Task is queued for processing"}
+        # job_id = str(uuid.uuid4())
+        # job_status[job_id] = {"status": "queued", "message": "Task is queued for processing"}
 
         # Run the long task in the background
-        background_tasks.add_task(long_running_task, job_id, user_task, task_name, data_locations)
-
-        return {"status": "success", "job_id": job_id, "message": "Processing started..."}
+        # background_tasks.add_task(long_running_task, job_id, user_task, task_name, data_locations)
+        final_response = long_running_task(user_task, task_name, data_locations)
+        return {
+            "status": "completed",
+            "message": f"Task '{task_name}' executed successfully.'{result}' ",
+            "response": {
+                "role": "assistant",
+                "content": str(result)
+            }
+        }
+        # return {"status": "success", "job_id": job_id, "message": "Processing started..."}
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
