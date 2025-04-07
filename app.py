@@ -63,7 +63,7 @@ async def trigger_cleanup():
         response = requests.get(delete_url, params=delete_params, timeout=10)
         data=response.json()
         if not data.get("features"):
-           raise ValueError(f"No project found wiht name '{project_name}'."
+           raise ValueError(f"No project found wiht name '{project_name}'.")
         attributes = data["features"][0]["attributes"]
         target_url = attributes.get("CHAT_OUTPUT")
         query_url = f"{target_url}/0/query"
@@ -328,8 +328,6 @@ def long_running_task(user_task: str, task_name: str, data_locations: list):
 async def process_request(request_data: RequestData):
     user_task = request_data.task.strip().lower()
     task_name = request_data.task_name
-
-    
     if re.search(r"\b(clear|reset|cleanup|clean|wipe)\b", user_task):
         return await trigger_cleanup()
     # Generate a unique job ID
@@ -339,22 +337,20 @@ async def process_request(request_data: RequestData):
         data_locations = [
             "Tree crown geoJSON shape file: https://raw.githubusercontent.com/pchaitanya21/VertinetikLLM/main/data/TreeCrowns_Foxholes_21032025.geojson."
         ]
-        # Run the long task in the background
         # background_tasks.add_task(long_running_task, job_id, user_task, task_name, data_locations)
         result = long_running_task(user_task, task_name, data_locations)
-         
+
         return {
             "status": "completed",
-            "message": f"Task '{task_name}' executed successfully. '{result}' ",
+            "message": f"Task '{task_name}' executed successfully. '{result}'",
             "response": {
                 "role": "assistant",
                 "content": str(result)
             }
         }
-   # return {"status": "success", "job_id": job_id, "message": "Processing started..."}
+    # return {"status": "success", "job_id": job_id, "message": "Processing started..."}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-
 
 @app.get("/status/{job_id}")
 async def get_status(job_id: str):
