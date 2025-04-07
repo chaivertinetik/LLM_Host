@@ -51,6 +51,7 @@ class RequestData(BaseModel):
     task_name: str = "default_task"
 
 async def trigger_cleanup():
+    project_name = "FOXHOLES"
     delete_url = "https://services-eu1.arcgis.com/8uHkpVrXUjYCyrO4/arcgis/rest/services/Project_index/FeatureServer/0/query"
     delete_params = {
         "where": f"PROJECT_NAME = '{project_name}'",
@@ -79,9 +80,9 @@ async def trigger_cleanup():
         if not object_ids:
            print("No features to delete.")
            return {
-            "status": "success",
-            "message": "No features to delete.",
-            "response": response.text
+              "status": "success",
+              "message": "No features to delete.",
+              "response": response.text
            }
         # Step 2: Delete by OBJECTIDs
         delete_params = {
