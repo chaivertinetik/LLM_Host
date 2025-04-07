@@ -24,7 +24,7 @@ from fastapi import FastAPI, BackgroundTasks, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from typing import Dict
 from pydantic import BaseModel
-
+import re 
    
 # Initialize FastAPI app
 app = FastAPI()
@@ -50,6 +50,58 @@ class RequestData(BaseModel):
     task: str = "No task provided."
     task_name: str = "default_task"
 
+async def trigger_cleanup():
+    delete_url = "https://services-eu1.arcgis.com/8uHkpVrXUjYCyrO4/arcgis/rest/services/Project_index/FeatureServer/0/query"
+    delete_params = {
+        "where": f"PROJECT_NAME = '{project_name}'",
+        "outFields": "TREE_CROWNS,CHAT_OUTPUT",
+        "f": "json",
+    }
+
+    try:
+        response = requests.get(delete_url, params=delete_params, timeout=10)
+        data=response.json()
+        if not data.get("features"):
+           raise ValueError(f"No project found wiht name '{project_name}'."
+        attributes = data["features"][0]["attributes"]
+        target_url = attributes.get("CHAT_OUTPUT")
+        query_url = f"{target_url}/0/query"
+        delete_url = f"{target_url}/0/deleteFeatures"
+        # Step 1: Get all existing OBJECTIDs
+        params = {
+           "where": "1=1",
+           "returnIdsOnly": "true",
+           "f": "json"
+        }
+        response = requests.get(query_url, params=params)
+        data = response.json()
+        object_ids = data.get("objectIds", [])
+        if not object_ids:
+           print("No features to delete.")
+           return {
+            "status": "success",
+            "message": "No features to delete.",
+            "response": response.text
+           }
+        # Step 2: Delete by OBJECTIDs
+        delete_params = {
+        "objectIds": ",".join(map(str, object_ids)),
+        "f": "json"
+        }
+        delete_response = requests.post(delete_url, data=delete_params)
+        
+        return {
+            "status": "success",
+            "message": "Cleanup triggered successfully.",
+            "response": delete_response.text
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Cleanup failed: {str(e)}")
+       
+@app.post("/clear")
+async def clear_state():
+    return await trigger_cleanup()
+   
 def shapely_to_arcgis_geometry(geom):
     if geom.geom_type == "Polygon":
         return {
@@ -273,34 +325,35 @@ def long_running_task(user_task: str, task_name: str, data_locations: list):
 #, background_tasks: BackgroundTasks
 @app.post("/process")
 async def process_request(request_data: RequestData):
-    try:
-        # Extract request data
-        user_task = request_data.task
-        task_name = request_data.task_name
+    user_task = request_data.task.strip().lower()
+    task_name = request_data.task_name
 
+    
+    if re.search(r"\b(clear|reset|cleanup|clean|wipe)\b", user_task):
+        return await trigger_cleanup()
+    # Generate a unique job ID
+    # job_id = str(uuid.uuid4())
+    # job_status[job_id] = {"status": "queued", "message": "Task is queued for processing"}
+    try:
         data_locations = [
             "Tree crown geoJSON shape file: https://raw.githubusercontent.com/pchaitanya21/VertinetikLLM/main/data/TreeCrowns_Foxholes_21032025.geojson."
         ]
-
-        # Generate a unique job ID
-        # job_id = str(uuid.uuid4())
-        # job_status[job_id] = {"status": "queued", "message": "Task is queued for processing"}
-
         # Run the long task in the background
         # background_tasks.add_task(long_running_task, job_id, user_task, task_name, data_locations)
-        final_response = long_running_task(user_task, task_name, data_locations)
+        result = long_running_task(user_task, task_name, data_locations)
+         
         return {
             "status": "completed",
-            "message": f"Task '{task_name}' executed successfully.'{result}' ",
+            "message": f"Task '{task_name}' executed successfully. '{result}' ",
             "response": {
                 "role": "assistant",
                 "content": str(result)
             }
         }
-        # return {"status": "success", "job_id": job_id, "message": "Processing started..."}
-
+   # return {"status": "success", "job_id": job_id, "message": "Processing started..."}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
 
 @app.get("/status/{job_id}")
 async def get_status(job_id: str):
