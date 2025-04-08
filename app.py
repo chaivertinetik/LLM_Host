@@ -103,6 +103,31 @@ async def trigger_cleanup():
 async def clear_state():
     return await trigger_cleanup()
    
+def is_geospatial_task(prompt: str) -> bool:
+    """Vertex AI does intent classification to determine if the task is geo spatial related"""
+    from vertexai.language_models import TextGenerationModel
+
+    credentials_data = json.loads(os.getenv("GOOGLE_CREDENTIALS"))
+    credentials = service_account.Credentials.from_service_account_info(credentials_data)
+    vertexai.init(project="llmgis", location="us-central1", credentials=credentials)
+
+    model = TextGenerationModel.from_pretrained("text-bison")
+    
+    system_prompt = (
+        "Decide if the user's input is related to geospatial analysis or geospatial data. "
+        "Return only 'yes' or 'no'. Examples:\n"
+        "- 'Find all trees of type Ash in this geoJSON' -> yes\n"
+        "- 'What's my mother’s name?' -> no\n"
+        "- 'Show areas with high NDVI in a satellite image' -> yes\n"
+        "- 'What is the capital of France?' -> no"
+    )
+    
+    full_prompt = f"{system_prompt}\n\nUser input: {prompt}\nAnswer:"
+    response = model.predict(full_prompt, temperature=0.0, max_output_tokens=5)
+    
+    answer = response.text.strip().lower()
+    return answer.startswith("yes")
+   
 def shapely_to_arcgis_geometry(geom):
     if geom.geom_type == "Polygon":
         return {
@@ -330,6 +355,12 @@ async def process_request(request_data: RequestData):
     task_name = request_data.task_name
     if re.search(r"\b(clear|reset|cleanup|clean|wipe)\b", user_task):
         return await trigger_cleanup()
+       
+    if not is_geospatial_task(user_task):
+        return {
+            "status": "completed",
+            "message": "I haven't been programmed to do that"
+        }
     # Generate a unique job ID
     # job_id = str(uuid.uuid4())
     # job_status[job_id] = {"status": "queued", "message": "Task is queued for processing"}
