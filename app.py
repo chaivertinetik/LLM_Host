@@ -110,9 +110,8 @@ def is_geospatial_task(prompt: str) -> bool:
     credentials_data = json.loads(os.getenv("GOOGLE_CREDENTIALS"))
     credentials = service_account.Credentials.from_service_account_info(credentials_data)
     vertexai.init(project="llmgis", location="us-central1", credentials=credentials)
-
-    model = TextGenerationModel.from_pretrained("text-bison")
-    
+    # model = TextGenerationModel.from_pretrained("text-bison")
+    model = GenerativeModel("gemini-1.5-flash-002")
     system_prompt = (
         "Decide if the user's input is related to geospatial analysis or geospatial data. "
         "Return only 'yes' or 'no'. Examples:\n"
