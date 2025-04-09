@@ -122,8 +122,13 @@ def is_geospatial_task(prompt: str) -> bool:
     )
     
     full_prompt = f"{system_prompt}\n\nUser input: {prompt}\nAnswer:"
-    response = model.predict(full_prompt, temperature=0.0, max_output_tokens=5)
-    
+    # response = model.predict(full_prompt, temperature=0.0, max_output_tokens=5)
+    response = model.generate_content(
+       full_prompt,
+       generation_config={
+          "temperature": 0.0,
+          "max_output_tokens": 5}
+    )
     answer = response.text.strip().lower()
     return answer.startswith("yes")
    
