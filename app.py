@@ -32,7 +32,7 @@ app = FastAPI()
 # Enable CORS (same as Flask-CORS)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Adjust based on security needs
+    allow_origins=["https://rchahel-vertinetik.github.io"],  # Adjust based on security needs
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
