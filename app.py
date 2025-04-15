@@ -114,9 +114,12 @@ def is_geospatial_task(prompt: str) -> bool:
     model = GenerativeModel("gemini-1.5-flash-002")
     system_prompt = (
         "Decide if the user's input is related to geospatial analysis or geospatial data. "
+        "This includes queries about map features, tree health, species, spatial attributes, survey date, spatial selections, overlays, or analysis."
         "Return only 'yes' or 'no'. Examples:\n"
-        "- 'Find all trees of type Ash in this geoJSON' -> yes\n"
+        "- 'Find all ash trees' -> yes\n"
         "- 'What's my mother’s name?' -> no\n"
+        "- 'Show healthy trees' -> yes\n"
+        "- 'List all trees with a crown size over 5m' -> yes\n"
         "- 'Show areas with high NDVI in a satellite image' -> yes\n"
         "- 'What is the capital of France?' -> no"
     )
