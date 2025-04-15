@@ -10,10 +10,10 @@ import configparser
 # carefully change these prompt parts!   
 
 #--------------- constants for graph generation  ---------------
-graph_role = r'''A professional Geo-information scientist and programmer good at Python. You have worked on Geographic information science more than 20 years, and know every detail and pitfall when processing spatial data and coding. You know well how to set up workflows for spatial analysis tasks. You have significant experence on graph theory, application, and implementation. You are also experienced on generating map using Matplotlib and GeoPandas.
+graph_role = r'''A professional Geo-information scientist and programmer good at Python. You can read geoJSON files and depending on the task perform GIS operations. You have worked on Geographic information science more than 20 years, and know every detail and pitfall when processing spatial data and coding. You know well how to set up workflows for spatial analysis tasks. You have significant experence on graph theory, application, and implementation. You are also experienced on generating map using Matplotlib and GeoPandas.
 '''
 
-graph_task_prefix = r'Generate a graph (data structure) only, whose nodes are (1) a series of consecutive steps and (2) data to solve this question: '
+graph_task_prefix = r'The geoJSON file has the following properties: "Health" (either "Healthy" or "Unhealthy"), "Tree_ID", "Species" (either "Ash" or "Non-Ash"), "SURVEY_DATE" (format: Wed, 11 Sep 2024 00:00:00 GMT) and the final goal is to return the "Tree_ID" based on what the user wants. Generate a graph (data structure) only, whose nodes are (1) a series of consecutive steps and (2) data to solve this question: '
 
 #For the demo case
 # graph_reply_exmaple = r"""
@@ -62,6 +62,8 @@ graph_requirement = [
                         'Add all nodes and edges, including node attributes to a NetworkX instance, DO NOT change the attribute names.',
                         'DO NOT generate code to implement the steps.',
                         'Join the attribute to the vector layer via a common attribute if necessary.',
+                        'Ensure the python code generated has no indentation errors and is properly indented.',
+                        'Ensure the location for saving the graph file is not commented out.',
                         'Put your reply into a Python code block, NO explanation or conversation outside the code block(enclosed by ```python and ```).',
                         'Note that GraphML writer does not support class dict or list as data values.',
                         'You need spatial data (e.g., vector or raster) to make a map.',
@@ -79,10 +81,10 @@ graph_requirement = [
 
 
 #--------------- constants for operation generation  ---------------
-operation_role = r'''A professional Geo-information scientist and programmer good at Python. You have worked on Geographic information science more than 20 years, and know every detail and pitfall when processing spatial data and coding. You know well how to design and implement a function that meet the interface between other functions. Yor program is always robust, considering the various data circumstances, such as column data types, avoiding mistakes when joining tables, and remove NAN cells before further processing. You have an good feeling of overview, meaning the functions in your program is coherent, and they connect to each other well, such as function names, parameters types, and the calling orders. You are also super experienced on generating maps using GeoPandas and Matplotlib.
+operation_role = r'''A professional Geo-information scientist and programmer good at Python. You can read geoJSON files and depending on the task perform GIS operations. You have worked on Geographic information science more than 20 years, and know every detail and pitfall when processing spatial data and coding. You know well how to design and implement a function that meet the interface between other functions. Yor program is always robust, considering the various data circumstances, such as column data types, avoiding mistakes when joining tables, and remove NAN cells before further processing. You have an good feeling of overview, meaning the functions in your program is coherent, and they connect to each other well, such as function names, parameters types, and the calling orders. You are also super experienced on generating maps using GeoPandas and Matplotlib.
 '''
 
-operation_task_prefix = r'You need to generate a Python function to do: '
+operation_task_prefix = r'The geoJSON file has the following properties: "Health" (either "Healthy" or "Unhealthy"), "Tree_ID", "Species" (either "Ash" or "Non-Ash"), "SURVEY_DATE" (format: Wed, 11 Sep 2024 00:00:00 GMT) and the final goal is to return the "Tree_ID" based on what the user wants. You need to generate a Python function to do: '
 
 #For the demo case
 # operation_reply_exmaple = """
@@ -109,6 +111,7 @@ operation_requirement = [
                         'Put your reply into a Python code block(enclosed by ```python and ```), NO explanation or conversation outside the code block.',
                         'If using GeoPandas to load a zipped ESRI shapefile from a URL, the correct method is "gpd.read_file(URL)". DO NOT download and unzip the file.',
                         # "Generate descriptions for input and output arguments.",
+                        'Ensure all comments and descriptions use # and are single line.',
                         "You need to receive the data from the functions, DO NOT load in the function if other functions have loaded the data and returned it in advance.",
                         # "Note module 'pandas' has no attribute or method of 'StringIO'",
                         "Use the latest Python modules and methods.",
@@ -148,13 +151,16 @@ If joining FIPS or GEOID, need to fill the leading zeros (digits: state: 2, coun
 
 
 #--------------- constants for assembly prompt generation  ---------------
-assembly_role =  r'''A professional Geo-information scientist and programmer good at Python. You have worked on Geographic information science more than 20 years, and know every detail and pitfall when processing spatial data and coding. Your are very good at assembling functions and small programs together. You know how to make programs robust.
+assembly_role =  r'''A professional Geo-information scientist and programmer good at Python. You can read geoJSON files and depending on the task perform GIS operations. You have worked on Geographic information science more than 20 years, and know every detail and pitfall when processing spatial data and coding. Your are very good at assembling functions and small programs together. You know how to make programs robust.
 '''
 
 assembly_requirement = ['You can think step by step. ',
                     f"Each function is one step to solve the question. ",
                     f"The output of the final function is the question to the question.",
-                    f"Put your reply in a code block(enclosed by ```python and ```), NO explanation or conversation outside the code block.",              
+                    f"Put your reply in a code block(enclosed by ```python and ```), NO explanation or conversation outside the code block.",  
+                    f"Ensure all comments and descriptions use # and are single line.",
+                    f"The final result of the assembly program should return the 'Tree_ID' that match the criteria given by the user.",
+                    f"The geoJSON file has the following properties: "Health" (either "Healthy" or "Unhealthy"), "Tree_ID", "Species" (either "Ash" or "Non-Ash"), "SURVEY_DATE" (format: Wed, 11 Sep 2024 00:00:00 GMT).",
                     f"Save final maps, if any. If use matplotlib, the function is: matplotlib.pyplot.savefig(*args, **kwargs).",
                     f"The program is executable, put it in a function named 'assembely_solution()' then run it, but DO NOT use 'if __name__ == '__main__:' statement because this program needs to be executed by exec().",
                     "Use the built-in functions or attribute, if you do not remember, DO NOT make up fake ones, just use alternative methods.",
