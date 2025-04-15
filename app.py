@@ -287,9 +287,9 @@ def long_running_task(user_task: str, task_name: str, data_locations: list):
         )
 
         # Generate solution graph
-         response_for_graph = solution.get_LLM_response_for_graph()
-         solution.graph_response = response_for_graph
-         solution.save_solution()
+        response_for_graph = solution.get_LLM_response_for_graph()
+        solution.graph_response = response_for_graph
+        solution.save_solution()
 
         #  file_path = "debug_tree_id.py"
 
@@ -298,36 +298,36 @@ def long_running_task(user_task: str, task_name: str, data_locations: list):
         #      debugged_code = file.read()
         
         # Store the code into solution.code_for_graph
-         solution.code_for_graph = debugged_code
-         print("The debugged code is:",debugged_code)
-         exec(solution.code_for_graph)
+        solution.code_for_graph = debugged_code
+        print("The debugged code is:",debugged_code)
+        exec(solution.code_for_graph)
         # Load graph file
-         solution_graph = solution.load_graph_file()
-         G = nx.read_graphml(solution.graph_file) 
-         nt = helper.show_graph(G)
-         html_name = os.path.join(os.getcwd(), solution.task_name + '.html') 
+        solution_graph = solution.load_graph_file()
+        G = nx.read_graphml(solution.graph_file) 
+        nt = helper.show_graph(G)
+        html_name = os.path.join(os.getcwd(), solution.task_name + '.html') 
 
         # Generate operations
-         operations = solution.get_LLM_responses_for_operations(review=False)
-         solution.save_solution()
-         all_operation_code_str = '\n'.join([operation['operation_code'] for operation in operations])
+        operations = solution.get_LLM_responses_for_operations(review=False)
+        solution.save_solution()
+        all_operation_code_str = '\n'.join([operation['operation_code'] for operation in operations])
 
-         # Generate assembly code
-         assembly_LLM_response = solution.get_LLM_assembly_response(review=False)
-         solution.assembly_LLM_response = assembly_LLM_response
-         solution.save_solution()
+        # Generate assembly code
+        assembly_LLM_response = solution.get_LLM_assembly_response(review=False)
+        solution.assembly_LLM_response = assembly_LLM_response
+        solution.save_solution()
 
-         # Run the generated code
-         model = GenerativeModel("gemini-1.5-flash-002")
-         for attempt in range(10):
-             try: 
-                 response = model.generate_content(solution.assembly_prompt)
-                 break
-             except ResourceExhausted: 
-                 if attempt<10:
-                     time.sleep(10)
-                 else:
-                     raise
+        # Run the generated code
+        model = GenerativeModel("gemini-1.5-flash-002")
+        for attempt in range(10):
+           try: 
+              response = model.generate_content(solution.assembly_prompt)
+              break
+           except ResourceExhausted: 
+              if attempt<10:
+                 time.sleep(10)
+              else:
+                 raise
         # response = model.generate_content(solution.assembly_prompt)
         code_for_assembly = helper.extract_code(response.text)
 
