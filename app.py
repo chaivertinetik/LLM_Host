@@ -298,7 +298,7 @@ def long_running_task(user_task: str, task_name: str, data_locations: list):
         #      debugged_code = file.read()
         
         # Store the code into solution.code_for_graph
-        solution.code_for_graph = response_for_graph
+        #solution.code_for_graph = debugged_code
         #print("The code is:",solution.code_for_graph)
         exec(solution.code_for_graph)
         # Load graph file
