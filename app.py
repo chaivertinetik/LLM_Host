@@ -332,8 +332,8 @@ def long_running_task(user_task: str, task_name: str, data_locations: list):
         code_for_assembly = helper.extract_code(response.text)
 
         # Combine all code
-        all_code = all_operation_code_str + '\n' + code_for_assembly + '\n' + 'assembely_solution()'
-        print("The combined code is: ", all_code)
+        #all_code = all_operation_code_str + '\n' + code_for_assembly + '\n' + 'assembely_solution()'
+        print("The combined code is: ", code_for_assembly)
         # with open('all_code_id.py', 'r') as file:
         #     all_code = file.read()
             
@@ -341,7 +341,7 @@ def long_running_task(user_task: str, task_name: str, data_locations: list):
         print("Starting execution...")
         exec_globals = {}
         # Execute the code directly - this is the simplest approach
-        exec(all_code, globals())
+        exec(code_for_assembly, globals())
         result = globals().get('result', None)
         print("Final result:", result)
         filter(result)
