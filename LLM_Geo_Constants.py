@@ -71,7 +71,7 @@ graph_requirement = [
                         'Keep the graph concise, DO NOT use too many operation nodes.',
                         'Ensure the code has **consistent 4-space indentation**, with no unexpected or extra indents. Avoid the use of tabs, as this can lead to indentation errors.',
                         'All lines should be properly aligned according to Python’s syntax rules.',
-                        'Specifically, the first four lines should not have any unintended indentation. Use Python's `ast.parse` to verify that the code does not have any `IndentationError` or `SyntaxError` before returning it. Ensure that all code blocks, especially those with comments or function calls, are properly aligned and contain no extraneous spaces or tabs.'
+                        'Specifically, the first four lines should not have any unintended indentation. Use Python's ast.parse to verify that the code does not have any "IndentationError" or "SyntaxError" before returning it. Ensure that all code blocks, especially those with comments or function calls, are properly aligned and contain no extraneous spaces or tabs.'
                         # 'Keep the graph concise, DO NOT over-split task into too many small steps, especially for simple problems. For example, data loading and data transformation/preprocessing should be in one operation node.',
 
                          ]
