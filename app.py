@@ -266,7 +266,19 @@ def filter(FIDS):
         # ✅ Then post
         post_features_to_layer(ash_gdf, chat_output_url)
     else:
-        print("Column 'Species' not found in GeoDataFrame.")    
+        print("Column 'Species' not found in GeoDataFrame.")   
+       
+def clean_indentation(code):
+    # Split the code into lines
+    lines = code.split('\n')
+    # Remove leading spaces/tabs on each line, and replace tabs with 4 spaces
+    cleaned_lines = []
+    for line in lines:
+        # Strip unwanted leading spaces/tabs and then add consistent 4 spaces for each level
+        cleaned_lines.append(line.lstrip())
+    
+    # Join the cleaned lines back into a single string with proper indentation
+    return '\n'.join(cleaned_lines)
 # job_id: str, 
 def long_running_task(user_task: str, task_name: str, data_locations: list):
     try:
@@ -280,7 +292,7 @@ def long_running_task(user_task: str, task_name: str, data_locations: list):
         vertexai.init(project="llmgis", location="us-central1", credentials=credentials)
         # user_task = r"""1) To use a geoJSON file and return all the "Tree_ID" that are ash species ('Predicted Tree Species':'Ash').
         # """
-        task_name ='Tree_crown_quality'
+        # task_name ='Tree_crown_quality'
         #Create Solution object
         solution = Solution(
             task=user_task,
@@ -303,6 +315,7 @@ def long_running_task(user_task: str, task_name: str, data_locations: list):
         # Store the code into solution.code_for_graph
         #solution.code_for_graph = debugged_code
         #print("The code is:",solution.code_for_graph)
+        solution.code_for_graph = clean_indentation(solution.code_for_graph)
         exec(solution.code_for_graph)
         # Load graph file
         solution_graph = solution.load_graph_file()
