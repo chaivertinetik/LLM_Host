@@ -373,9 +373,11 @@ async def process_request(request_data: RequestData):
     # job_id = str(uuid.uuid4())
     # job_status[job_id] = {"status": "queued", "message": "Task is queued for processing"}
     try:
+        tree_crowns_url, chat_output_url = get_project_urls(task_name)
+
         data_locations = [
-            "Tree crown geoJSON shape file: https://raw.githubusercontent.com/pchaitanya21/VertinetikLLM/main/data/TreeCrowns_Foxholes_21032025.geojson."
-        ]
+    f"Tree crown data is available via ArcGIS FeatureServer. You can query GeoJSON from: {tree_crowns_url}/0/query?where=1%3D1&outFields=*&f=geojson"
+]
         # background_tasks.add_task(long_running_task, job_id, user_task, task_name, data_locations)
         result = long_running_task(user_task, task_name, data_locations)
 
