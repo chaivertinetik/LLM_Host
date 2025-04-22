@@ -50,9 +50,6 @@ G.add_edge("load_tree_crown_shp", "tree_crown_gdf")
 graph_requirement = [   
                         'Think step by step.',
                         'Steps and data (both input and output) form a graph stored in NetworkX. Disconnected components are NOT allowed.',
-                        'Ensure the code has **consistent 4-space indentation**, with no unexpected or extra indents.',
-                        'All lines should be properly aligned according to Python’s syntax rules.',
-                        'Before returning, attempt to parse the generated code using `ast.parse` to check for `IndentationError` or `SyntaxError`. If an error is detected, fix the code before returning.',
                         'Each step is a data process operation: the input can be data paths or variables, and the output can be data paths or variables.',
                         'There are two types of nodes: a) operation node, and b) data node (both input and output data). These nodes are also input nodes for the next operation node.',
                         'The input of each operation is the output of the previous operations, except the those need to load data from a path or need to collect data.',
@@ -65,13 +62,15 @@ graph_requirement = [
                         'Add all nodes and edges, including node attributes to a NetworkX instance, DO NOT change the attribute names.',
                         'DO NOT generate code to implement the steps.',
                         'Join the attribute to the vector layer via a common attribute if necessary.',
-                        'Ensure the python code generated has no indentation errors and is properly indented.',
+                        #'Ensure the python code generated has no indentation errors and is properly indented.',
                         'Ensure the location for saving the graph file is not commented out.',
                         'Put your reply into a Python code block, NO explanation or conversation outside the code block(enclosed by ```python and ```).',
                         'Note that GraphML writer does not support class dict or list as data values.',
                         'You need spatial data (e.g., vector or raster) to make a map.',
-                        'Do not put the GraphML writing process as a step in the graph.',
+                        #'Do not put the GraphML writing process as a step in the graph.',
                         'Keep the graph concise, DO NOT use too many operation nodes.',
+                        'Ensure the code has **consistent 4-space indentation**, with no unexpected or extra indents. Avoid the use of tabs, as this can lead to indentation errors.',
+                        'All lines should be properly aligned according to Python’s syntax rules. Specifically, on the first four lines of the generated code, ensure that there are no unnecessary or hidden indentation errors.'
                         # 'Keep the graph concise, DO NOT over-split task into too many small steps, especially for simple problems. For example, data loading and data transformation/preprocessing should be in one operation node.',
 
                          ]
