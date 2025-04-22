@@ -376,7 +376,7 @@ async def process_request(request_data: RequestData):
         tree_crowns_url, chat_output_url = get_project_urls(task_name)
 
         data_locations = [
-             "Tree crown geoJSON shape file: https://raw.githubusercontent.com/pchaitanya21/VertinetikLLM/main/data/TreeCrowns_Foxholes_21032025.geojson."
+             "Tree crown geoJSON shape file: {tree_crowns_url}/0/query?where=1%3D1&outFields=*&f=geojson."
          ]
         # background_tasks.add_task(long_running_task, job_id, user_task, task_name, data_locations)
         result = long_running_task(user_task, task_name, data_locations)
