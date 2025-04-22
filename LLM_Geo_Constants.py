@@ -50,6 +50,9 @@ G.add_edge("load_tree_crown_shp", "tree_crown_gdf")
 graph_requirement = [   
                         'Think step by step.',
                         'Steps and data (both input and output) form a graph stored in NetworkX. Disconnected components are NOT allowed.',
+                        'Ensure the code has **consistent 4-space indentation**, with no unexpected or extra indents.',
+                        'All lines should be properly aligned according to Python’s syntax rules.',
+                        'Before returning, attempt to parse the generated code using `ast.parse` to check for `IndentationError` or `SyntaxError`. If an error is detected, fix the code before returning.',
                         'Each step is a data process operation: the input can be data paths or variables, and the output can be data paths or variables.',
                         'There are two types of nodes: a) operation node, and b) data node (both input and output data). These nodes are also input nodes for the next operation node.',
                         'The input of each operation is the output of the previous operations, except the those need to load data from a path or need to collect data.',
