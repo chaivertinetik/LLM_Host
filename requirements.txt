@@ -41,3 +41,4 @@ fastapi
 uvicorn
 pydantic
 black
+autopep8
