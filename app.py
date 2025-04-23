@@ -26,6 +26,7 @@ from pydantic import BaseModel
 import re
 import textwrap
 import black  
+import autopep8
 # Initialize FastAPI app
 app = FastAPI()
 
@@ -351,6 +352,8 @@ def long_running_task(user_task: str, task_name: str, data_locations: list):
             
         
         print("Starting execution...")
+        code_for_assembly = textwrap.dedent(code_for_assembly).strip()
+        code_for_assembly = autopep8.fix_code(code_for_assembly)
         code_for_assembly = black.format_str(code_for_assembly, mode=black.FileMode())
         exec_globals = {}
         # Execute the code directly 
