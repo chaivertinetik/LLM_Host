@@ -357,7 +357,21 @@ def long_running_task(user_task: str, task_name: str, data_locations: list):
         code_for_assembly = black.format_str(code_for_assembly, mode=black.FileMode())
         exec_globals = {}
         # Execute the code directly 
-        exec(code_for_assembly, globals())
+        try:
+            exec(code_for_assembly, globals())
+        except Exception as e:
+            for attempt in range(10):
+                try:
+                    prompt = f"Fix Indentation in the following Python code:\n{code_for_assembly}\n"
+                    response = model.generate_content(prompt)
+                    break
+                except ResourceExhausted: 
+                    if attempt<10:
+                        time.sleep(10)
+                    else:
+                     raise
+            code_for_assembly = helper.extract_code(response.text)
+            exec(code_for_assembly, globals())
         result = globals().get('result', None)
         print("Final result:", result)
         filter(result)
