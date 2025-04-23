@@ -352,8 +352,9 @@ def long_running_task(user_task: str, task_name: str, data_locations: list):
             
         
         print("Starting execution...")
+        code_for_assembly = clean_indentation(code_for_assembly)
         exec_globals = {}
-        # Execute the code directly - this is the simplest approach
+        # Execute the code directly 
         exec(code_for_assembly, globals())
         result = globals().get('result', None)
         print("Final result:", result)
