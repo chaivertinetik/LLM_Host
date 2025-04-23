@@ -15,7 +15,7 @@ import networkx as nx
 import pandas as pd
 import geopandas as gpd
 from pyvis.network import Network
- 
+import textwrap 
 
 import LLM_Geo_Constants as constants
 
@@ -83,7 +83,7 @@ def extract_code(response, verbose=False):
     python_code_match = re.search(r"```(?:python)?(.*?)```", reply_content, re.DOTALL)
     if python_code_match:
         python_code = python_code_match.group(1).strip()
-
+        python_code = textwrap.dedent(python_code)
     if verbose:
         print(python_code)
     
