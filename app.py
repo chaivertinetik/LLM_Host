@@ -266,7 +266,16 @@ def filter(FIDS):
         print("Column 'Species' not found in GeoDataFrame.")   
        
 def clean_indentation(code):
-    return textwrap.dedent(code).strip()
+     # Split the code into lines
+    lines = code.split('\n')
+     # Remove leading spaces/tabs on each line, and replace tabs with 4 spaces
+    cleaned_lines = []
+    for line in lines:
+         # Strip unwanted leading spaces/tabs and then add consistent 4 spaces for each level
+        cleaned_lines.append(line.lstrip())
+     
+     # Join the cleaned lines back into a single string with proper indentation
+    return '\n'.join(cleaned_lines)
 # job_id: str, 
 def long_running_task(user_task: str, task_name: str, data_locations: list):
     try:
