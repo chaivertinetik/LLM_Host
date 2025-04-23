@@ -40,3 +40,4 @@ shapely
 fastapi
 uvicorn
 pydantic
+black
