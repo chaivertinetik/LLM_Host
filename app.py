@@ -345,10 +345,9 @@ def long_running_task(user_task: str, task_name: str, data_locations: list):
         code_for_assembly = helper.extract_code(response.text)
 
         # Combine all code
-        #all_code = all_operation_code_str + '\n' + code_for_assembly + '\n' + 'assembely_solution()'
-        print("The combined code is: ", code_for_assembly)
-        # with open('all_code_id.py', 'r') as file:
-        #     all_code = file.read()
+        
+        # print("The combined code is: ", code_for_assembly)
+        
             
         
         print("Starting execution...")
@@ -359,7 +358,8 @@ def long_running_task(user_task: str, task_name: str, data_locations: list):
         # Execute the code directly 
         try:
             exec(code_for_assembly, globals())
-        except Exception as e:
+        except IndentationError as e:
+            print("Entered exception zone")
             for attempt in range(10):
                 try:
                     prompt = f"Fix Indentation in the following Python code:\n{code_for_assembly}\n"
@@ -369,9 +369,14 @@ def long_running_task(user_task: str, task_name: str, data_locations: list):
                     if attempt<10:
                         time.sleep(10)
                     else:
-                     raise
+                        raise
             code_for_assembly = helper.extract_code(response.text)
             exec(code_for_assembly, globals())
+        except Exception as e:
+            return {
+                "status": "completed",
+                "message": "The server seems to be down or what you're asking for isn't in the database."
+            }
         result = globals().get('result', None)
         print("Final result:", result)
         filter(result)
@@ -410,7 +415,7 @@ async def process_request(request_data: RequestData):
 
         return {
             "status": "completed",
-            "message": f"Task '{task_name}' executed successfully. '{result}'",
+            "message": f"Task '{task_name}' executed successfully.",
             "response": {
                 "role": "assistant",
                 "content": str(result)
