@@ -1,4 +1,3 @@
-
 import os
 import json
 import networkx as nx
@@ -352,7 +351,7 @@ def long_running_task(user_task: str, task_name: str, data_locations: list):
             
         
         print("Starting execution...")
-        code_for_assembly = clean_indentation(code_for_assembly)
+        code_for_assembly = textwrap.dedent(code_for_assembly).strip()
         exec_globals = {}
         # Execute the code directly 
         exec(code_for_assembly, globals())
