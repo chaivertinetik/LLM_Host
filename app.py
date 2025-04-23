@@ -24,7 +24,8 @@ from fastapi import FastAPI, BackgroundTasks, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from typing import Dict
 from pydantic import BaseModel
-import re 
+import re
+import textwrap
    
 # Initialize FastAPI app
 app = FastAPI()
@@ -139,19 +140,16 @@ def shapely_to_arcgis_geometry(geom):
     if geom.geom_type == "Polygon":
         return {
             "rings": mapping(geom)["coordinates"],
-            "spatialReference": {"wkid": 27700}
+            "spatialReference": {"wkid": 4326}
         }
     elif geom.geom_type == "MultiPolygon":
-        # Flatten the list of polygons
-        rings = []
-        for polygon in mapping(geom)["coordinates"]:
-            rings.extend(polygon)
         return {
-            "rings": rings,
-            "spatialReference": {"wkid": 27700}
+            "rings": [ring for polygon in mapping(geom)["coordinates"] for ring in polygon],
+            "spatialReference": {"wkid": 4326}
         }
     else:
         raise ValueError(f"Unsupported geometry type: {geom.geom_type}")
+
 
 def get_project_urls(project_name):
     query_url = "https://services-eu1.arcgis.com/8uHkpVrXUjYCyrO4/arcgis/rest/services/Project_index/FeatureServer/0/query"
@@ -177,8 +175,7 @@ def extract_geojson(url):
         if response.status_code == 200:
             geojson = response.json()
             gdf = gpd.GeoDataFrame.from_features(geojson["features"])
-            gdf.set_crs("EPSG:4326", inplace=True)
-            return gdf.to_crs("EPSG:27700")
+            return gdf
         else:
             print(f"Failed to fetch GeoJSON: {response.status_code}")
             return None
@@ -269,16 +266,7 @@ def filter(FIDS):
         print("Column 'Species' not found in GeoDataFrame.")   
        
 def clean_indentation(code):
-    # Split the code into lines
-    lines = code.split('\n')
-    # Remove leading spaces/tabs on each line, and replace tabs with 4 spaces
-    cleaned_lines = []
-    for line in lines:
-        # Strip unwanted leading spaces/tabs and then add consistent 4 spaces for each level
-        cleaned_lines.append(line.lstrip())
-    
-    # Join the cleaned lines back into a single string with proper indentation
-    return '\n'.join(cleaned_lines)
+    return textwrap.dedent(code).strip()
 # job_id: str, 
 def long_running_task(user_task: str, task_name: str, data_locations: list):
     try:
