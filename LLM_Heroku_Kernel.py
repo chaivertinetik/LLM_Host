@@ -60,7 +60,8 @@ class Solution():
                  task_name,
                  save_dir,
                  role=constants.graph_role,  # Default role
-                 model="gemini-1.5-flash-002",
+                 #gemini-1.5-flash-002
+                 model="gemini-2.0-flash-001",
                  data_locations=[],
                  stream=True,
                  verbose=True,
@@ -84,8 +85,8 @@ class Solution():
         self.assembly_prompt = ""
 
         self.parent_solution = None
-        self.model_name = "gemini-1.5-flash-002"
-        self.model = GenerativeModel("gemini-1.5-flash-002")
+        self.model_name = "gemini-2.0-flash-001"
+        self.model = GenerativeModel("gemini-2.0-flash-001")
         self.stream = stream
         self.verbose = verbose
         self.assembly_LLM_response = ""
@@ -206,7 +207,7 @@ class Solution():
                   sleep_sec=20,
                   system_role=None):
         
-        model = "gemini-1.5-flash-002"
+        model = "gemini-2.0-flash-001"
         if system_role is None:
             system_role = self.role
         count = 0
@@ -295,7 +296,7 @@ class Solution():
         # self.chat_history.append()
         response = self.get_LLM_reply(prompt=self.graph_prompt,
                                         system_role=self.role
-                                        # model=GenerativeModel("gemini-1.5-flash-002"),
+                                        # model=GenerativeModel("gemini-2.0-flash-001"),
                                          )
         self.graph_response = response
         try:
@@ -751,14 +752,14 @@ class Solution():
         # print(f"review_prompt:\n{review_prompt}")
         # response = helper.get_LLM_reply(prompt=review_prompt,
         #                                 system_role=constants.direct_review_role,
-        #                                 model=GenerativeModel("gemini-1.5-flash-002"),
+        #                                 model=GenerativeModel("gemini-2.0-flash-001"),
         #                                 verbose=True,
         #                                 stream=True,
         #                                 retry_cnt=5,
         #                                 )
         response = helper.get_LLM_reply(prompt=review_prompt,
                                         system_role=constants.direct_review_role,
-                                        model_name="gemini-1.5-flash-002",  # Pass the model name as a string
+                                        model_name="gemini-2.0-flash-001",  # Pass the model name as a string
                                         verbose=True,
                                         stream=True,
                                         retry_cnt=15,
