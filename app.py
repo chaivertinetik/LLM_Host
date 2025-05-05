@@ -111,8 +111,8 @@ def is_geospatial_task(prompt: str) -> bool:
     credentials_data = json.loads(os.getenv("GOOGLE_CREDENTIALS"))
     credentials = service_account.Credentials.from_service_account_info(credentials_data)
     vertexai.init(project="llmgis", location="us-central1", credentials=credentials)
-    # model = TextGenerationModel.from_pretrained("text-bison")
-    model = GenerativeModel("gemini-1.5-flash-002")
+    # gemini-1.5-flash-002
+    model = GenerativeModel("gemini-2.0-flash-001")
     system_prompt = (
         "Decide if the user's input is related to geospatial analysis or geospatial data. "
         "This includes queries about map features, tree health, species, spatial attributes, survey date, spatial selections, overlays, or analysis."
@@ -331,7 +331,8 @@ def long_running_task(user_task: str, task_name: str, data_locations: list):
         solution.save_solution()
 
         # Run the generated code
-        model = GenerativeModel("gemini-1.5-flash-002")
+        #gemini-1.5-flash-002
+        model = GenerativeModel("gemini-2.0-flash-001")
         for attempt in range(10):
            try: 
               response = model.generate_content(solution.assembly_prompt)
