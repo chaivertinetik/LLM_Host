@@ -110,7 +110,7 @@ def is_geospatial_task(prompt: str) -> bool:
 
     credentials_data = json.loads(os.getenv("GOOGLE_CREDENTIALS"))
     credentials = service_account.Credentials.from_service_account_info(credentials_data)
-    vertexai.init(project="llmgis", location="us-central1", credentials=credentials)
+    vertexai.init(project="disco-parsec-444415-c4", location="us-central1", credentials=credentials)
     # gemini-1.5-flash-002
     model = GenerativeModel("gemini-2.0-flash-001")
     system_prompt = (
@@ -286,7 +286,7 @@ def long_running_task(user_task: str, task_name: str, data_locations: list):
         # Initialize Vertex AI
         credentials_data = json.loads(os.getenv("GOOGLE_CREDENTIALS"))
         credentials = service_account.Credentials.from_service_account_info(credentials_data)
-        vertexai.init(project="llmgis", location="us-central1", credentials=credentials)
+        vertexai.init(project="disco-parsec-444415-c4", location="us-central1", credentials=credentials)
         # user_task = r"""1) To use a geoJSON file and return all the "Tree_ID" that are ash species ('Predicted Tree Species':'Ash').
         # """
         # task_name ='Tree_crown_quality'
