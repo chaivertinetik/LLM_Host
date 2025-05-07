@@ -93,7 +93,7 @@ from vertexai.generative_models import GenerativeModel  # Import the GenerativeM
 
 def get_LLM_reply(prompt="Provide Python code to read a CSV file from this URL and store the content in a variable.",
                   system_role="You are a professional Geo-information scientist and developer.",
-                  model_name="gemini-1.5-flash-002",  # specify your model here
+                  model_name="gemini-2.0-flash-001",  # specify your model here
                   verbose=True,
                   temperature=1,
                   stream=True,
