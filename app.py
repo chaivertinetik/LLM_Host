@@ -54,19 +54,8 @@ class RequestData(BaseModel):
 async def trigger_cleanup(task_name):
     project_name = task_name
     tree_crowns_url, delete_url = get_project_urls(project_name)
-    delete_params = {
-        "where": f"PROJECT_NAME = '{project_name}'",
-        "outFields": "TREE_CROWNS,CHAT_OUTPUT",
-        "f": "json",
-    }
-
     try:
-        response = requests.get(delete_url, params=delete_params, timeout=10)
-        data=response.json()
-        if not data.get("features"):
-           raise ValueError(f"No project found wiht name '{project_name}'.")
-        attributes = data["features"][0]["attributes"]
-        target_url = attributes.get("CHAT_OUTPUT")
+        target_url = delete_url
         query_url = f"{target_url}/0/query"
         delete_url = f"{target_url}/0/deleteFeatures"
         # Step 1: Get all existing OBJECTIDs
@@ -241,8 +230,7 @@ def delete_all_features(target_url):
     delete_response = requests.post(delete_url, data=delete_params)
     print("Delete response:", delete_response.json())
 
-def filter(FIDS,task_name):
-    project_name = task_name
+def filter(FIDS,project_name):
     tree_crowns_url, chat_output_url = get_project_urls(project_name)
 
     if not tree_crowns_url or not chat_output_url:
