@@ -51,9 +51,9 @@ class RequestData(BaseModel):
     task: str = "No task provided."
     task_name: str = "default_task"
 
-async def trigger_cleanup():
-    project_name = "FOXHOLES"
-    delete_url = "https://services-eu1.arcgis.com/8uHkpVrXUjYCyrO4/arcgis/rest/services/Project_index/FeatureServer/0/query"
+async def trigger_cleanup(task_name):
+    project_name = task_name
+    tree_crowns_url, delete_url = get_project_urls(project_name)
     delete_params = {
         "where": f"PROJECT_NAME = '{project_name}'",
         "outFields": "TREE_CROWNS,CHAT_OUTPUT",
@@ -241,8 +241,8 @@ def delete_all_features(target_url):
     delete_response = requests.post(delete_url, data=delete_params)
     print("Delete response:", delete_response.json())
 
-def filter(FIDS):
-    project_name = "FOXHOLES"
+def filter(FIDS,task_name):
+    project_name = task_name
     tree_crowns_url, chat_output_url = get_project_urls(project_name)
 
     if not tree_crowns_url or not chat_output_url:
@@ -380,7 +380,7 @@ def long_running_task(user_task: str, task_name: str, data_locations: list):
             }
         result = globals().get('result', None)
         print("Final result:", result)
-        filter(result)
+        filter(result,task_name)
         print("Execution completed.")
         # job_status[job_id] = {"status": "completed", "message": f"Task '{task_name}' executed successfully, adding it to the map shortly."}
         return result 
@@ -395,7 +395,7 @@ async def process_request(request_data: RequestData):
     user_task = request_data.task.strip().lower()
     task_name = request_data.task_name
     if re.search(r"\b(clear|reset|cleanup|clean|wipe)\b", user_task):
-        return await trigger_cleanup()
+        return await trigger_cleanup(task_name)
        
     if not is_geospatial_task(user_task):
         return {
