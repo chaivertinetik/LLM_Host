@@ -346,25 +346,26 @@ def long_running_task(user_task: str, task_name: str, data_locations: list):
         exec_globals = {}
         # Execute the code directly 
         try:
-            exec(code_for_assembly, globals())
-        except IndentationError as e:
-            print("Entered exception zone")
-            for attempt in range(10):
-                try:
-                    prompt = f"Fix Indentation in the following Python code:\n{code_for_assembly}\n"
-                    response = model.generate_content(prompt)
-                    break
-                except ResourceExhausted: 
-                    if attempt<10:
-                        time.sleep(10)
-                    else:
-                        raise
-            code_for_assembly = helper.extract_code(response.text)
-            exec(code_for_assembly, globals())
+            try:
+                exec(code_for_assembly, globals())
+            except IndentationError as e:
+                print("Entered exception zone")
+                for attempt in range(10):
+                    try:
+                        prompt = f"Fix Indentation in the following Python code:\n{code_for_assembly}\n"
+                        response = model.generate_content(prompt)
+                        break
+                    except ResourceExhausted: 
+                        if attempt<10:
+                            time.sleep(10)
+                        else:
+                            raise
+                code_for_assembly = helper.extract_code(response.text)
+                exec(code_for_assembly, globals())
         except Exception as e:
             return {
                 "status": "completed",
-                "message": "The server seems to be down or what you're asking for isn't in the database."
+                "message": "The server seems to be down or the data you're asking for isn't available."
             }
         result = globals().get('result', None)
         print("Final result:", result)
