@@ -6,7 +6,7 @@ from langchain.agents.agent_types import AgentType
 from langchain.llms.vertexai import VertexAI
 
 llm = VertexAI(
-    model_name="gemini-pro",
+    model_name="gemini-2.0-flash-001",
     temperature=0,
     max_output_tokens=1024
 )
