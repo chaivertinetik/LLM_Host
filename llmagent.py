@@ -1,27 +1,49 @@
 import os
-import tempfile
+import json
 from fastapi import FastAPI
 from pydantic import BaseModel
 from langchain.agents import initialize_agent, Tool
 from langchain.agents.agent_types import AgentType
-from langchain_community.llms import VertexAI
 
-# Load Google credentials from environment
+# Vertex AI SDK
+from vertexai import generative_models as genai
+import vertexai
+from google.oauth2 import service_account
+
+# === Load credentials ===
 google_creds = os.environ.get("GOOGLE_CREDENTIALS")
-if google_creds:
-    with tempfile.NamedTemporaryFile(delete=False, suffix=".json") as f:
-        f.write(google_creds.encode("utf-8"))
-        temp_cred_path = f.name
-    os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = temp_cred_path
-else:
+if not google_creds:
     raise EnvironmentError("GOOGLE_CREDENTIALS env var is missing")
 
-# Initialize LLM
-llm = VertexAI(
-    model_name="gemini-2.0-flash-001",
-    temperature=0,
-    max_output_tokens=1024
+credentials_data = json.loads(google_creds)
+credentials = service_account.Credentials.from_service_account_info(credentials_data)
+
+# === Init Vertex AI ===
+vertexai.init(
+    project="disco-parsec-444415-c4",
+    location="us-central1",
+    credentials=credentials
 )
+
+# === Create Gemini model ===
+model = genai.GenerativeModel("gemini-2.0-flash-001")
+
+# === Wrap Gemini in a LangChain-compatible LLM ===
+from langchain_core.language_models import LLM
+from langchain_core.outputs import Generation, LLMResult
+
+class GeminiLLM(LLM):
+    model: genai.GenerativeModel
+
+    def _call(self, prompt: str, stop=None, run_manager=None) -> str:
+        response = self.model.generate_content(prompt)
+        return response.text
+
+    @property
+    def _llm_type(self) -> str:
+        return "custom-gemini"
+
+llm = GeminiLLM(model=model)
 
 # === Simulated tools ===
 def get_zoning_info(coords: str) -> str:
@@ -39,6 +61,7 @@ tools = [
     Tool(name="PopulationStats", func=get_population_info, description="Returns population density...")
 ]
 
+# === LangChain Agent ===
 agent = initialize_agent(
     tools=tools,
     llm=llm,
@@ -46,7 +69,7 @@ agent = initialize_agent(
     verbose=True
 )
 
-# === FastAPI app ===
+# === FastAPI App ===
 app = FastAPI()
 
 @app.get("/")
