@@ -15,3 +15,4 @@ EXPOSE 8080
 
 # Start FastAPI server with Uvicorn
 CMD ["sh", "-c", "uvicorn llmagent:app --host 0.0.0.0 --port ${PORT:-8080}"]
+
