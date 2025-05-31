@@ -1,4 +1,5 @@
 import os
+import tempfile
 from fastapi import FastAPI
 from pydantic import BaseModel
 from langchain.agents import initialize_agent, Tool
