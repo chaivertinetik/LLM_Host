@@ -30,7 +30,6 @@ model = genai.GenerativeModel("gemini-2.0-flash-001")
 
 # === Wrap Gemini in a LangChain-compatible LLM ===
 from langchain_core.language_models import LLM
-from langchain_core.outputs import Generation, LLMResult
 
 class GeminiLLM(LLM):
     model: genai.GenerativeModel
@@ -84,7 +83,10 @@ class PromptRequest(BaseModel):
 async def ask_agent(req: PromptRequest):
     full_prompt = f"{req.query} Coordinates: {req.coords}"
     try:
-        result = agent.run(full_prompt)
-        return {"response": result}
+        response = agent.invoke({"input": full_prompt})
+        return {
+            "response": response.get("output", "No output returned"),
+            "intermediate_steps": response.get("intermediate_steps", [])
+        }
     except Exception as e:
         return {"error": str(e)}
