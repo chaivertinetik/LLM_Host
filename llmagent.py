@@ -6,19 +6,17 @@ from langchain.agents import initialize_agent, Tool
 from langchain.agents.agent_types import AgentType
 from langchain.llms.vertexai import VertexAI
 
+# Load Google credentials from environment
 google_creds = os.environ.get("GOOGLE_CREDENTIALS")
 if google_creds:
-    # Write the JSON string to a temp file for Google SDK to use
     with tempfile.NamedTemporaryFile(delete=False, suffix=".json") as f:
         f.write(google_creds.encode("utf-8"))
         temp_cred_path = f.name
     os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = temp_cred_path
 else:
-    raise EnvironmentError(
-        "Environment variable GOOGLE_APPLICATION_CREDENTIALS not found or empty. "
-        "Please set it with your service account JSON content."
-    )
-    
+    raise EnvironmentError("GOOGLE_CREDENTIALS env var is missing")
+
+# Initialize LLM
 llm = VertexAI(
     model_name="gemini-2.0-flash-001",
     temperature=0,
@@ -35,35 +33,25 @@ def get_climate_info(coords: str) -> str:
 def get_population_info(coords: str) -> str:
     return f"Population: 11,000 people/km² at {coords}"
 
-# === Tool definitions ===
 tools = [
-    Tool(
-        name="ZoningLookup",
-        func=get_zoning_info,
-        description="Returns zoning rules for coordinates like '37.7749,-122.4194'"
-    ),
-    Tool(
-        name="ClimateData",
-        func=get_climate_info,
-        description="Returns climate risk for coordinates like '37.7749,-122.4194'"
-    ),
-    Tool(
-        name="PopulationStats",
-        func=get_population_info,
-        description="Returns population density for coordinates like '37.7749,-122.4194'"
-    )
+    Tool(name="ZoningLookup", func=get_zoning_info, description="Returns zoning rules..."),
+    Tool(name="ClimateData", func=get_climate_info, description="Returns climate risk..."),
+    Tool(name="PopulationStats", func=get_population_info, description="Returns population density...")
 ]
 
-
 agent = initialize_agent(
-    tools,
-    llm,
+    tools=tools,
+    llm=llm,
     agent=AgentType.ZERO_SHOT_REACT_DESCRIPTION,
     verbose=True
 )
 
-
+# === FastAPI app ===
 app = FastAPI()
+
+@app.get("/")
+def health_check():
+    return {"status": "ok"}
 
 class PromptRequest(BaseModel):
     query: str
