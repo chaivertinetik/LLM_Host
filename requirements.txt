@@ -42,3 +42,5 @@ uvicorn
 pydantic
 black
 autopep8
+langchain
+google-cloud-aiplatform
