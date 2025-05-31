@@ -42,5 +42,6 @@ uvicorn
 pydantic
 black
 autopep8
-langchain==0.1.14
-langchain-community==0.0.19
+langchain
+langchain-community
+
