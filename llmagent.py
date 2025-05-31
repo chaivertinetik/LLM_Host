@@ -4,7 +4,7 @@ from fastapi import FastAPI
 from pydantic import BaseModel
 from langchain.agents import initialize_agent, Tool
 from langchain.agents.agent_types import AgentType
-from langchain.llms.vertexai import VertexAI
+from langchain_community.llms import VertexAI
 
 # Load Google credentials from environment
 google_creds = os.environ.get("GOOGLE_CREDENTIALS")
