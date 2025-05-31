@@ -5,6 +5,19 @@ from langchain.agents import initialize_agent, Tool
 from langchain.agents.agent_types import AgentType
 from langchain.llms.vertexai import VertexAI
 
+google_creds = os.environ.get("GOOGLE_CREDENTIALS")
+if google_creds:
+    # Write the JSON string to a temp file for Google SDK to use
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".json") as f:
+        f.write(google_creds.encode("utf-8"))
+        temp_cred_path = f.name
+    os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = temp_cred_path
+else:
+    raise EnvironmentError(
+        "Environment variable GOOGLE_APPLICATION_CREDENTIALS not found or empty. "
+        "Please set it with your service account JSON content."
+    )
+    
 llm = VertexAI(
     model_name="gemini-2.0-flash-001",
     temperature=0,
