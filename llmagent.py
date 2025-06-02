@@ -1,5 +1,5 @@
 import os
-import sys
+# import sys
 import json
 from fastapi import FastAPI
 from pydantic import BaseModel
@@ -94,29 +94,29 @@ class PromptRequest(BaseModel):
     query: str
     coords: str
 
-@app.post("/ask")
-async def ask_agent(req: PromptRequest):
-    full_prompt = f"{req.query} Coordinates: {req.coords}"
-
-    # Capture stdout to get internal reasoning trace
-    old_stdout = sys.stdout
-    sys.stdout = mystdout = StringIO()
-
-    try:
-        result = agent.run(full_prompt)
-        sys.stdout = old_stdout
-        trace = mystdout.getvalue()
-        return {"response": result, "trace": trace}
-    except Exception as e:
-        sys.stdout = old_stdout
-        trace = mystdout.getvalue()
-        return {"error": str(e), "trace": trace}
-        
 # @app.post("/ask")
 # async def ask_agent(req: PromptRequest):
 #     full_prompt = f"{req.query} Coordinates: {req.coords}"
+
+#     # Capture stdout to get internal reasoning trace
+#     old_stdout = sys.stdout
+#     sys.stdout = mystdout = StringIO()
+
 #     try:
 #         result = agent.run(full_prompt)
-#         return {"response": result}
+#         sys.stdout = old_stdout
+#         trace = mystdout.getvalue()
+#         return {"response": result, "trace": trace}
 #     except Exception as e:
-#         return {"error": str(e)}
+#         sys.stdout = old_stdout
+#         trace = mystdout.getvalue()
+#         return {"error": str(e), "trace": trace}
+        
+@app.post("/ask")
+async def ask_agent(req: PromptRequest):
+    full_prompt = f"{req.query} Coordinates: {req.coords}"
+    try:
+        result = agent.run(full_prompt)
+        return {"response": result}
+    except Exception as e:
+        return {"error": str(e)}
