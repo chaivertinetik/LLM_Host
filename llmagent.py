@@ -54,11 +54,23 @@ def get_climate_info(coords: str) -> str:
 
 def get_population_info(coords: str) -> str:
     return f"Population: 11,000 people/km² at {coords}"
+    
+def check_tree_health(coords: str) -> str:
+    return f"Tree Health: Moderate tree cover, signs of drought stress at {coords}"
+
+def assess_tree_benefit(coords: str) -> str:
+    return f"Tree Benefits: High potential for carbon capture and shade cooling at {coords}"
+
+def check_soil_suitability(coords: str) -> str:
+    return f"Soil: Slightly compacted clay, pH 6.5 – suitable for native tree species at {coords}"
 
 tools = [
     Tool(name="ZoningLookup", func=get_zoning_info, description="Returns zoning rules..."),
     Tool(name="ClimateData", func=get_climate_info, description="Returns climate risk..."),
-    Tool(name="PopulationStats", func=get_population_info, description="Returns population density...")
+    Tool(name="PopulationStats", func=get_population_info, description="Returns population density..."),
+    Tool(name="TreeHealthCheck", func=check_tree_health, description="Assesses existing tree health at given coordinates"),
+    Tool(name="TreeBenefitAssessment", func=assess_tree_benefit, description="Estimates environmental impact of planting trees"),
+    Tool(name="SoilSuitability", func=check_soil_suitability, description="Checks soil type, pH, and suitability for tree planting")
 ]
 
 # === LangChain Agent ===
@@ -84,8 +96,26 @@ class PromptRequest(BaseModel):
 @app.post("/ask")
 async def ask_agent(req: PromptRequest):
     full_prompt = f"{req.query} Coordinates: {req.coords}"
+
+    # Capture stdout to get internal reasoning trace
+    old_stdout = sys.stdout
+    sys.stdout = mystdout = StringIO()
+
     try:
         result = agent.run(full_prompt)
-        return {"response": result}
+        sys.stdout = old_stdout
+        trace = mystdout.getvalue()
+        return {"response": result, "trace": trace}
     except Exception as e:
-        return {"error": str(e)}
+        sys.stdout = old_stdout
+        trace = mystdout.getvalue()
+        return {"error": str(e), "trace": trace}
+        
+# @app.post("/ask")
+# async def ask_agent(req: PromptRequest):
+#     full_prompt = f"{req.query} Coordinates: {req.coords}"
+#     try:
+#         result = agent.run(full_prompt)
+#         return {"response": result}
+#     except Exception as e:
+#         return {"error": str(e)}
