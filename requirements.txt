@@ -44,4 +44,4 @@ black
 autopep8
 langchain
 langchain-community
-
+earthengine-api
