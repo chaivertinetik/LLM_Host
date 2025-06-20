@@ -21,6 +21,8 @@ if not google_creds:
 
 credentials_data = json.loads(google_creds)
 credentials = service_account.Credentials.from_service_account_info(credentials_data)
+service_account_email = credentials_data.get("client_email")
+print(service_account_email)
 
 # === Init Vertex AI ===
 vertexai.init(
