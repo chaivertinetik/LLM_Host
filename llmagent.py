@@ -31,8 +31,12 @@ vertexai.init(
     credentials=credentials
 )
 #testing earth engine service 
-ee.Authenticate()
-ee.Initialize(project='disco-parsec-444415-c4')
+SERVICE_ACCOUNT= 'earthengine@disco-parsec-444415-c4.iam.gserviceaccount.com'
+key_path = '/tmp/earthengine-key.json'
+with open(key_path, 'w') as f:
+    f.write(os.environ['EARTH_CREDENTIALS'])
+earth_credentials= ee.ServiceAccountCredentials(SERVICE_ACCOUNT, key_path)
+ee.Initialize(earth_credentials, project='disco-parsec-444415-c4')
 # === Create Gemini model ===
 model = genai.GenerativeModel("gemini-2.0-flash-001")
 
