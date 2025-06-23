@@ -31,6 +31,7 @@ vertexai.init(
     credentials=credentials
 )
 #testing earth engine service 
+ee.Authenticate()
 ee.Initialize(project='disco-parsec-444415-c4')
 # === Create Gemini model ===
 model = genai.GenerativeModel("gemini-2.0-flash-001")
