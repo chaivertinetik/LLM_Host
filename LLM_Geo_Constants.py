@@ -14,7 +14,7 @@ graph_role = r'''A professional Geo-information scientist and programmer good at
 '''
 
 graph_task_prefix = r'The geoJSON file has the following properties: "Health" (either "Healthy" or "Unhealthy"), "Tree_ID", "Species" (either "Ash" or "Non-Ash"), "SURVEY_DATE" (format: Wed, 11 Sep 2024 00:00:00 GMT) and the final goal is to return the "Tree_ID" based on what the user wants. Generate a graph (data structure) only, whose nodes are (1) a series of consecutive steps and (2) data to solve this question: '
-
+#update the task prefix to include the potential for text or show_tree_id based prompts and the tree height, area and find a way to give meta data to the prompt. 
 #For the demo case
 # graph_reply_exmaple = r"""
 # ```python
