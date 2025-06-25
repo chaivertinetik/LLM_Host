@@ -157,6 +157,30 @@ def get_project_urls(project_name):
     attributes = data["features"][0]["attributes"]
     return attributes.get("TREE_CROWNS"), attributes.get("CHAT_OUTPUT")
 
+#CRS data is aligned and the same 
+# def extract_geojson(service_url):
+#     try:
+#         # Fetch metadata to determine CRS
+#         metadata_url = f"{service_url}/0?f=json"
+#         metadata = requests.get(metadata_url, timeout=10).json()
+
+#         wkid = metadata.get("extent", {}).get("spatialReference", {}).get("wkid")
+#         if not wkid:
+#             raise ValueError("Could not determine CRS from service metadata.")
+
+#         query_url = f"{service_url}/0/query?where=1%3D1&outFields=*&f=geojson&outSR={wkid}"
+#         response = requests.get(query_url, timeout=10)
+#         if response.status_code == 200:
+#             geojson = response.json()
+#             gdf = gpd.GeoDataFrame.from_features(geojson["features"])
+#             gdf.set_crs(epsg=wkid, inplace=True)
+#             return gdf
+#         else:
+#             print(f"Failed to fetch GeoJSON: {response.status_code}")
+#             return None
+#     except Exception as e:
+#         print(f"Error extracting GeoJSON: {e}")
+#         return None
 
 def extract_geojson(url):
     try:
@@ -171,15 +195,20 @@ def extract_geojson(url):
     except Exception as e:
         print(f"GeoJSON fetch error: {e}")
         return None
-
-
+        
+#change the batch_size based on the upper cap for Foxholes 
+#def post_features_to_layer(gdf, target_url, batch_size=800):
 def post_features_to_layer(gdf, target_url):
     add_url = f"{target_url}/0/addFeatures"
     headers = {"Content-Type": "application/x-www-form-urlencoded"}
 
     allowed_fields = {"Health", "Tree_ID", "Species"}
-
+    # uncomment this for the batch implementation
+    # for start in range(0, len(gdf), batch_size):
+    #     batch_gdf=gdf.iloc[start:start+batch_size]
+    #     features=[]
     features = []
+    # for _, row in batch_gdf.iterrows():
     for _, row in gdf.iterrows():
         try:
             arcgis_geom = shapely_to_arcgis_geometry(row.geometry)
@@ -198,8 +227,10 @@ def post_features_to_layer(gdf, target_url):
 
     response = requests.post(add_url, data=payload, headers=headers)
     if response.status_code == 200:
+        # print(f"Batch {start//batch_size +1}: Features added successfully:", response.json())
         print("Features added successfully:", response.json())
     else:
+        # print(f"Batch  {start//batch_size + 1} : Failed to add features:", response.text) 
         print("Failed to add features:", response.text)
 
 def delete_all_features(target_url):
