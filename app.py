@@ -484,10 +484,15 @@ async def process_request(request_data: RequestData):
     # job_status[job_id] = {"status": "queued", "message": "Task is queued for processing"}
     try:
         tree_crowns_url, chat_output_url = get_project_urls(task_name)
-
-        data_locations = [
-             f"Tree crown geoJSON shape file: {tree_crowns_url}/0/query?where=1%3D1&outFields=*&f=geojson."
-         ]
+        if task_name in ["TT_GCW1_Summer", "TT_GCW1_Winter"]:
+            tree_crown_summer, chat_output_url = get_project_urls("TT_GCW1_Summer")
+            tree_crown_winter, chat_output_url = get_project_urls("TT_GCW1_Winter")
+            data_locations = [
+                 f"Tree crown geoJSON shape file: {tree_crowns_url}/0/query?where=1%3D1&outFields=*&f=geojson.",
+                 f"Before storm tree crown geoJSON: {tree_crown_winter}/0/query?where=1%3D1&outFields=*&f=geojson.",
+                 f"After storm tree crown geoJSON: {tree_crown_summer}/0/query?where=1%3D1&outFields=*&f=geojson."]
+        else: 
+            data_locations = [f"Tree crown geoJSON shape file: {tree_crowns_url}/0/query?where=1%3D1&outFields=*&f=geojson."]
         # background_tasks.add_task(long_running_task, job_id, user_task, task_name, data_locations)
         result = long_running_task(user_task, task_name, data_locations)
         message = result.get("message") if isinstance(result, dict) and "message" in result else str(result)
