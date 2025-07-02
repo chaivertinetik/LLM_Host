@@ -3,6 +3,7 @@ import json
 import networkx as nx
 import vertexai
 from vertexai.generative_models import GenerativeModel
+from vertexai.language_models import TextGenerationModel
 from google.oauth2 import service_account
 from LLM_Heroku_Kernel import Solution
 import helper
@@ -124,7 +125,51 @@ def is_geospatial_task(prompt: str) -> bool:
     )
     answer = response.text.strip().lower()
     return answer.startswith("yes")
-   
+    
+def wants_map_output_keyword(prompt: str) -> bool:
+    keywords = ["show", "display", "map", "list", "highlight", "visualize", "which trees", "what trees"]
+    prompt_lower = prompt.lower()
+    return any(kw in prompt_lower for kw in keywords)
+
+def wants_map_output_genai(prompt: str) -> bool:
+    credentials_data = json.loads(os.getenv("GOOGLE_CREDENTIALS"))
+    credentials = service_account.Credentials.from_service_account_info(credentials_data)
+    # Initialize Vertex AI
+    # Adjust project and location as needed
+    
+    vertexai.init(project="disco-parsec-444415-c4", location="us-central1", credentials=credentials)
+
+    model = GenerativeModel("gemini-2.0-flash-001")
+    system_prompt = (
+        "Decide if the user's input is asking for a map, list, or visual display of spatial features. "
+        "Return only 'yes' or 'no'. Examples:\n"
+        "- 'Show all healthy trees' -> yes\n"
+        "- 'Map the lost trees' -> yes\n"
+        "- 'List trees with crown size over 5m' -> yes\n"
+        "- 'Visualize all ash trees' -> yes\n"
+        "- 'Which trees are missing?' -> yes\n"
+        "- 'How much volume was lost?' -> no\n"
+        "- 'What is the total number of trees?' -> no\n"
+        "- 'Summarize changes between surveys' -> no"
+    )
+    full_prompt = f"{system_prompt}\n\nUser input: {prompt}\nAnswer:"
+    response = model.generate_content(
+        full_prompt,
+        generation_config={
+            "temperature": 0.0,
+            "max_output_tokens": 5
+        }
+    )
+    answer = response.text.strip().lower()
+    return answer.startswith("yes")
+
+def wants_map_output(prompt: str) -> bool:
+    # First try keyword matching
+    if wants_map_output_keyword(prompt):
+        return True
+    # Fallback to GenAI classification
+    return wants_map_output_genai(prompt)
+
 def shapely_to_arcgis_geometry(geom):
     if geom.geom_type == "Polygon":
         return {
