@@ -495,8 +495,7 @@ async def process_request(request_data: RequestData):
             data_locations = [f"Tree crown geoJSON shape file: {tree_crowns_url}/0/query?where=1%3D1&outFields=*&f=geojson."]
         # background_tasks.add_task(long_running_task, job_id, user_task, task_name, data_locations)
         result = long_running_task(user_task, task_name, data_locations)
-        message = result.get("message") if isinstance(result, dict) and "message" in result else str(result)
-
+        message = result.get("message") if isinstance(result, dict) else str(result)
         return {
             "status": "completed",
             "message": message,
