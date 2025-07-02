@@ -399,14 +399,27 @@ def long_running_task(user_task: str, task_name: str, data_locations: list):
             }
         result = globals().get('result', None)
         print("Final result:", result)
-        filter(result,task_name)
-        print("Execution completed.")
+       
+        if wants_map_output(user_task):
+            filter(result,task_name)
+            print("Execution completed.")
+            return {
+                "status": "completed",
+                "message": f"Task '{task_name}' executed successfully.",
+                "tree_ids": result if isinstance(result, list) else None
+            }
         # job_status[job_id] = {"status": "completed", "message": f"Task '{task_name}' executed successfully, adding it to the map shortly."}
-        return result 
+        else: 
+                return{
+                    "status": "completed",
+                    "message": str(result)
+                }
+        
 
     except Exception as e: 
         #job_status[job_id] = {"status": "failed", "message": str(e)}
-        return f"Error during execution: {str(e)}"
+        # return f"Error during execution: {str(e)}"
+        return f"Error during execution: The server seems to be down."
 
 #, background_tasks: BackgroundTasks
 @app.post("/process")
@@ -432,13 +445,14 @@ async def process_request(request_data: RequestData):
          ]
         # background_tasks.add_task(long_running_task, job_id, user_task, task_name, data_locations)
         result = long_running_task(user_task, task_name, data_locations)
+        message = result.get("message") if isinstance(result, dict) and "message" in result else str(result)
 
         return {
             "status": "completed",
-            "message": f"Task '{task_name}' executed successfully.",
+            "message": message,
             "response": {
                 "role": "assistant",
-                "content": str(result)
+                "content": result.get("tree_ids") if isinstance(result, dict) and "tree_ids" in result else message
             }
         }
     # return {"status": "success", "job_id": job_id, "message": "Processing started..."}
