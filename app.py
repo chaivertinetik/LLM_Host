@@ -16,7 +16,6 @@ import requests
 from google.oauth2.service_account import Credentials
 import uuid
 import threading
-import requests
 import geopandas as gpd
 import json
 from shapely.geometry import mapping
@@ -189,18 +188,28 @@ def get_project_urls(project_name):
     query_url = "https://services-eu1.arcgis.com/8uHkpVrXUjYCyrO4/arcgis/rest/services/Project_index/FeatureServer/0/query"
     params = {
         "where": f"PROJECT_NAME = '{project_name}'",
-        "outFields": "TREE_CROWNS,CHAT_OUTPUT",
+        "outFields": "PROJECT_NAME,TREE_CROWNS,CHAT_OUTPUT,SURVEY_DATE",
         "f": "json",
     }
 
     response = requests.get(query_url, params=params, timeout=10)
+    if response.status_code != 200:
+        raise ValueError(f"Failed to fetch project data. Status code: {response.status_code}")
+
     data = response.json()
 
-    if not data.get("features"):
+    features = data.get("features")
+    if not features:
         raise ValueError(f"No project found with the name '{project_name}'.")
 
-    attributes = data["features"][0]["attributes"]
-    return attributes.get("TREE_CROWNS"), attributes.get("CHAT_OUTPUT")
+    attrs = features[0]["attributes"]
+    return {
+        "PROJECT_NAME": attrs.get("PROJECT_NAME"),
+        "TREE_CROWNS": attrs.get("TREE_CROWNS"),
+        "CHAT_OUTPUT": attrs.get("CHAT_OUTPUT"),
+        "SURVEY_DATE": attrs.get("SURVEY_DATE"),
+    }
+
 
 #CRS data is aligned and the same 
 # def extract_geojson(service_url):
@@ -328,7 +337,47 @@ def filter(FIDS,project_name):
         post_features_to_layer(ash_gdf, chat_output_url)
     else:
         print("Column 'Species' not found in GeoDataFrame.")   
-       
+
+def get_all_related_projects(base_name):
+    """
+    Fetches all projects from the Project Index table whose PROJECT_NAME contains the first two parts of base_name.
+    Returns a list of dictionaries with PROJECT_NAME, TREE_CROWNS, CHAT_OUTPUT, and SURVEY_DATE.
+    """
+    def extract_first_two_parts(name):
+        parts = name.split('_')
+        return '_'.join(parts[:2]) if len(parts) >= 2 else name
+
+    search_name = extract_first_two_parts(base_name)
+
+    query_url = "https://services-eu1.arcgis.com/8uHkpVrXUjYCyrO4/arcgis/rest/services/Project_index/FeatureServer/0/query"
+    params = {
+        "where": f"PROJECT_NAME LIKE '%{search_name}%'",
+        "outFields": "PROJECT_NAME,TREE_CROWNS,CHAT_OUTPUT,SURVEY_DATE",
+        "f": "json",
+    }
+
+    response = requests.get(query_url, params=params, timeout=10)
+    if response.status_code != 200:
+        raise ValueError(f"Failed to fetch related projects. Status code: {response.status_code}")
+
+    data = response.json()
+    features = data.get("features", [])
+    if not features:
+        raise ValueError(f"No related projects found for base name '{base_name}'.")
+
+    projects = []
+    for feature in features:
+        attrs = feature.get("attributes", {})
+        projects.append({
+            "PROJECT_NAME": attrs.get("PROJECT_NAME"),
+            "TREE_CROWNS": attrs.get("TREE_CROWNS"),
+            "CHAT_OUTPUT": attrs.get("CHAT_OUTPUT"),
+            "SURVEY_DATE": attrs.get("SURVEY_DATE"),
+        })
+
+    return projects
+
+
 def clean_indentation(code):
      # Split the code into lines
     lines = code.split('\n')
@@ -355,11 +404,12 @@ def long_running_task(user_task: str, task_name: str, data_locations: list):
         # """
         # task_name ='Tree_crown_quality'
         #Create Solution object
+        data_locations_str = "\n\n".join(data_locations)
         solution = Solution(
             task=user_task,
             task_name=task_name,
             save_dir=save_dir,
-            data_locations=data_locations,
+            data_locations=data_locations_str,
         )
 
         # Generate solution graph
@@ -466,36 +516,71 @@ def long_running_task(user_task: str, task_name: str, data_locations: list):
         # return f"Error during execution: {str(e)}"
         return f"Error during execution: The server seems to be down."
 
+def is_comparison_task(prompt: str) -> bool:
+    """
+    Determine if user prompt is requesting a comparison between surveys.
+    """
+    keywords = ["compare", "difference", "changes between", "before and after", "change over time", "temporal change"]
+    return any(kw in prompt.lower() for kw in keywords)
+
+
 #, background_tasks: BackgroundTasks
 @app.post("/process")
 async def process_request(request_data: RequestData):
     user_task = request_data.task.strip().lower()
     task_name = request_data.task_name
+
     if re.search(r"\b(clear|reset|cleanup|clean|wipe)\b", user_task):
         return await trigger_cleanup(task_name)
-       
+
     if not is_geospatial_task(user_task):
         return {
             "status": "completed",
             "message": "I haven't been programmed to do that"
         }
-    # Generate a unique job ID
-    # job_id = str(uuid.uuid4())
-    # job_status[job_id] = {"status": "queued", "message": "Task is queued for processing"}
+
     try:
-        tree_crowns_url, chat_output_url = get_project_urls(task_name)
-        if task_name in ["TT_GCW1_Summer", "TT_GCW1_Winter"]:
-            tree_crown_summer, _ = get_project_urls("TT_GCW1_Summer")
-            tree_crown_winter, _ = get_project_urls("TT_GCW1_Winter")
-            data_locations = [
-                 f"Tree crown geoJSON shape file: {tree_crowns_url}/0/query?where=1%3D1&outFields=*&f=geojson.",
-                 f"Before storm tree crown geoJSON: {tree_crown_summer}/0/query?where=1%3D1&outFields=*&f=geojson.",
-                 f"After storm tree crown geoJSON: {tree_crown_winter}/0/query?where=1%3D1&outFields=*&f=geojson."]
-        else: 
-            data_locations = [f"Tree crown geoJSON shape file: {tree_crowns_url}/0/query?where=1%3D1&outFields=*&f=geojson."]
-        # background_tasks.add_task(long_running_task, job_id, user_task, task_name, data_locations)
-        result = long_running_task(user_task, task_name, data_locations)
+        # Determine if it's a comparison task
+        if is_comparison_task(user_task):
+            # Fetch all related projects for comparison
+            related_projects = get_all_related_projects(task_name)
+
+            # Sort by survey date
+            related_projects_sorted = sorted(
+                related_projects,
+                key=lambda x: x["SURVEY_DATE"] if x["SURVEY_DATE"] else "",
+            )
+
+            data_locations = []
+            for idx, proj in enumerate(related_projects_sorted, start=1):
+                project_name = proj["PROJECT_NAME"]
+                tree_crowns_url = proj["TREE_CROWNS"]
+                survey_date = proj["SURVEY_DATE"]
+
+                data_locations.append(
+                    f"Survey {idx}:\n"
+                    f"- Project Name: {project_name}\n"
+                    f"- Survey Date: {survey_date}\n"
+                    f"- Tree Crown GeoJSON URL: {tree_crowns_url}/0/query?where=1%3D1&outFields=*&f=geojson."
+                )
+
+            data_locations_str = "\n\n".join(data_locations)
+
+        else:
+            # Normal task: focus only on entered location
+            project_info = get_project_urls(task_name)
+
+            data_locations_str = (
+                f"Survey 1:\n"
+                f"- Project Name: {project_info['PROJECT_NAME']}\n"
+                f"- Survey Date: {project_info['SURVEY_DATE']}\n"
+                f"- Tree Crown GeoJSON URL: {project_info['TREE_CROWNS']}/0/query?where=1%3D1&outFields=*&f=geojson."
+            )
+
+        # Call the long_running_task with appropriate data_locations
+        result = long_running_task(user_task, task_name, data_locations_str)
         message = result.get("message") if isinstance(result, dict) else str(result)
+
         return {
             "status": "completed",
             "message": message,
@@ -504,9 +589,10 @@ async def process_request(request_data: RequestData):
                 "content": result.get("tree_ids") if isinstance(result, dict) and "tree_ids" in result else message
             }
         }
-    # return {"status": "success", "job_id": job_id, "message": "Processing started..."}
+
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
 
 @app.get("/status/{job_id}")
 async def get_status(job_id: str):
