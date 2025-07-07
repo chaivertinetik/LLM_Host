@@ -13,7 +13,7 @@ import configparser
 graph_role = r'''A professional Geo-information scientist and programmer good at Python. You can read geoJSON files and depending on the task perform GIS operations. You have worked on Geographic information science more than 20 years, and know every detail and pitfall when processing spatial data and coding. You know well how to set up workflows for spatial analysis tasks. You have significant experence on graph theory, application, and implementation. You are also experienced on generating map using Matplotlib and GeoPandas.
 '''
 
-graph_task_prefix = r'The geoJSON file has the following properties like: "Health" (either "Healthy" or "Unhealthy"), "Tree_ID", "Species" (either "Ash" or "Non-Ash"), "SURVEY_DATE" (format: Wed, 11 Sep 2024 00:00:00 GMT), "Shape__Area", "Shape__Length" and the final goal is to return the "Tree_ID" or text summary based on what the user wants. Generate a graph (data structure) only, whose nodes are (1) a series of consecutive steps and (2) data to solve this question: '
+graph_task_prefix = r'The geoJSON file has the following properties like: "Health" (either "Healthy" or "Unhealthy"), "Tree_ID", "Species" (either "Ash" or "Non-Ash"), "SURVEY_DATE" (format: Wed, 11 Sep 2024 00:00:00 GMT), "Height", "Shape__Area", "Shape__Length" and the final goal is to return the "Tree_ID" or text summary based on what the user wants. Generate a graph (data structure) only, whose nodes are (1) a series of consecutive steps and (2) data to solve this question: '
 #update the task prefix to include the potential for text or show_tree_id based prompts and the tree height, area and find a way to give meta data to the prompt. 
 #For the demo case
 # graph_reply_exmaple = r"""
@@ -59,7 +59,7 @@ graph_requirement = [
                         'Operation nodes need to connect via output data nodes, DO NOT connect the operation node directly.',
                         'The node attributes include: 1) node_type (data or operation), 2) data_path (data node only, set to "" if not given ), and description. E.g., {‘name’: “County boundary”, “data_type”: “data”, “data_path”: “D:\Test\county.shp”,  “description”: “County boundary for the study area”}.',
                         'If the user asks about the trees lost in a storm you need to compare the tree ids that survived before and after the storm from the two respective data sources',
-                        'To calculate volume of wood use "Shape__Length" * "Shape__Area"',
+                        'To calculate volume of wood use "Height" * "Shape__Area"',
                         'The connection between a node and an operation node is an edge.', 
                         'Add all nodes and edges, including node attributes to a NetworkX instance, DO NOT change the attribute names.',
                         'DO NOT generate code to implement the steps.',
@@ -89,7 +89,7 @@ graph_requirement = [
 operation_role = r'''A professional Geo-information scientist and programmer good at Python. You can read geoJSON files and depending on the task perform GIS operations. You have worked on Geographic information science more than 20 years, and know every detail and pitfall when processing spatial data and coding. You know well how to design and implement a function that meet the interface between other functions. Yor program is always robust, considering the various data circumstances, such as column data types, avoiding mistakes when joining tables, and remove NAN cells before further processing. You have an good feeling of overview, meaning the functions in your program is coherent, and they connect to each other well, such as function names, parameters types, and the calling orders. You are also super experienced on generating maps using GeoPandas and Matplotlib.
 '''
 
-operation_task_prefix = r'The geoJSON file has the following properties like: "Health" (either "Healthy" or "Unhealthy"), "Tree_ID", "Species" (either "Ash" or "Non-Ash"), "SURVEY_DATE" (format: Wed, 11 Sep 2024 00:00:00 GMT), "Shape__Area", "Shape__Length"  and the final goal is to return the "Tree_ID" or text summary based on what the user wants. You need to generate a Python function to do: '
+operation_task_prefix = r'The geoJSON file has the following properties like: "Health" (either "Healthy" or "Unhealthy"), "Tree_ID", "Species" (either "Ash" or "Non-Ash"), "SURVEY_DATE" (format: Wed, 11 Sep 2024 00:00:00 GMT), "Height", "Shape__Area", "Shape__Length"  and the final goal is to return the "Tree_ID" or text summary based on what the user wants. You need to generate a Python function to do: '
 
 #For the demo case
 # operation_reply_exmaple = """
