@@ -258,8 +258,8 @@ def post_features_to_layer(gdf, target_url):
 
     allowed_fields = {"Health", "Tree_ID", "Species"}
     # uncomment this for the batch implementation
-    # for start in range(0, len(gdf), batch_size):
-    #     batch_gdf=gdf.iloc[start:start+batch_size]
+    for start in range(0, len(gdf), batch_size):
+        batch_gdf=gdf.iloc[start:start+batch_size]
     #     features=[]
     features = []
     # for _, row in batch_gdf.iterrows():
@@ -281,10 +281,10 @@ def post_features_to_layer(gdf, target_url):
 
     response = requests.post(add_url, data=payload, headers=headers)
     if response.status_code == 200:
-        # print(f"Batch {start//batch_size +1}: Features added successfully:", response.json())
+        print(f"Batch {start//batch_size +1}: Features added successfully:", response.json())
         print("Features added successfully:", response.json())
     else:
-        # print(f"Batch  {start//batch_size + 1} : Failed to add features:", response.text) 
+        print(f"Batch  {start//batch_size + 1} : Failed to add features:", response.text) 
         print("Failed to add features:", response.text)
 
 def delete_all_features(target_url):
