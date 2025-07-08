@@ -189,7 +189,7 @@ def get_project_urls(project_name):
     query_url = "https://services-eu1.arcgis.com/8uHkpVrXUjYCyrO4/arcgis/rest/services/Project_index/FeatureServer/0/query"
     params = {
         "where": f"PROJECT_NAME = '{project_name}'",
-        "outFields": "TREE_CROWNS,CHAT_OUTPUT",
+        "outFields": "TREE_CROWNS,CHAT_OUTPUT,TREE_TOPS",
         "f": "json",
     }
 
@@ -200,7 +200,7 @@ def get_project_urls(project_name):
         raise ValueError(f"No project found with the name '{project_name}'.")
 
     attributes = data["features"][0]["attributes"]
-    return attributes.get("TREE_CROWNS"), attributes.get("CHAT_OUTPUT")
+    return attributes.get("TREE_CROWNS"), attributes.get("CHAT_OUTPUT"), attributes.get("TREE_TOPS")
 
 #CRS data is aligned and the same 
 # def extract_geojson(service_url):
@@ -486,7 +486,7 @@ async def process_request(request_data: RequestData):
     # job_id = str(uuid.uuid4())
     # job_status[job_id] = {"status": "queued", "message": "Task is queued for processing"}
     try:
-        tree_crowns_url, chat_output_url = get_project_urls(task_name)
+        tree_crowns_url, chat_output_url, tree_tops_url = get_project_urls(task_name)
         if task_name in ["TT_GCW1_Summer", "TT_GCW1_Winter"]:
             tree_crown_summer, _ = get_project_urls("TT_GCW1_Summer")
             tree_crown_winter, _ = get_project_urls("TT_GCW1_Winter")
@@ -496,6 +496,8 @@ async def process_request(request_data: RequestData):
                  f"After storm tree crown geoJSON: {tree_crown_winter}/0/query?where=1%3D1&outFields=*&f=geojson."]
         else: 
             data_locations = [f"Tree crown geoJSON shape file: {tree_crowns_url}/0/query?where=1%3D1&outFields=*&f=geojson."]
+        if tree_tops_url not in [None, ""]:
+            data_locations.append(f"Tree tops with height geoJSON shape file: {tree_tops_url}/0/query?where=1%3D1&outFields=*&f=geojson.")
         # background_tasks.add_task(long_running_task, job_id, user_task, task_name, data_locations)
         result = long_running_task(user_task, task_name, data_locations)
         message = result.get("message") if isinstance(result, dict) else str(result)
