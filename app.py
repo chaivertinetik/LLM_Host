@@ -254,18 +254,19 @@ def post_features_to_layer(gdf, target_url, batch_size=800):
     #     features=[]
     # features = []
     # for _, row in gdf.iterrows():
-    for _, row in batch_gdf.iterrows():
+    for start in range(0, len(gdf), batch_size):
         batch_gdf=gdf.iloc[start:start+batch_size]
         features=[]
-        try:
-            arcgis_geom = shapely_to_arcgis_geometry(row.geometry)
-            attributes = {k: v for k, v in row.items() if k in allowed_fields}
-            features.append({
-                "geometry": arcgis_geom,
-                "attributes": attributes
-            })
-        except Exception as e:
-            print(f"Skipping row due to geometry error: {e}")
+        for _, row in batch_gdf.iterrows():
+            try:
+                arcgis_geom = shapely_to_arcgis_geometry(row.geometry)
+                attributes = {k: v for k, v in row.items() if k in allowed_fields}
+                features.append({
+                    "geometry": arcgis_geom,
+                    "attributes": attributes
+                })
+            except Exception as e:
+                print(f"Skipping row due to geometry error: {e}")
 
         payload = {
             "features": json.dumps(features),
