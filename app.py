@@ -242,8 +242,8 @@ def extract_geojson(url):
         return None
         
 #change the batch_size based on the upper cap for Foxholes 
-#def post_features_to_layer(gdf, target_url, batch_size=800):
-def post_features_to_layer(gdf, target_url):
+#def post_features_to_layer(gdf, target_url):
+def post_features_to_layer(gdf, target_url, batch_size=800):
     add_url = f"{target_url}/0/addFeatures"
     headers = {"Content-Type": "application/x-www-form-urlencoded"}
 
@@ -252,9 +252,11 @@ def post_features_to_layer(gdf, target_url):
     # for start in range(0, len(gdf), batch_size):
     #     batch_gdf=gdf.iloc[start:start+batch_size]
     #     features=[]
-    features = []
-    # for _, row in batch_gdf.iterrows():
-    for _, row in gdf.iterrows():
+    # features = []
+    # for _, row in gdf.iterrows():
+    for _, row in batch_gdf.iterrows():
+        batch_gdf=gdf.iloc[start:start+batch_size]
+        features=[]
         try:
             arcgis_geom = shapely_to_arcgis_geometry(row.geometry)
             attributes = {k: v for k, v in row.items() if k in allowed_fields}
@@ -265,18 +267,18 @@ def post_features_to_layer(gdf, target_url):
         except Exception as e:
             print(f"Skipping row due to geometry error: {e}")
 
-    payload = {
-        "features": json.dumps(features),
-        "f": "json"
-    }
+        payload = {
+            "features": json.dumps(features),
+            "f": "json"
+        }
 
-    response = requests.post(add_url, data=payload, headers=headers)
-    if response.status_code == 200:
-        # print(f"Batch {start//batch_size +1}: Features added successfully:", response.json())
-        print("Features added successfully:", response.json())
-    else:
-        # print(f"Batch  {start//batch_size + 1} : Failed to add features:", response.text) 
-        print("Failed to add features:", response.text)
+        response = requests.post(add_url, data=payload, headers=headers)
+        if response.status_code == 200:
+            # print(f"Batch {start//batch_size +1}: Features added successfully:", response.json())
+            print("Features added successfully:", response.json())
+        else:
+            # print(f"Batch  {start//batch_size + 1} : Failed to add features:", response.text) 
+            print("Failed to add features:", response.text)
 
 def delete_all_features(target_url):
     query_url = f"{target_url}/0/query"
