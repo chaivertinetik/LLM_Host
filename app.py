@@ -448,6 +448,7 @@ def long_running_task(user_task: str, task_name: str, data_locations: list):
                 "message": "The server seems to be down or what you're asking for isn't in the database."
             }
         result = globals().get('result', None)
+        print("result type:", type(result))
         print("Final result:", result)
        
         if wants_map_output(user_task):
