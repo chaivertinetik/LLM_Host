@@ -310,7 +310,7 @@ def delete_all_features(target_url):
     print("Delete response:", delete_response.json())
 
 def filter(FIDS,project_name):
-    if isinstance(FIDS, int):
+    if isinstance(FIDS, (int, np.integer)):
         FIDS = [FIDS]
     tree_crowns_url, chat_output_url = get_project_urls(project_name)
 
