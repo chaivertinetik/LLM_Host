@@ -28,6 +28,10 @@ import re
 import textwrap
 import black  
 import autopep8
+import numpy as np
+import collections.abc
+
+
 # Initialize FastAPI app
 app = FastAPI()
 
@@ -309,9 +313,21 @@ def delete_all_features(target_url):
     delete_response = requests.post(delete_url, data=delete_params)
     print("Delete response:", delete_response.json())
 
-def filter(FIDS,project_name):
-    if isinstance(FIDS, (int, np.integer)):
-        FIDS = [FIDS]
+def ensure_list(obj):
+    # Handle numpy scalars and standard scalars
+    if isinstance(obj, (int, float, np.integer, np.floating)):
+        return [obj]
+    # Handle numpy arrays and pandas Series
+    elif isinstance(obj, (np.ndarray, pd.Series)):
+        return obj.tolist()
+    # Handle other iterable types (list, tuple, set)
+    elif isinstance(obj, collections.abc.Iterable) and not isinstance(obj, (str, bytes)):
+        return list(obj)
+    else:
+        raise TypeError(f"Unsupported type for FIDS: {type(obj)}")
+
+def filter(FIDS, project_name):
+    FIDS = ensure_list(FIDS)
     tree_crowns_url, chat_output_url = get_project_urls(project_name)
 
     if not tree_crowns_url or not chat_output_url:
@@ -326,10 +342,10 @@ def filter(FIDS,project_name):
         gdf["Tree_ID"] = gdf["Tree_ID"].astype(int)
         ash_gdf = gdf[gdf["Tree_ID"].isin(FIDS)]
 
-        # ❌ Delete all features before posting new ones
+        # Delete all features before posting new ones
         delete_all_features(chat_output_url)
 
-        # ✅ Then post
+        # Then post
         post_features_to_layer(ash_gdf, chat_output_url)
     else:
         print("Column 'Species' not found in GeoDataFrame.")   
