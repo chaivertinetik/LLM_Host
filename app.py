@@ -150,6 +150,7 @@ def wants_map_output_genai(prompt: str) -> bool:
         "- 'Show all healthy trees' -> yes\n"
         "- 'Map the lost trees' -> yes\n"
         "- 'List trees with crown size over 5m' -> yes\n"
+        "- 'What is the distance between trees' -> no\n"
         "- 'Visualize all ash trees' -> yes\n"
         "- 'Which trees are missing?' -> yes\n"
         "- 'How much volume was lost?' -> no\n"
