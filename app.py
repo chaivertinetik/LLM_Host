@@ -131,7 +131,7 @@ def is_geospatial_task(prompt: str) -> bool:
     return answer.startswith("yes")
     
 def wants_map_output_keyword(prompt: str) -> bool:
-    keywords = ["show", "display", "map", "list", "highlight", "visualize", "which trees", "what trees"]
+    keywords = ["show", "display", "highlight", "visualize", "which trees", "what trees"]
     prompt_lower = prompt.lower()
     return any(kw in prompt_lower for kw in keywords)
 
