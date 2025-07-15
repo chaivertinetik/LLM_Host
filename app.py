@@ -325,7 +325,7 @@ def ensure_list(obj):
     elif isinstance(obj, collections.abc.Iterable) and not isinstance(obj, (str, bytes)):
         return list(obj)
     else:
-        raise TypeError(f"Unsupported type for FIDS: {type(obj)}")
+        pass
 
 def filter(FIDS, project_name):
     FIDS = ensure_list(FIDS)
