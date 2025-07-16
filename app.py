@@ -232,6 +232,58 @@ def get_project_urls(project_name):
 #         print(f"Error extracting GeoJSON: {e}")
 #         return None
 
+def fetch_crs(base_url, timeout=10, default_wkid=4326):
+    """
+    Fetches the Coordinate Reference System (CRS) WKID from an ArcGIS REST service endpoint.
+    Works for MapServer, ImageServer, and FeatureServer.
+
+    Args:
+        base_url (str): The base URL of the ArcGIS service (e.g., ".../MapServer", ".../ImageServer", ".../FeatureServer").
+        timeout (int): The maximum number of seconds to wait for a response.
+        default_wkid (int): The default WKID to use if 'wkid' is missing from the spatialReference.
+
+    Returns:
+        int: The WKID of the spatial reference if found, or default_wkid if not found/error.
+    """
+    try:
+        response = requests.get(f"{base_url}?f=json", timeout=timeout)
+        response.raise_for_status()  # Raise HTTPError for bad responses (4xx or 5xx)
+        metadata = response.json()
+
+        # Check for spatialReference at the top level (common for FeatureServer and ImageServer)
+        spatial_ref = metadata.get("spatialReference")
+        if spatial_ref and "wkid" in spatial_ref:
+            return spatial_ref["wkid"]
+
+        # If not found at the top level, check for tileInfo (common for MapServer)
+        tile_info = metadata.get("tileInfo")
+        if tile_info:
+            tile_spatial_ref = tile_info.get("spatialReference")
+            if tile_spatial_ref and "wkid" in tile_spatial_ref:
+                return tile_spatial_ref["wkid"]
+            # Sometimes, the spatialReference for MapServer is at the root, or within tileInfo.
+            # If not in tileInfo directly, check root again (redundant with initial check, but safer for edge cases)
+            elif spatial_ref and "wkid" in spatial_ref:
+                 return spatial_ref["wkid"]
+
+        # For feature services with layers, the spatialReference might be within a layer object
+        # This assumes you're hitting the base FeatureServer URL, and want the first layer's CRS.
+        # If you need a specific layer's CRS, you'd need to append /<layerId> to the base_url
+        layers = metadata.get("layers")
+        if layers and len(layers) > 0:
+            for layer in layers:
+                layer_spatial_ref = layer.get("extent", {}).get("spatialReference") # Common for layers
+                if layer_spatial_ref and "wkid" in layer_spatial_ref:
+                    return layer_spatial_ref["wkid"]
+                # Sometimes the spatialReference is directly on the layer object
+                layer_spatial_ref_direct = layer.get("spatialReference")
+                if layer_spatial_ref_direct and "wkid" in layer_spatial_ref_direct:
+                    return layer_spatial_ref_direct["wkid"]
+
+
+        print(f"WKID not found in metadata for {base_url}. Returning default WKID: {default_wkid}")
+        return default_wkid
+
 def extract_geojson(url):
     try:
         response = requests.get(f"{url}/0/query?where=1%3D1&outFields=*&f=geojson", timeout=10)
@@ -510,13 +562,23 @@ async def process_request(request_data: RequestData):
         if task_name in ["TT_GCW1_Summer", "TT_GCW1_Winter"]:
             tree_crown_summer, _ = get_project_urls("TT_GCW1_Summer")
             tree_crown_winter, _ = get_project_urls("TT_GCW1_Winter")
+        
+            # Fetch CRS for each relevant URL
+            crs_current = fetch_crs(tree_crowns_url)
+            crs_summer = fetch_crs(tree_crown_summer)
+            crs_winter = fetch_crs(tree_crown_winter)
+        
             data_locations = [
-                 f"Tree crown geoJSON shape file: {tree_crowns_url}/0/query?where=1%3D1&outFields=*&f=geojson.",
-                 f"Before storm tree crown geoJSON: {tree_crown_summer}/0/query?where=1%3D1&outFields=*&f=geojson.",
-                 f"After storm tree crown geoJSON: {tree_crown_winter}/0/query?where=1%3D1&outFields=*&f=geojson."]
-        else: 
-            data_locations = [f"Tree crown geoJSON shape file: {tree_crowns_url}/0/query?where=1%3D1&outFields=*&f=geojson."]
-            
+                f"Tree crown geoJSON shape file: {tree_crowns_url}/0/query?where=1%3D1&outFields=*&f=geojson. (CRS: EPSG:{crs_current})",
+                f"Before storm tree crown geoJSON: {tree_crown_summer}/0/query?where=1%3D1&outFields=*&f=geojson. (CRS: EPSG:{crs_summer})",
+                f"After storm tree crown geoJSON: {tree_crown_winter}/0/query?where=1%3D1&outFields=*&f=geojson. (CRS: EPSG:{crs_winter})"
+            ]
+        else:
+            # Fetch CRS for the single URL
+            crs_current = fetch_crs(tree_crowns_url)
+            data_locations = [
+                f"Tree crown geoJSON shape file: {tree_crowns_url}/0/query?where=1%3D1&outFields=*&f=geojson. (CRS: EPSG:{crs_current})"
+            ]
         # background_tasks.add_task(long_running_task, job_id, user_task, task_name, data_locations)
         result = long_running_task(user_task, task_name, data_locations)
         message = result.get("message") if isinstance(result, dict) else str(result)
