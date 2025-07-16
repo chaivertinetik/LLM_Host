@@ -126,7 +126,7 @@ operation_requirement = [
                         "If join DataFrame and GeoDataFrame, using common columns, DO NOT convert DataFrame to GeoDataFrame.",
                         "If the user asks about the trees lost in a storm you need to compare the tree ids that survived before and after the storm from the two respective data sources",
                         "When working with GeoPandas, never assume a row (Series) has a .crs attribute. Always get the CRS from the parent GeoDataFrame (gdf.crs).",
-                        "When reprojecting geometries in GeoPandas, only use .to_crs() on a GeoSeries or GeoDataFrame object, never on a single geometry (like a Polygon or Point). If you have a single geometry, first wrap it in a GeoSeries.", 
+                        "When reprojecting geometries in GeoPandas, only use .to_crs() on a GeoSeries or GeoDataFrame object, never on a single geometry (like a Polygon or Point). If you have a single geometry, first wrap it in a GeoSeries.",
                         "Always calculate distances between geometries in GeoPandas using .distance() after projecting the geometries to a suitable metric CRS (e.g., UTM). Do not use latitude/longitude or geodesic formulas unless specifically requested.",
                         # "When joining tables, convert the involved columns to string type without leading zeros. ",
                         # "When doing spatial joins, remove the duplicates in the results. Or please think about whether it needs to be removed.",
