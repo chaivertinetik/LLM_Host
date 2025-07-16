@@ -283,6 +283,8 @@ def fetch_crs(base_url, timeout=10, default_wkid=4326):
 
         print(f"WKID not found in metadata for {base_url}. Returning default WKID: {default_wkid}")
         return default_wkid
+    except:
+        pass
 
 def extract_geojson(url):
     try:
