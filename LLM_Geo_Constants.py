@@ -130,7 +130,7 @@ operation_requirement = [
                         "Perform buffer, distance, and area operations in a suitable projected CRS where units are meters, if source data isnt in the right CRS reproject relevant geometries to the right CRS, like UTM and ESPG:27700.",
                         "Always calculate distances between geometries in GeoPandas using .distance() after projecting the geometries to a suitable metric CRS (e.g., UTM). Do not use latitude/longitude or geodesic formulas unless specifically requested.",
                         "Align the CRS of all layers before performing spatial joins, overlays, intersects or cross-layer operations. If CRSs differ, reproject one to match the other.",
-                        "When constructing a GeoSeries or GeoDataFrame from existing geometries, always set the CRS from source/parent data to avoid "naive geometry" errors.",
+                        "When constructing a GeoSeries or GeoDataFrame from existing geometries, always set the CRS from source/parent data to avoid 'naive geometry' errors.",
                         # "When joining tables, convert the involved columns to string type without leading zeros. ",
                         # "When doing spatial joins, remove the duplicates in the results. Or please think about whether it needs to be removed.",
                         # "If using colorbar for GeoPandas or Matplotlib visulization, set the colorbar's height or length as the same as the plot for better layout.",
