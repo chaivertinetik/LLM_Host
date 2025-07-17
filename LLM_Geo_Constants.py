@@ -127,12 +127,12 @@ operation_requirement = [
                         "If the user asks about the trees lost in a storm you need to compare the tree ids that survived before and after the storm from the two respective data sources",
                         "When working with GeoPandas, never assume a row (Series) has a .crs attribute. Always get the CRS from the parent GeoDataFrame (gdf.crs).",
                         "When reprojecting geometries in GeoPandas, only use .to_crs() on a GeoSeries or GeoDataFrame object, never on a single geometry (like a Polygon or Point). If you have a single geometry, first wrap it in a GeoSeries.",
-                        "Before performing any distance-based spatial operations, reproject all geometries to a projected CRS with metric units (e.g., EPSG:27700 or the appropriate UTM zone), if they are not already. To find features within a specified distance from a target feature, compute pairwise distances using: gdf['distance_to_target'] = gdf.geometry.distance(target_geom) Then filter using: within_range = gdf[(gdf['distance_to_target'] <= max_distance) & (gdf.index != target_idx)]Replace max_distance with the desired threshold (e.g., 30). Avoid using geographic (lat/lon) coordinates or geodesic methods unless specifically required.",
-                        "Always calculate distances between geometries in GeoPandas using .distance() after projecting the geometries to a projected CRS with metric units (e.g., EPSG:27700 or UTM).",
-                        "All spatial joins, overlays, and cross-layer operations must use layers that share the exact same CRS. Reproject one or both layers using .to_crs() as needed before performing the operation.",
-                        "Check the CRS of every GeoDataFrame before performing any spatial operation. If the CRS is geographic (e.g., EPSG:4326), reproject it to a metric-based CRS (e.g., EPSG:27700 or UTM). Never perform buffer, distance, or area calculations in a geographic CRS, as this will produce incorrect or empty results.",
-                        "If a GeoDataFrame or GeoSeries is missing CRS information, set it only if you know the true CRS from data context using .set_crs(). Never use .to_crs() on data with undefined CRS. Use .to_crs() only to convert between known coordinate systems.",
-                        "When constructing a GeoSeries or GeoDataFrame from individual or raw geometries, always assign the CRS from the source or parent GeoDataFrame to avoid errors from undefined or inconsistent spatial references.",
+                        "Perform buffer, distance, and area operations in a suitable projected CRS where units are meters, if source data isnt in the right CRS reproject relevant geometries to the right CRS, like UTM and ESPG:27700, as specified by the data source.",
+                        "Always calculate distances between geometries in GeoPandas using .distance() after projecting the geometries to a suitable metric CRS (e.g., UTM). Do not use latitude/longitude or geodesic formulas unless specifically requested.",
+                        "All spatial joins, overlays, and cross-layer operations must use layers with exactly the same CRS-reproject as needed.",
+                        "Check CRS of every GeoDataFrame and perform geometry operations after projecting to a meter based CRS, never perform buffer, distance or area operations in a geographic CRS (e.g EPSG:4326; coordinates in degrees) as it will give empty results.",
+                        "If a GeoDataFrame or GeoSeries is missing CRS information, set it only if you know the true CRS from data context (using .set_crs()), not to forcibly reproject. For coordinate transforms between reference systems, always use .to_crs().",
+                        "When constructing a GeoSeries or GeoDataFrame from existing geometries, always set the CRS from source/parent data to avoid 'naive geometry' errors.",
                         # "When joining tables, convert the involved columns to string type without leading zeros. ",
                         # "When doing spatial joins, remove the duplicates in the results. Or please think about whether it needs to be removed.",
                         # "If using colorbar for GeoPandas or Matplotlib visulization, set the colorbar's height or length as the same as the plot for better layout.",
@@ -361,4 +361,3 @@ sampling_data_requirement = [
  
                         #
                         ]
-
