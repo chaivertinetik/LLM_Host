@@ -566,20 +566,23 @@ async def process_request(request_data: RequestData):
             tree_crown_winter, _ = get_project_urls("TT_GCW1_Winter")
         
             # Fetch CRS for each relevant URL
-            crs_current = fetch_crs(tree_crowns_url)
-            crs_summer = fetch_crs(tree_crown_summer)
-            crs_winter = fetch_crs(tree_crown_winter)
-        
+            # crs_current = fetch_crs(tree_crowns_url)
+            # crs_summer = fetch_crs(tree_crown_summer)
+            # crs_winter = fetch_crs(tree_crown_winter)
+            # (CRS: EPSG:{crs_current})
+            # (CRS: EPSG:{crs_summer})
+            #( CRS: EPSG:{crs_winter})
             data_locations = [
-                f"Tree crown geoJSON shape file: {tree_crowns_url}/0/query?where=1%3D1&outFields=*&f=geojson. (CRS: EPSG:{crs_current})",
-                f"Before storm tree crown geoJSON: {tree_crown_summer}/0/query?where=1%3D1&outFields=*&f=geojson. (CRS: EPSG:{crs_summer})",
-                f"After storm tree crown geoJSON: {tree_crown_winter}/0/query?where=1%3D1&outFields=*&f=geojson. (CRS: EPSG:{crs_winter})"
+                f"Tree crown geoJSON shape file: {tree_crowns_url}/0/query?where=1%3D1&outFields=*&f=geojson.",
+                f"Before storm tree crown geoJSON: {tree_crown_summer}/0/query?where=1%3D1&outFields=*&f=geojson.",
+                f"After storm tree crown geoJSON: {tree_crown_winter}/0/query?where=1%3D1&outFields=*&f=geojson."
             ]
         else:
             # Fetch CRS for the single URL
-            crs_current = fetch_crs(tree_crowns_url)
+            # crs_current = fetch_crs(tree_crowns_url)
+            # (CRS: EPSG:{crs_current})
             data_locations = [
-                f"Tree crown geoJSON shape file: {tree_crowns_url}/0/query?where=1%3D1&outFields=*&f=geojson. (CRS: EPSG:{crs_current})"
+                f"Tree crown geoJSON shape file: {tree_crowns_url}/0/query?where=1%3D1&outFields=*&f=geojson."
             ]
         # background_tasks.add_task(long_running_task, job_id, user_task, task_name, data_locations)
         result = long_running_task(user_task, task_name, data_locations)
