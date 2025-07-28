@@ -538,7 +538,8 @@ def long_running_task(user_task: str, task_name: str, data_locations: list):
                 }
         
 
-    except Exception as e: 
+    except Exception as e:
+        print(f"Error during execution: {e}")
         #job_status[job_id] = {"status": "failed", "message": str(e)}
         # return f"Error during execution: {str(e)}"
         return f"Error during execution: The server seems to be down."
