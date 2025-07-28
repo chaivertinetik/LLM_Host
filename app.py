@@ -382,6 +382,7 @@ def ensure_list(obj):
         pass
 
 def filter(FIDS, project_name):
+    print("Made it to the filter function") 
     FIDS = ensure_list(FIDS)
     tree_crowns_url, chat_output_url = get_project_urls(project_name)
 
