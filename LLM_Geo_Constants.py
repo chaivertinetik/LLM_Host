@@ -13,8 +13,8 @@ import configparser
 graph_role = r'''A professional Geo-information scientist and programmer good at Python. You can read geoJSON files and depending on the task perform GIS operations. You have worked on Geographic information science more than 20 years, and know every detail and pitfall when processing spatial data and coding. You know well how to set up workflows for spatial analysis tasks. You have significant experence on graph theory, application, and implementation. You are also experienced on generating map using Matplotlib and GeoPandas.
 '''
 
-graph_task_prefix = r'The geoJSON file has the following properties: "Health" (either "Healthy" or "Unhealthy"), "Tree_ID", "Species" (either "Ash" or "Non-Ash"), "SURVEY_DATE" (format: Wed, 11 Sep 2024 00:00:00 GMT) and the final goal is to return the "Tree_ID" based on what the user wants. Generate a graph (data structure) only, whose nodes are (1) a series of consecutive steps and (2) data to solve this question: '
-
+graph_task_prefix = r'The geoJSON file has the following properties like: "Health" (either "Healthy" or "Unhealthy"), "Tree_ID", "Species" ("Ash", "Field Maple", "Oak"), "SURVEY_DATE" (format: Wed, 11 Sep 2024 00:00:00 GMT), "Height", "Shape__Area", "Shape__Length" and the final goal is to return the "Tree_ID" or text summary based on what the user wants. Generate a graph (data structure) only, whose nodes are (1) a series of consecutive steps and (2) data to solve this question: '
+#update the task prefix to include the potential for text or show_tree_id based prompts and the tree height, area and find a way to give meta data to the prompt. 
 #For the demo case
 # graph_reply_exmaple = r"""
 # ```python
@@ -58,6 +58,8 @@ graph_requirement = [
                         'The first operations are data loading or collection, and the output of the last operation is the final answer to the task.'
                         'Operation nodes need to connect via output data nodes, DO NOT connect the operation node directly.',
                         'The node attributes include: 1) node_type (data or operation), 2) data_path (data node only, set to "" if not given ), and description. E.g., {‘name’: “County boundary”, “data_type”: “data”, “data_path”: “D:\Test\county.shp”,  “description”: “County boundary for the study area”}.',
+                        'If the user asks about the trees lost in a storm you need to compare the tree ids that survived before and after the storm from the two respective data sources',
+                        'To calculate volume of wood use "Height" * "Shape__Area"',
                         'The connection between a node and an operation node is an edge.', 
                         'Add all nodes and edges, including node attributes to a NetworkX instance, DO NOT change the attribute names.',
                         'DO NOT generate code to implement the steps.',
@@ -87,7 +89,7 @@ graph_requirement = [
 operation_role = r'''A professional Geo-information scientist and programmer good at Python. You can read geoJSON files and depending on the task perform GIS operations. You have worked on Geographic information science more than 20 years, and know every detail and pitfall when processing spatial data and coding. You know well how to design and implement a function that meet the interface between other functions. Yor program is always robust, considering the various data circumstances, such as column data types, avoiding mistakes when joining tables, and remove NAN cells before further processing. You have an good feeling of overview, meaning the functions in your program is coherent, and they connect to each other well, such as function names, parameters types, and the calling orders. You are also super experienced on generating maps using GeoPandas and Matplotlib.
 '''
 
-operation_task_prefix = r'The geoJSON file has the following properties: "Health" (either "Healthy" or "Unhealthy"), "Tree_ID", "Species" (either "Ash" or "Non-Ash"), "SURVEY_DATE" (format: Wed, 11 Sep 2024 00:00:00 GMT) and the final goal is to return the "Tree_ID" based on what the user wants. You need to generate a Python function to do: '
+operation_task_prefix = r'The geoJSON file has the following properties like: "Health" (either "Healthy" or "Unhealthy"), "Tree_ID", "Species" ("Ash", "Field Maple", "Oak"), "SURVEY_DATE" (format: Wed, 11 Sep 2024 00:00:00 GMT), "Height", "Shape__Area", "Shape__Length"  and the final goal is to return the "Tree_ID" or text summary based on what the user wants. You need to generate a Python function to do: '
 
 #For the demo case
 # operation_reply_exmaple = """
@@ -122,6 +124,15 @@ operation_requirement = [
                         # "DO NOT reproject or set spatial data(e.g., GeoPandas Dataframe) if only one layer involved.",
                         "Map projection conversion is only conducted for spatial data layers such as GeoDataFrame. DataFrame loaded from a CSV file does not have map projection information.",
                         "If join DataFrame and GeoDataFrame, using common columns, DO NOT convert DataFrame to GeoDataFrame.",
+                        "If the user asks about the trees lost in a storm you need to compare the tree ids that survived before and after the storm from the two respective data sources",
+                        "When working with GeoPandas, never assume a row (Series) has a .crs attribute. Always get the CRS from the parent GeoDataFrame (gdf.crs).",
+                        "When reprojecting geometries in GeoPandas, only use .to_crs() on a GeoSeries or GeoDataFrame object, never on a single geometry (like a Polygon or Point). If you have a single geometry, first wrap it in a GeoSeries.",
+                        "Before performing any distance-based spatial operations, reproject all geometries to a projected CRS with metric units (e.g., EPSG:27700 or the appropriate UTM zone), if they are not already. To find features within a specified distance from a target feature, compute pairwise distances using: gdf['distance_to_target'] = gdf.geometry.distance(target_geom) Then filter using: within_range = gdf[(gdf['distance_to_target'] <= max_distance) & (gdf.index != target_idx)]Replace max_distance with the desired threshold (e.g., 30). Avoid using geographic (lat/lon) coordinates or geodesic methods unless specifically required.",
+                        "Always calculate distances between geometries in GeoPandas using .distance() after projecting the geometries to a projected CRS with metric units (e.g., EPSG:27700 or UTM).",
+                        "All spatial joins, overlays, and cross-layer operations must use layers that share the exact same CRS. Reproject one or both layers using .to_crs() as needed before performing the operation.",
+                        "Check the CRS of every GeoDataFrame before performing any spatial operation. If the CRS is geographic (e.g., EPSG:4326), reproject it to a metric-based CRS (e.g., EPSG:27700 or UTM). Never perform buffer, distance, or area calculations in a geographic CRS, as this will produce incorrect or empty results.",
+                        "If a GeoDataFrame or GeoSeries is missing CRS information, set it only if you know the true CRS from data context using .set_crs(). Never use .to_crs() on data with undefined CRS. Use .to_crs() only to convert between known coordinate systems.",
+                        "When constructing a GeoSeries or GeoDataFrame from individual or raw geometries, always assign the CRS from the source or parent GeoDataFrame to avoid errors from undefined or inconsistent spatial references.",
                         # "When joining tables, convert the involved columns to string type without leading zeros. ",
                         # "When doing spatial joins, remove the duplicates in the results. Or please think about whether it needs to be removed.",
                         # "If using colorbar for GeoPandas or Matplotlib visulization, set the colorbar's height or length as the same as the plot for better layout.",
@@ -163,11 +174,12 @@ assembly_requirement = ['You can think step by step. ',
                     f"Put your reply in a code block(enclosed by ```python and ```), NO explanation or conversation outside the code block.",  
                     f"Ensure all comments and descriptions use # and are single line.",
                     f"Please generate Python code with consistent indentation using 4 spaces per indentation level. Ensure that all code blocks, including functions, loops, and conditionals, are properly indented to reflect their logical structure. Avoid using tabs or inconsistent spacing.",
-                    f"The final result of the assembly program should return the 'Tree_ID' that match the criteria given by the user.",
-                    f"The geoJSON file has the following properties: 'Health' (either 'Healthy' or 'Unhealthy'), 'Tree_ID', 'Species' (either 'Ash' or 'Non-Ash'), 'SURVEY_DATE' (format: Wed, 11 Sep 2024 00:00:00 GMT).",
+                    f"The final result of the assembly program should return the 'Tree_ID' that match the criteria given by the user or the output summary if the user wants a text response and not a visual output.",
+                    f"The geoJSON file has the following properties: 'Health' (either 'Healthy' or 'Unhealthy'), 'Tree_ID', 'Species' ('Ash', 'Field Maple', 'Oak'), 'SURVEY_DATE' (format: Wed, 11 Sep 2024 00:00:00 GMT), 'Height', 'Shape__Area', 'Shape__Length'.",
                     f"Save final maps, if any. If use matplotlib, the function is: matplotlib.pyplot.savefig(*args, **kwargs).",
                     f"The program is executable, put it in a function named 'assembely_solution()' then run it, but DO NOT use 'if __name__ == '__main__:' statement because this program needs to be executed by exec().",
                     "The program should assign the final result by calling 'result = assembely_solution()' after defining the function, so the result is stored in a variable named 'result' in the global namespace.",
+                    "The result variable in most cases will store the tree ids if the user wants to see trees based on a condition or if the user asks a question like what volume of trees were lost, the result variable should include the text response of whatever output the code generates (volume of trees in this case).",
                     "When defining functions, do not set a default value for a parameter using a variable (like 'tree_gdf=tree_gdf') unless that variable is already defined at the time the function is defined. Instead, require the value to be passed when the function is called.",
                     "Use the built-in functions or attribute, if you do not remember, DO NOT make up fake ones, just use alternative methods.",
                     # "Drop rows with NaN cells, i.e., df.dropna(),  before using Pandas or GeoPandas columns for processing (e.g. join or calculation).",
@@ -349,4 +361,3 @@ sampling_data_requirement = [
  
                         #
                         ]
-
