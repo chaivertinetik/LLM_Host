@@ -198,21 +198,33 @@ class Solution():
         self.__dict__.update(state)
         # You can reinitialize the model here if needed, e.g.,
         # self.model = initialize_model()
-        
+
+    def build_conversation_prompt(self, new_user_prompt, max_turns=10):
+        history = self.chat_history[-2*max_turns:]  # Get last N user+assistant pairs (so 2N total entries)
+        prompt_text = ""
+        for entry in history:
+            prefix = "User: " if entry['role'] == 'user' else "Assistant: "
+            prompt_text += f"{prefix}{entry['content']}\n"
+        prompt_text += f"User: {new_user_prompt}\nAssistant:"
+        return prompt_text
+
     def get_LLM_reply(self,
                   prompt,
                   verbose=True,
                   temperature=1,
                   retry_cnt=10,
                   sleep_sec=20,
-                  system_role=None):
+                  system_role=None,
+                  history_turns=10):
         
         model = "gemini-2.0-flash-001"
         if system_role is None:
             system_role = self.role
         count = 0
         isSucceed = False
-        self.chat_history.append({'role': 'user', 'content': prompt})
+        full_prompt= self.build_conversation_prompt(prompt, max_turns=history_turns)
+                      
+        
         response_text = ""
         sleep_time = sleep_sec 
         while not isSucceed and count < retry_cnt:
@@ -237,7 +249,8 @@ class Solution():
 
         if not isSucceed:
             raise RuntimeError("Failed to get a response from the model after multiple retries.")
-
+        
+        self.chat_history.append({'role': 'user', 'content': prompt})
         # Save the generated response to chat history
         self.chat_history.append({'role': 'assistant', 'content': response_text})
 
