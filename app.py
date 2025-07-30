@@ -1,29 +1,19 @@
+# --------------------- IMPORTS and helper modules ---------------------
 import os
 import json
 import networkx as nx
 import vertexai
-from vertexai.generative_models import GenerativeModel
-from vertexai.language_models import TextGenerationModel
-from google.oauth2 import service_account
-from LLM_Heroku_Kernel import Solution
+import ee 
+import datetime
 import helper
-from flask_cors import CORS
 import time
-from google.api_core.exceptions import ResourceExhausted
 import LLM_Geo_Constants as constants
-from pyvis.network import Network
 import requests
-from google.oauth2.service_account import Credentials
 import uuid
 import threading
 import requests
 import geopandas as gpd
 import json
-from shapely.geometry import mapping
-from fastapi import FastAPI, BackgroundTasks, HTTPException
-from fastapi.middleware.cors import CORSMiddleware
-from typing import Dict
-from pydantic import BaseModel
 import re
 import textwrap
 import black  
@@ -31,11 +21,25 @@ import autopep8
 import numpy as np
 import collections.abc
 import pandas as pd
+from vertexai.generative_models import GenerativeModel
+from vertexai.language_models import TextGenerationModel
+from google.oauth2 import service_account
+from LLM_Heroku_Kernel import Solution
+from flask_cors import CORS
+from google.api_core.exceptions import ResourceExhausted
+from pyvis.network import Network
+from google.oauth2.service_account import Credentials
+from shapely.geometry import mapping
+from fastapi import FastAPI, BackgroundTasks, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+from typing import Dict
+from pydantic import BaseModel
 from langchain.agents import initialize_agent, Tool
 from langchain.agents.agent_types import AgentType
-import ee 
-import datetime
+from langchain_core.language_models import LLM
 
+
+# --------------------- Setup FASTAPI app ---------------------
 # Initialize FastAPI app
 app = FastAPI()
 
@@ -47,6 +51,52 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+class RequestData(BaseModel):
+    task: str = "No task provided."
+    task_name: str = "default_task"
+
+# --------------------- SETUP and INIT---------------------
+
+google_creds = os.environ.get("GOOGLE_CREDENTIALS")
+if not google_creds:
+    raise EnvironmentError("GOOGLE_CREDENTIALS env var is missing")
+
+credentials_data = json.loads(google_creds)
+credentials = service_account.Credentials.from_service_account_info(credentials_data)
+# service_account_email = credentials_data.get("client_email")
+# print(service_account_email)
+
+# === Init Vertex AI ===
+vertexai.init(
+    project="disco-parsec-444415-c4",
+    location="us-central1",
+    credentials=credentials
+)
+#testing earth engine service 
+SERVICE_ACCOUNT= 'earthengine@disco-parsec-444415-c4.iam.gserviceaccount.com'
+key_path = '/tmp/earthengine-key.json'
+with open(key_path, 'w') as f:
+    f.write(os.environ['EARTH_CREDENTIALS'])
+earth_credentials= ee.ServiceAccountCredentials(SERVICE_ACCOUNT, key_path)
+ee.Initialize(earth_credentials, project='disco-parsec-444415-c4')
+
+# --------------------- GIS CODE AGENT WRAPPER ---------------------
+
+class GeminiLLM(LLM):
+    model: GenerativeModel
+
+    def _call(self, prompt: str, stop=None, run_manager=None) -> str:
+        response = self.model.generate_content(prompt)
+        return response.text
+
+    @property
+    def _llm_type(self) -> str:
+        return "code-gemini"
+    
+# === Create Gemini model ===
+model = GenerativeModel("gemini-2.0-flash-001")
+llm = GeminiLLM(model=model)
+
 
 # Global dictionary to track job statuses
 # job_status: Dict[str, Dict[str, str]] = {}
@@ -56,10 +106,11 @@ app.add_middleware(
 #     credentials_info = json.loads(os.environ['GOOGLE_CREDENTIALS'])
 #     return service_account.Credentials.from_service_account_info(credentials_info)
 
-class RequestData(BaseModel):
-    task: str = "No task provided."
-    task_name: str = "default_task"
 
+
+
+
+# --------------------- ARC GIS UPDATE---------------------
 async def trigger_cleanup(task_name):
     project_name = task_name
     tree_crowns_url, delete_url = get_project_urls(project_name)
@@ -101,39 +152,7 @@ async def trigger_cleanup(task_name):
 @app.post("/clear")
 async def clear_state():
     return await trigger_cleanup()
-   
-def is_geospatial_task(prompt: str) -> bool:
-    """Vertex AI does intent classification to determine if the task is geo spatial related"""
-    from vertexai.language_models import TextGenerationModel
-
-    credentials_data = json.loads(os.getenv("GOOGLE_CREDENTIALS"))
-    credentials = service_account.Credentials.from_service_account_info(credentials_data)
-    vertexai.init(project="disco-parsec-444415-c4", location="us-central1", credentials=credentials)
-    # gemini-1.5-flash-002
-    model = GenerativeModel("gemini-2.0-flash-001")
-    system_prompt = (
-        "Decide if the user's input is related to geospatial analysis or geospatial data. "
-        "This includes queries about map features, tree health, species, spatial attributes, survey date, spatial selections, overlays, or analysis."
-        "Return only 'yes' or 'no'. Examples:\n"
-        "- 'Find all ash trees' -> yes\n"
-        "- 'What's my mother’s name?' -> no\n"
-        "- 'Show healthy trees' -> yes\n"
-        "- 'List all trees with a crown size over 5m' -> yes\n"
-        "- 'Show areas with high NDVI in a satellite image' -> yes\n"
-        "- 'What is the capital of France?' -> no"
-    )
-    
-    full_prompt = f"{system_prompt}\n\nUser input: {prompt}\nAnswer:"
-    # response = model.predict(full_prompt, temperature=0.0, max_output_tokens=5)
-    response = model.generate_content(
-       full_prompt,
-       generation_config={
-          "temperature": 0.0,
-          "max_output_tokens": 5}
-    )
-    answer = response.text.strip().lower()
-    return answer.startswith("yes")
-    
+       
 def wants_map_output_keyword(prompt: str) -> bool:
     keywords = ["show", "display", "highlight", "visualize", "which trees", "what trees"]
     prompt_lower = prompt.lower()
@@ -409,7 +428,41 @@ def filter(FIDS, project_name):
         post_features_to_layer(ash_gdf, chat_output_url)
     else:
         print("Column 'Species' not found in GeoDataFrame.")   
-       
+
+# --------------------- ERDO LLM main functions ---------------------
+
+def is_geospatial_task(prompt: str) -> bool:
+    """Vertex AI does intent classification to determine if the task is geo spatial related"""
+    from vertexai.language_models import TextGenerationModel
+
+    credentials_data = json.loads(os.getenv("GOOGLE_CREDENTIALS"))
+    credentials = service_account.Credentials.from_service_account_info(credentials_data)
+    vertexai.init(project="disco-parsec-444415-c4", location="us-central1", credentials=credentials)
+    # gemini-1.5-flash-002
+    model = GenerativeModel("gemini-2.0-flash-001")
+    system_prompt = (
+        "Decide if the user's input is related to geospatial analysis or geospatial data. "
+        "This includes queries about map features, tree health, species, spatial attributes, survey date, spatial selections, overlays, or analysis."
+        "Return only 'yes' or 'no'. Examples:\n"
+        "- 'Find all ash trees' -> yes\n"
+        "- 'What's my mother’s name?' -> no\n"
+        "- 'Show healthy trees' -> yes\n"
+        "- 'List all trees with a crown size over 5m' -> yes\n"
+        "- 'Show areas with high NDVI in a satellite image' -> yes\n"
+        "- 'What is the capital of France?' -> no"
+    )
+    
+    full_prompt = f"{system_prompt}\n\nUser input: {prompt}\nAnswer:"
+    # response = model.predict(full_prompt, temperature=0.0, max_output_tokens=5)
+    response = model.generate_content(
+       full_prompt,
+       generation_config={
+          "temperature": 0.0,
+          "max_output_tokens": 5}
+    )
+    answer = response.text.strip().lower()
+    return answer.startswith("yes")
+
 def clean_indentation(code):
      # Split the code into lines
     lines = code.split('\n')
@@ -422,20 +475,33 @@ def clean_indentation(code):
      # Join the cleaned lines back into a single string with proper indentation
     return '\n'.join(cleaned_lines)
 # job_id: str, 
+
+def is_complex_geospatial_task(query: str) -> bool:
+    # Keywords indicating a complex batch GIS task
+    complex_keywords = [
+        "batch", "geojson", "large dataset", "extract tree crown",
+        "long running", "species classification", "process data",
+        "analyze geospatial", "complex query", "run analysis"
+    ]
+    query_lower = query.lower()
+    return any(keyword in query_lower for keyword in complex_keywords)
+
 def long_running_task(user_task: str, task_name: str, data_locations: list):
     try:
         # job_status[job_id] = {"status": "running", "message": "Task is in progress"}
         # Set up task and directories
         save_dir = os.path.join(os.getcwd(), task_name)
         os.makedirs(save_dir, exist_ok=True)
-        # Initialize Vertex AI
-        credentials_data = json.loads(os.getenv("GOOGLE_CREDENTIALS"))
-        credentials = service_account.Credentials.from_service_account_info(credentials_data)
-        vertexai.init(project="disco-parsec-444415-c4", location="us-central1", credentials=credentials)
+        # Initialize Vertex AI done at the start. 
+
+        # credentials_data = json.loads(os.getenv("GOOGLE_CREDENTIALS"))
+        # credentials = service_account.Credentials.from_service_account_info(credentials_data)
+        # vertexai.init(project="disco-parsec-444415-c4", location="us-central1", credentials=credentials)
+
         # user_task = r"""1) To use a geoJSON file and return all the "Tree_ID" that are ash species ('Predicted Tree Species':'Ash').
         # """
         # task_name ='Tree_crown_quality'
-        #Create Solution object
+        #Create Solution object        
         solution = Solution(
             task=user_task,
             task_name=task_name,
@@ -549,8 +615,157 @@ def long_running_task(user_task: str, task_name: str, data_locations: list):
         # return f"Error during execution: {str(e)}"
         return f"Error during execution: The server seems to be down."
 
-#, background_tasks: BackgroundTasks
-@app.post("/process")
+
+# === Simulated tools ===
+def get_geospatial_context_tool(coords: str) -> str:
+    lat, lon = map(float, coords.split(","))
+    context = get_geospatial_context(lat, lon)  # Your GEE function
+    return json.dumps(context)
+    
+def get_zoning_info(coords: str) -> str:
+    return f"Zoning: Residential permitted, max height 50ft at {coords}"
+
+def get_climate_info(coords: str) -> str:
+    return f"Climate: High flood risk zone, sea-level rise of 1.2m expected at {coords}"
+
+def get_population_info(coords: str) -> str:
+    return f"Population: 11,000 people/km² at {coords}"
+    
+def check_tree_health(coords: str) -> str:
+    return f"Tree Health: Moderate tree cover, signs of drought stress at {coords}"
+
+def assess_tree_benefit(coords: str) -> str:
+    return f"Tree Benefits: High potential for carbon capture and shade cooling at {coords}"
+
+def check_soil_suitability(coords: str) -> str:
+    return f"Soil: Slightly compacted clay, pH 6.5 – suitable for native tree species at {coords}"
+
+def get_geospatial_context(lat, lon):
+    point = ee.Geometry.Point([lon, lat])
+    year = datetime.date.today().year
+    today = datetime.date.today()
+
+    # Try using current year
+    try_start = ee.Date.fromYMD(year, 1, 1)
+    try_end = ee.Date.fromYMD(year, today.month, today.day)
+
+    # Fallback default year
+    fallback_start = ee.Date('2023-01-01')
+    fallback_end = ee.Date('2023-12-31')
+
+    def fetch(collection_id, selector, start, end, scale):
+        try:
+            coll = ee.ImageCollection(collection_id) \
+                .filterDate(start, end) \
+                .filterBounds(point) \
+                .select(selector)
+            return coll.mean().reduceRegion(
+                reducer=ee.Reducer.mean(),
+                geometry=point,
+                scale=scale
+            ).getInfo()
+        except:
+            return {}
+
+    # Fetch NDVI (MODIS)
+    ndvi = fetch('MODIS/006/MOD13Q1', 'NDVI', try_start, try_end, 250) or \
+           fetch('MODIS/006/MOD13Q1', 'NDVI', fallback_start, fallback_end, 250)
+
+    # Fetch Precipitation (CHIRPS)
+    precip = fetch('UCSB-CHG/CHIRPS/DAILY', 'precipitation', try_start, try_end, 5000) or \
+             fetch('UCSB-CHG/CHIRPS/DAILY', 'precipitation', fallback_start, fallback_end, 5000)
+
+    # Fetch Temperature (ERA5-Land)
+    temp = fetch('ECMWF/ERA5_LAND/DAILY_AGGR', 'temperature_2m', try_start, try_end, 1000) or \
+           fetch('ECMWF/ERA5_LAND/DAILY_AGGR', 'temperature_2m', fallback_start, fallback_end, 1000)
+
+    # Land use from ESA (static - 2020)
+    landcover = ee.Image('ESA/WorldCover/v100/2020').sample(point, 10).first().getInfo()
+
+    # Soil Moisture from SMAP (daily 10km)
+    soil = fetch('NASA_USDA/HSL/SMAP10KM_soil_moisture', 'ssm', try_start, try_end, 10000) or \
+           fetch('NASA_USDA/HSL/SMAP10KM_soil_moisture', 'ssm', fallback_start, fallback_end, 10000)
+
+    # Forest loss (Hansen 2000–2022)
+    forest = ee.Image('UMD/hansen/global_forest_change_2023_v1_11')
+    forest_loss = forest.select('lossyear').reduceRegion(
+        reducer=ee.Reducer.mean(),
+        geometry=point,
+        scale=30
+    ).getInfo()
+
+    # Elevation (SRTM, static)
+    elevation = ee.Image('USGS/SRTMGL1_003').sample(point, 30).first().getInfo()
+
+    # Assemble response
+    return {
+        "Latitude": lat,
+        "Longitude": lon,
+        "NDVI (mean)": round(ndvi.get('NDVI', 0) / 10000.0, 3),
+        "Precipitation (mm)": round(precip.get('precipitation', 0), 2),
+        "Temperature (°C)": round(temp.get('temperature_2m', 273.15) - 273.15, 2),
+        "Soil Moisture (m3/m3)": round(soil.get('ssm', 0), 3),
+        "Forest Loss Year (avg)": forest_loss.get('lossyear', 'N/A'),
+        "Land Cover Class (ESA)": landcover.get('map', 'N/A'),
+        "Elevation (m)": elevation.get('elevation', 'N/A')
+    }
+
+#Can wrap the entire long process into this tool. so LLM orchestrator can handle. 
+# def gis_solution_tool(query: str) -> str:
+#     """
+#     Invokes your existing long_running_task with params parsed or defaulted from query.
+#     You may want to improve parsing logic depending on query format.
+#     """
+#     user_task = query
+#     task_name = "GIS_LongRunningTask"
+#     data_locations = []  # Fill as appropriate, could parse from query or configure by task_name
+
+#     result = long_running_task(user_task, task_name, data_locations)
+
+#     if isinstance(result, dict):
+#         message = result.get("message", str(result))
+#         if "tree_ids" in result:
+#             message += f"\nTree IDs found: {result['tree_ids']}"
+#         return message
+#     return str(result)
+
+
+# gis_batch_tool = Tool(
+#     name="GISBatchProcessor",
+#     func=gis_solution_tool,
+#     description="Executes advanced GIS batch processing tasks using the Solution pipeline."
+# )
+
+tools = [
+    Tool(name="ZoningLookup", func=get_zoning_info, description="Returns zoning rules..."),
+    Tool(
+        name="EarthEngineContext",
+        func=get_geospatial_context_tool,
+        description="Returns NDVI, precipitation, temperature, soil moisture, land cover, and elevation for given coordinates"
+    ),
+    Tool(name="ClimateData", func=get_climate_info, description="Returns climate risk..."),
+    Tool(name="PopulationStats", func=get_population_info, description="Returns population density..."),
+    Tool(name="TreeHealthCheck", func=check_tree_health, description="Assesses existing tree health at given coordinates"),
+    Tool(name="TreeBenefitAssessment", func=assess_tree_benefit, description="Estimates environmental impact of planting trees"),
+    Tool(name="SoilSuitability", func=check_soil_suitability, description="Checks soil type, pH, and suitability for tree planting")
+    # gis_batch_tool
+]
+
+
+
+# --------------------- Initialize agent with tools and LangChain LLM ---------------------
+
+agent = initialize_agent(
+    tools=tools,
+    llm=llm,
+    agent=AgentType.ZERO_SHOT_REACT_DESCRIPTION,
+    verbose=True,
+    handle_parsing_errors=True,
+)
+
+# --------------------- Handle App process---------------------
+  
+@app.post("/query")
 async def process_request(request_data: RequestData):
     user_task = request_data.task.strip().lower()
     task_name = request_data.task_name
@@ -565,51 +780,80 @@ async def process_request(request_data: RequestData):
     # Generate a unique job ID
     # job_id = str(uuid.uuid4())
     # job_status[job_id] = {"status": "queued", "message": "Task is queued for processing"}
-    try:
-        tree_crowns_url, chat_output_url = get_project_urls(task_name)
-        if task_name in ["TT_GCW1_Summer", "TT_GCW1_Winter"]:
-            tree_crown_summer, _ = get_project_urls("TT_GCW1_Summer")
-            tree_crown_winter, _ = get_project_urls("TT_GCW1_Winter")
-        
-            # Fetch CRS for each relevant URL
-            # crs_current = fetch_crs(tree_crowns_url)
-            # crs_summer = fetch_crs(tree_crown_summer)
-            # crs_winter = fetch_crs(tree_crown_winter)
-            # (CRS: EPSG:{crs_current})
-            # (CRS: EPSG:{crs_summer})
-            #( CRS: EPSG:{crs_winter})
-            data_locations = [
-                f"Tree crown geoJSON shape file: {tree_crowns_url}/0/query?where=1%3D1&outFields=*&f=geojson.",
-                f"Before storm tree crown geoJSON: {tree_crown_summer}/0/query?where=1%3D1&outFields=*&f=geojson.",
-                f"After storm tree crown geoJSON: {tree_crown_winter}/0/query?where=1%3D1&outFields=*&f=geojson."
-            ]
-        else:
-            # Fetch CRS for the single URL
-            # crs_current = fetch_crs(tree_crowns_url)
-            # (CRS: EPSG:{crs_current})
-            data_locations = [
-                f"Tree crown geoJSON shape file: {tree_crowns_url}/0/query?where=1%3D1&outFields=*&f=geojson."
-            ]
-        # background_tasks.add_task(long_running_task, job_id, user_task, task_name, data_locations)
-        result = long_running_task(user_task, task_name, data_locations)
-        message = result.get("message") if isinstance(result, dict) else str(result)
-        return {
-            "status": "completed",
-            "message": message,
-            "response": {
-                "role": "assistant",
-                "content": result.get("tree_ids") if isinstance(result, dict) and "tree_ids" in result else message
-            }
-        }
-    # return {"status": "success", "job_id": job_id, "message": "Processing started..."}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    
+    if is_complex_geospatial_task(user_task):
+        try:
+            tree_crowns_url, chat_output_url = get_project_urls(task_name)
+            if task_name in ["TT_GCW1_Summer", "TT_GCW1_Winter"]:
+                tree_crown_summer, _ = get_project_urls("TT_GCW1_Summer")
+                tree_crown_winter, _ = get_project_urls("TT_GCW1_Winter")
+            
+                # Fetch CRS for each relevant URL
+                # crs_current = fetch_crs(tree_crowns_url)
+                # crs_summer = fetch_crs(tree_crown_summer)
+                # crs_winter = fetch_crs(tree_crown_winter)
+                # (CRS: EPSG:{crs_current})
+                # (CRS: EPSG:{crs_summer})
+                #( CRS: EPSG:{crs_winter})
+                data_locations = [
+                    f"Tree crown geoJSON shape file: {tree_crowns_url}/0/query?where=1%3D1&outFields=*&f=geojson.",
+                    f"Before storm tree crown geoJSON: {tree_crown_summer}/0/query?where=1%3D1&outFields=*&f=geojson.",
+                    f"After storm tree crown geoJSON: {tree_crown_winter}/0/query?where=1%3D1&outFields=*&f=geojson."
+                ]
+            else:
+                # Fetch CRS for the single URL
+                # crs_current = fetch_crs(tree_crowns_url)
+                # (CRS: EPSG:{crs_current})
+                data_locations = [
+                    f"Tree crown geoJSON shape file: {tree_crowns_url}/0/query?where=1%3D1&outFields=*&f=geojson."
+                ]
+            # background_tasks.add_task(long_running_task, job_id, user_task, task_name, data_locations)
+            result = long_running_task(user_task, task_name, data_locations)
+            message = result.get("message") if isinstance(result, dict) else str(result)
+            reasoning_keywords = ["soil", "weather", "cause", "reason", "health", "impact", "effect", "why"]
+            if any(k in user_task.lower() for k in reasoning_keywords):
+                reasoning_prompt = (
+                    f"User asked: {user_task}\n"
+                    f"Batch task results summary: {message}\n"
+                    "Use the GIS tools (soil, climate, tree health, etc.) to answer the user's question."
+                )
+                try:
+                    reasoning_response = agent.run(reasoning_prompt)
+                    combined_message = f"{message}\n\nAdditional Analysis:\n{reasoning_response}"
+                except Exception as e:
+                    combined_message = f"{message}\n\nCould not perform extended reasoning: {str(e)}"
+            
+            else:
+                combined_message = message
+            
 
+            return {
+                "status": "completed",
+                "message": combined_message,
+                "response": {
+                    "role": "assistant",
+                    "content": result.get("tree_ids") if isinstance(result, dict) and "tree_ids" in result else message
+                }
+            }
+            
+        # return {"status": "success", "job_id": job_id, "message": "Processing started..."}
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=str(e))
+    else:
+        # Simple query → call agent directly
+        try:
+            response = agent.run(user_task)
+            return {"status": "completed", "response": response}
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=str(e))
+        
 @app.get("/status/{job_id}")
 async def get_status(job_id: str):
     """Fetch the status of a background job using its job ID"""
     return job_status.get(job_id, {"status": "unknown", "message": "Job ID not found"})
 
+
+# --------------------- run the app ---------------------
 # Run the FastAPI app using Uvicorn (for Cloud Run)
 if __name__ == "__main__":
     import uvicorn
