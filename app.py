@@ -153,51 +153,6 @@ async def trigger_cleanup(task_name):
 async def clear_state():
     return await trigger_cleanup()
        
-def wants_map_output_keyword(prompt: str) -> bool:
-    keywords = ["show", "display", "highlight", "visualize", "which trees", "what trees"]
-    prompt_lower = prompt.lower()
-    return any(kw in prompt_lower for kw in keywords)
-
-def wants_map_output_genai(prompt: str) -> bool:
-    credentials_data = json.loads(os.getenv("GOOGLE_CREDENTIALS"))
-    credentials = service_account.Credentials.from_service_account_info(credentials_data)
-    # Initialize Vertex AI
-    # Adjust project and location as needed
-    
-    vertexai.init(project="disco-parsec-444415-c4", location="us-central1", credentials=credentials)
-
-    model = GenerativeModel("gemini-2.0-flash-001")
-    system_prompt = (
-        "Decide if the user's input is asking for a map, list, or visual display of spatial features. "
-        "Return only 'yes' or 'no'. Examples:\n"
-        "- 'Show all healthy trees' -> yes\n"
-        "- 'Map the lost trees' -> yes\n"
-        "- 'List trees with crown size over 5m' -> yes\n"
-        "- 'What is the distance between trees' -> no\n"
-        "- 'Visualize all ash trees' -> yes\n"
-        "- 'Which trees are missing?' -> yes\n"
-        "- 'How much volume was lost?' -> no\n"
-        "- 'What is the total number of trees?' -> no\n"
-        "- 'Summarize changes between surveys' -> no"
-    )
-    full_prompt = f"{system_prompt}\n\nUser input: {prompt}\nAnswer:"
-    response = model.generate_content(
-        full_prompt,
-        generation_config={
-            "temperature": 0.0,
-            "max_output_tokens": 5
-        }
-    )
-    answer = response.text.strip().lower()
-    return answer.startswith("yes")
-
-def wants_map_output(prompt: str) -> bool:
-    # First try keyword matching
-    if wants_map_output_keyword(prompt):
-        return True
-    # Fallback to GenAI classification
-    return wants_map_output_genai(prompt)
-
 def shapely_to_arcgis_geometry(geom):
     if geom.geom_type == "Polygon":
         return {
@@ -431,6 +386,51 @@ def filter(FIDS, project_name):
 
 # --------------------- ERDO LLM main functions ---------------------
 
+def wants_map_output_keyword(prompt: str) -> bool:
+    keywords = ["show", "display", "highlight", "visualize", "which trees", "what trees"]
+    prompt_lower = prompt.lower()
+    return any(kw in prompt_lower for kw in keywords)
+
+def wants_map_output_genai(prompt: str) -> bool:
+    credentials_data = json.loads(os.getenv("GOOGLE_CREDENTIALS"))
+    credentials = service_account.Credentials.from_service_account_info(credentials_data)
+    # Initialize Vertex AI
+    # Adjust project and location as needed
+    
+    vertexai.init(project="disco-parsec-444415-c4", location="us-central1", credentials=credentials)
+
+    model = GenerativeModel("gemini-2.0-flash-001")
+    system_prompt = (
+        "Decide if the user's input is asking for a map, list, or visual display of spatial features. "
+        "Return only 'yes' or 'no'. Examples:\n"
+        "- 'Show all healthy trees' -> yes\n"
+        "- 'Map the lost trees' -> yes\n"
+        "- 'List trees with crown size over 5m' -> yes\n"
+        "- 'What is the distance between trees' -> no\n"
+        "- 'Visualize all ash trees' -> yes\n"
+        "- 'Which trees are missing?' -> yes\n"
+        "- 'How much volume was lost?' -> no\n"
+        "- 'What is the total number of trees?' -> no\n"
+        "- 'Summarize changes between surveys' -> no"
+    )
+    full_prompt = f"{system_prompt}\n\nUser input: {prompt}\nAnswer:"
+    response = model.generate_content(
+        full_prompt,
+        generation_config={
+            "temperature": 0.0,
+            "max_output_tokens": 5
+        }
+    )
+    answer = response.text.strip().lower()
+    return answer.startswith("yes")
+
+def wants_map_output(prompt: str) -> bool:
+    # First try keyword matching
+    if wants_map_output_keyword(prompt):
+        return True
+    # Fallback to GenAI classification
+    return wants_map_output_genai(prompt)
+
 def is_geospatial_task(prompt: str) -> bool:
     """Vertex AI does intent classification to determine if the task is geo spatial related"""
     from vertexai.language_models import TextGenerationModel
@@ -476,15 +476,113 @@ def clean_indentation(code):
     return '\n'.join(cleaned_lines)
 # job_id: str, 
 
-def is_complex_geospatial_task(query: str) -> bool:
-    # Keywords indicating a complex batch GIS task
-    complex_keywords = [
-        "batch", "geojson", "large dataset", "extract tree crown",
-        "long running", "species classification", "process data",
-        "analyze geospatial", "complex query", "run analysis"
+def wants_additional_info_keyword(prompt: str) -> bool:
+    keywords = [
+        "advice", "explain", "reason", "why", "weather", "soil", "context",
+        "impact", "effect", "should I do", "recommend", "suggest",
+        "interpret", "analysis", "information", "based on", "because",
+        "caused by", "influence", "due to", "assessment"
     ]
-    query_lower = query.lower()
-    return any(keyword in query_lower for keyword in complex_keywords)
+    prompt_lower = prompt.lower()
+    return any(kw in prompt_lower for kw in keywords)
+
+def wants_additional_info_genai(prompt: str) -> bool:
+    import os, json
+    from vertexai.generative_models import GenerativeModel
+    import vertexai
+
+    credentials_data = json.loads(os.getenv("GOOGLE_CREDENTIALS"))
+    credentials = service_account.Credentials.from_service_account_info(credentials_data)
+    vertexai.init(project="disco-parsec-444415-c4", location="us-central1", credentials=credentials)
+
+    model = GenerativeModel("gemini-2.0-flash-001")
+    system_prompt = (
+        "Decide if the user's input is asking for additional geospatial explanation or advice, "
+        "beyond simply showing or listing features. This includes queries about reasons, causes, impact, recommendations, "
+        "interpretations, soil, weather, context, or what should be done. "
+        "Return only 'yes' or 'no'. Examples:\n"
+        "- 'Show all healthy trees' -> no\n"
+        "- 'Which trees are unhealthy?' -> no\n"
+        "- 'Map the largest crown' -> no\n"
+        "- 'Why are many trees unhealthy?' -> yes\n"
+        "- 'Give me advice based on temperature' -> yes\n"
+        "- 'Should I plant here given the soil?' -> yes\n"
+        "- 'What was the likely cause of tree loss?' -> yes\n"
+        "- 'Explain the difference between two areas' -> yes"
+    )
+    full_prompt = f"{system_prompt}\n\nUser input: {prompt}\nAnswer:"
+    response = model.generate_content(
+        full_prompt,
+        generation_config={
+            "temperature": 0.0,
+            "max_output_tokens": 5
+        }
+    )
+    answer = response.text.strip().lower()
+    return answer.startswith("yes")
+
+def wants_additional_info(prompt: str) -> bool:
+    # Try keyword first
+    if wants_additional_info_keyword(prompt):
+        return True
+    # Backstop with vertex AI LLM classification if keyword not found
+    return wants_additional_info_genai(prompt)
+
+def wants_gis_task_keyword(prompt: str) -> bool:
+    keywords = [
+        "show", "display", "map", "highlight", "visualize", "which trees", 
+        "what trees", "list", "extract", "buffer", "join", "select", "clip", 
+        "overlay", "spatial", "geopandas", "geospatial", "coordinates", 
+        "location", "find", "query", "identify"
+    ]
+    prompt_lower = prompt.lower()
+    return any(kw in prompt_lower for kw in keywords)
+
+def wants_gis_task_genai(prompt: str) -> bool:
+    import os, json
+    from vertexai.generative_models import GenerativeModel
+    import vertexai
+    from google.oauth2 import service_account
+
+    credentials_data = json.loads(os.getenv("GOOGLE_CREDENTIALS"))
+    credentials = service_account.Credentials.from_service_account_info(credentials_data)
+    vertexai.init(project="disco-parsec-444415-c4", location="us-central1", credentials=credentials)
+
+    model = GenerativeModel("gemini-2.0-flash-001")
+
+    system_prompt = (
+        "Decide if the user's input is asking for a geospatial operation involving spatial data processing or analysis. "
+        "This includes tasks like mapping, buffering, spatial querying, extraction of features, overlays, joins, or any "
+        "operation needing geospatial calculations or data manipulation. Return only 'yes' or 'no'. Examples:\n"
+        "- 'Show all healthy trees' -> yes\n"
+        "- 'Find trees within 10 meters of the river' -> yes\n"
+        "- 'Display soil quality around trees' -> yes\n"
+        "- 'List species of trees in an area' -> yes\n"
+        "- 'Explain why trees are unhealthy' -> no\n"
+        "- 'What is the weather today?' -> no\n"
+        "- 'Give me advice on planting trees' -> no\n"
+        "- 'Map the areas with high NDVI' -> yes\n"
+        "- 'Visualize crown sizes of oak trees' -> yes\n"
+        "- 'Summarize changes in tree health' -> no"
+    )
+    full_prompt = f"{system_prompt}\n\nUser input: {prompt}\nAnswer:"
+    response = model.generate_content(
+        full_prompt,
+        generation_config={
+            "temperature": 0.0,
+            "max_output_tokens": 5
+        }
+    )
+    answer = response.text.strip().lower()
+    return answer.startswith("yes")
+
+def want_gis_task(prompt: str) -> bool:
+    # Try keyword matching first for speed
+    if wants_gis_task_keyword(prompt):
+        return True
+    # Fallback to GenAI classifier for ambiguous queries
+    return wants_gis_task_genai(prompt)
+
 
 def long_running_task(user_task: str, task_name: str, data_locations: list):
     try:
@@ -640,7 +738,7 @@ def assess_tree_benefit(coords: str) -> str:
 def check_soil_suitability(coords: str) -> str:
     return f"Soil: Slightly compacted clay, pH 6.5 – suitable for native tree species at {coords}"
 
-def get_geospatial_context(lat, lon):
+def get_geospatial_context(lat=40.7128, lon=-74.0060):
     point = ee.Geometry.Point([lon, lat])
     year = datetime.date.today().year
     today = datetime.date.today()
@@ -781,7 +879,10 @@ async def process_request(request_data: RequestData):
     # job_id = str(uuid.uuid4())
     # job_status[job_id] = {"status": "queued", "message": "Task is queued for processing"}
     
-    if is_complex_geospatial_task(user_task):
+    do_gis_op= want_gis_task(user_task)
+    do_info = wants_additional_info(user_task)
+
+    if do_gis_op and do_info:
         try:
             tree_crowns_url, chat_output_url = get_project_urls(task_name)
             if task_name in ["TT_GCW1_Summer", "TT_GCW1_Winter"]:
@@ -810,23 +911,17 @@ async def process_request(request_data: RequestData):
             # background_tasks.add_task(long_running_task, job_id, user_task, task_name, data_locations)
             result = long_running_task(user_task, task_name, data_locations)
             message = result.get("message") if isinstance(result, dict) else str(result)
-            reasoning_keywords = ["soil", "weather", "cause", "reason", "health", "impact", "effect", "why"]
-            if any(k in user_task.lower() for k in reasoning_keywords):
-                reasoning_prompt = (
+            reasoning_prompt = (
                     f"User asked: {user_task}\n"
                     f"Batch task results summary: {message}\n"
                     "Use the GIS tools (soil, climate, tree health, etc.) to answer the user's question."
-                )
-                try:
-                    reasoning_response = agent.run(reasoning_prompt)
-                    combined_message = f"{message}\n\nAdditional Analysis:\n{reasoning_response}"
-                except Exception as e:
-                    combined_message = f"{message}\n\nCould not perform extended reasoning: {str(e)}"
+            )
+            try:    
+                reasoning_response = agent.run(reasoning_prompt)
+                combined_message = f"{message}\n\nAdditional Analysis:\n{reasoning_response}"
+            except Exception as e: 
+                combined_message= message
             
-            else:
-                combined_message = message
-            
-
             return {
                 "status": "completed",
                 "message": combined_message,
@@ -838,15 +933,55 @@ async def process_request(request_data: RequestData):
             
         # return {"status": "success", "job_id": job_id, "message": "Processing started..."}
         except Exception as e:
-            raise HTTPException(status_code=500, detail=str(e))
-    else:
-        # Simple query → call agent directly
-        try:
-            response = agent.run(user_task)
-            return {"status": "completed", "response": response}
-        except Exception as e:
-            raise HTTPException(status_code=500, detail=str(e))
+            return {"status": "completed", "message": "Request not understood as a task requiring GIS operations or information."}
+    elif do_gis_op: 
         
+        try:
+            tree_crowns_url, chat_output_url = get_project_urls(task_name)
+            if task_name in ["TT_GCW1_Summer", "TT_GCW1_Winter"]:
+                tree_crown_summer, _ = get_project_urls("TT_GCW1_Summer")
+                tree_crown_winter, _ = get_project_urls("TT_GCW1_Winter")
+            
+                # Fetch CRS for each relevant URL
+                # crs_current = fetch_crs(tree_crowns_url)
+                # crs_summer = fetch_crs(tree_crown_summer)
+                # crs_winter = fetch_crs(tree_crown_winter)
+                # (CRS: EPSG:{crs_current})
+                # (CRS: EPSG:{crs_summer})
+                #( CRS: EPSG:{crs_winter})
+                data_locations = [
+                    f"Tree crown geoJSON shape file: {tree_crowns_url}/0/query?where=1%3D1&outFields=*&f=geojson.",
+                    f"Before storm tree crown geoJSON: {tree_crown_summer}/0/query?where=1%3D1&outFields=*&f=geojson.",
+                    f"After storm tree crown geoJSON: {tree_crown_winter}/0/query?where=1%3D1&outFields=*&f=geojson."
+                ]
+            else:
+                # Fetch CRS for the single URL
+                # crs_current = fetch_crs(tree_crowns_url)
+                # (CRS: EPSG:{crs_current})
+                data_locations = [
+                    f"Tree crown geoJSON shape file: {tree_crowns_url}/0/query?where=1%3D1&outFields=*&f=geojson."
+                ]
+            # background_tasks.add_task(long_running_task, job_id, user_task, task_name, data_locations)
+            result = long_running_task(user_task, task_name, data_locations)
+            message = result.get("message") if isinstance(result, dict) else str(result)
+
+            return {
+                "status": "completed",
+                "message": message,
+                "response": {
+                    "role": "assistant",
+                    "content": result.get("tree_ids") if isinstance(result, dict) and "tree_ids" in result else message
+                }
+            }
+        except Exception as e:
+            return {"status": "completed", "message": "Request not understood as a GIS task."}
+
+    elif do_info: 
+        response = agent.run(user_task)
+        return {"status": "completed", "response": response}
+    
+    return {"status": "completed", "message": "Request not understood as a task requiring geospatial data."}
+
 @app.get("/status/{job_id}")
 async def get_status(job_id: str):
     """Fetch the status of a background job using its job ID"""
