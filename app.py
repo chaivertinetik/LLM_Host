@@ -863,7 +863,7 @@ agent = initialize_agent(
 
 # --------------------- Handle App process---------------------
   
-@app.post("/query")
+@app.post("/process")
 async def process_request(request_data: RequestData):
     user_task = request_data.task.strip().lower()
     task_name = request_data.task_name
