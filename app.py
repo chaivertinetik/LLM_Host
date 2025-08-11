@@ -21,6 +21,8 @@ import autopep8
 import numpy as np
 import collections.abc
 import pandas as pd
+import logging
+import sys
 from vertexai.generative_models import GenerativeModel
 from vertexai.language_models import TextGenerationModel
 from google.oauth2 import service_account
@@ -65,6 +67,29 @@ credentials_data = json.loads(google_creds)
 credentials = service_account.Credentials.from_service_account_info(credentials_data)
 # service_account_email = credentials_data.get("client_email")
 # print(service_account_email)
+
+
+# -----Logging Setup ------
+
+
+logger = logging.getLogger("app")
+logger.setLevel(logging.INFO)
+handler = logging.StreamHandler(sys.stdout)
+handler.setFormatter(logging.Formatter("%(message)s"))  # one JSON line per event
+logger.handlers = [handler]
+
+def log_event(event: str, **fields):
+    payload = {
+        "ts": datetime.utcnow().isoformat(timespec="seconds") + "Z",
+        "event": event,
+        **fields,
+    }
+    # Avoid logging huge objects or secrets
+    for k in list(payload.keys()):
+        if k.lower() in {"google_credentials", "earth_credentials"}:
+            payload[k] = "[redacted]"
+    logger.info(json.dumps(payload, ensure_ascii=False))
+    
 
 # === Init Vertex AI ===
 vertexai.init(
@@ -687,6 +712,39 @@ def want_gis_task(prompt: str) -> bool:
     return wants_gis_task_genai(prompt)
 
 
+def get_sql_filter_from_llm(user_task: str, fields: list[str]) -> tuple[str, str]:
+    """
+    Return (where_clause, explanation) or ("__SPATIAL__", reason)
+    """
+    prompt = f"""
+    You are an ArcGIS SQL generator.
+    Convert the user request into a valid ArcGIS FeatureServer WHERE clause
+    using ONLY these fields: {', '.join(fields)}.
+    If spatial analysis is required, return exactly __SPATIAL__.
+
+    Respond strictly in JSON:
+    {{"where": "<WHERE or __SPATIAL__>", "reason": "<short explanation>"}}
+
+    User request: {user_task}
+    """
+    try:
+        raw = agent.run(prompt).strip()
+        data = json.loads(raw) if raw.startswith("{") else json.loads(re.search(r"\{.*\}$", raw, re.S).group(0))
+        where = str(data.get("where", "")).strip()
+        reason = str(data.get("reason", "")).strip()
+
+        # very basic guardrail
+        forbidden = [";", "--", "/*", "*/"]
+        if any(x in where for x in forbidden):
+            return "__SPATIAL__", "Blocked suspicious tokens in WHERE."
+        if not where:
+            return "__SPATIAL__", "LLM did not produce a WHERE clause."
+
+        return where, reason or "LLM attribute filter"
+    except Exception as e:
+        print(f"[LLM Filter Error] {e}")
+        return "__SPATIAL__", "LLM failed to produce a safe WHERE."
+
 def long_running_task(user_task: str, task_name: str, data_locations: list):
     try:
         # job_status[job_id] = {"status": "running", "message": "Task is in progress"}
@@ -969,44 +1027,91 @@ agent = initialize_agent(
 async def process_request(request_data: RequestData):
     user_task = request_data.task.strip().lower()
     task_name = request_data.task_name
-
+    log_event("process_request.start", task_name=task_name, user_task=user_task)
+    # Cleanup command check
     if re.search(r"\b(clear|reset|cleanup|clean|wipe)\b", user_task):
         return await trigger_cleanup(task_name)
-       
+
     if not is_geospatial_task(user_task):
         return {"status": "completed", "message": "I haven't been programmed to do that"}
 
-    do_gis_op = want_gis_task(user_task)
-    do_info   = wants_additional_info(user_task)
-
-    # --- inline helpers (kept minimal) ---
+    # Inline helpers
     def _fmt_date(ms):
         if not ms:
             return "unknown-date"
         return datetime.fromtimestamp(ms/1000, tz=timezone.utc).strftime("%Y-%m-%d")
 
+    # All fields from Project_index
     FIELDS = [
         "PROJECT_NAME","ORTHOMOSAIC","TREE_CROWNS","TREE_TOPS","ObjectId","PREDICTION",
         "CHAT_OUTPUT","USER_CROWNS","USER_TOPS","SURVEY_DATE","CrownSketch",
         "CrownSketch_Predictions","CHAT_INPUT"
     ]
 
-    # Build relation key from first two underscore-separated tokens
-    # e.g., "DE_BOLSTONE_2024" -> base_key "DE_BOLSTONE"
-    tokens = [t for t in re.split(r'[_\s]+', (task_name or "").strip()) if t]
+    # Step 1 — LLM: Decide if this is pure attribute filtering
+    crown_fields = ["Tree_ID","Species","Health","Height","Shape__Area","Shape__Length","SURVEY_DATE"]
+    sql_where, explanation = get_sql_filter_from_llm(user_task, crown_fields)
+    log_event("llm.where_decision", task_name=task_name, sql_where=sql_where, explanation=explanation)
+
+    # Fast path
+    if sql_where != "__SPATIAL__":
+        try:
+            project_url = "https://services-eu1.arcgis.com/8uHkpVrXUjYCyrO4/arcgis/rest/services/Project_index/FeatureServer/0/query"
+            params = {"where": f"PROJECT_NAME = '{task_name}'", "outFields": "TREE_CROWNS,CHAT_OUTPUT", "returnGeometry": "false", "f": "json"}
+            r = requests.get(project_url, params=params, timeout=10)
+            r.raise_for_status()
+            proj_data = r.json()
+            if not proj_data.get("features"):
+                raise ValueError(f"No project found with the name '{task_name}'.")
+    
+            tree_crowns_url = proj_data["features"][0]["attributes"]["TREE_CROWNS"]
+            results_url     = proj_data["features"][0]["attributes"]["CHAT_OUTPUT"]
+    
+            crowns = _norm_layer(tree_crowns_url)  # <-- normalize once
+            query_url = f"{crowns}/query"
+            filter_params = {"where": sql_where, "outFields": "*", "f": "geojson"}
+            qr = requests.get(query_url, params=filter_params, timeout=20)
+            qr.raise_for_status()
+            geojson = qr.json()
+            gdf = gpd.GeoDataFrame.from_features(geojson.get("features", []))
+    
+            if gdf.empty:
+                return {"status": "completed", "message": f"No matching features found. Filter: {explanation}"}
+    
+            # optional: clear old results
+            delete_all_features(results_url)
+    
+            post_features_to_layer(gdf, results_url)
+    
+            ids = gdf["Tree_ID"].astype(int).tolist() if "Tree_ID" in gdf else []
+    
+            return {
+                "status": "completed",
+                "message": f"Posted {len(gdf)} matching features to results.\nFilter applied: {explanation}",
+                "response": {"role": "assistant", "content": ids}
+            }
+        except Exception as e:
+            return {"status": "error", "message": f"Fast path failed: {e}"}
+    
+    # Heavy path setup — compute keys and flags
+    do_gis_op = want_gis_task(user_task)
+    do_info   = wants_additional_info(user_task)
+    
+    tokens = [t for t in re.split(r'[_\s]+', (task_name or '').strip()) if t]
     if len(tokens) >= 2:
         base_key = f"{tokens[0].upper()}_{tokens[1].upper()}"
     elif tokens:
         base_key = tokens[0].upper()
     else:
         base_key = ""
-
-    # Escape for LIKE (treat '_' literally) and make prefix
+    
     like_prefix = base_key.replace("\\", "\\\\").replace("_", r"\_").replace("%", r"\%") + "%"
     where_clause = f"PROJECT_NAME LIKE '{like_prefix}' ESCAPE '\\'"
 
+
     query_url = "https://services-eu1.arcgis.com/8uHkpVrXUjYCyrO4/arcgis/rest/services/Project_index/FeatureServer/0/query"
     # ----------------------------------------------
+    log_event("routing.decision", task_name=task_name, do_gis_op=do_gis_op, do_info=do_info)
 
     if do_gis_op and do_info:
         try:
@@ -1067,6 +1172,7 @@ async def process_request(request_data: RequestData):
             }
 
         except Exception:
+            log_event("heavy_path.both_error", task_name=task_name, error=str(e))
             return {"status": "completed", "message": "Request not understood as a task requiring GIS operations or information."}
 
     elif do_gis_op:
