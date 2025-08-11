@@ -711,19 +711,49 @@ def want_gis_task(prompt: str) -> bool:
     # Fallback to GenAI classifier for ambiguous queries
     return wants_gis_task_genai(prompt)
 
+YEAR_RX = re.compile(r"\b(20\d{2})\b")
 
-def get_sql_filter_from_llm(user_task: str, fields: list[str]) -> tuple[str, str]:
+def parse_year_from_text(text: str) -> int | None:
+    m = YEAR_RX.search(text)
+    return int(m.group(1)) if m else None
+
+def pick_project_for_year(task_name: str, year: int | None) -> dict | None:
+    # Use your relation_key() & get_related_projects() to list family members
+    records = get_related_projects(task_name)
+    if not records:
+        return None
+    if year is None:
+        # Fallback: current "task_name" year (last 4-digit year if present)
+        year = parse_year_from_text(task_name)
+
+    if year is not None:
+        start_ms = int(datetime(year, 1, 1, tzinfo=timezone.utc).timestamp() * 1000)
+        end_ms   = int(datetime(year, 12, 31, 23, 59, 59, tzinfo=timezone.utc).timestamp() * 1000)
+        candidates = [r for r in records if r.get("SURVEY_DATE") and start_ms <= int(r["SURVEY_DATE"]) <= end_ms]
+        if candidates:
+            # newest first is already sorted in get_related_projects(); take first match
+            return candidates[0]
+
+    # Fallback: first item (newest)
+    return records[0]
+    
+def sanitize_where_no_dates(sql: str) -> str:
+    if not sql:
+        return sql
+    # crude but effective: drop any clause that mentions SURVEY_DATE
+    return re.sub(r"\bSURVEY_DATE\b\s*[<>=!].*?(?:\bAND\b|\bOR\b|$)", "", sql, flags=re.IGNORECASE).strip().strip("AND ").strip("OR ")
+
+def get_sql_filter_from_llm(user_task: str, project_fields) -> tuple[str, str]:
     """
     Return (where_clause, explanation) or ("__SPATIAL__", reason)
     """
     prompt = f"""
     You are an ArcGIS SQL generator.
-    Convert the user request into a valid ArcGIS FeatureServer WHERE clause
-    using ONLY these fields: {', '.join(fields)}.
-    If spatial analysis is required, return exactly __SPATIAL__.
+    Convert the user request into a WHERE clause for the crowns layer using ONLY these fields:
+    {', '.join(project_fields)}.
 
-    Respond strictly in JSON:
-    {{"where": "<WHERE or __SPATIAL__>", "reason": "<short explanation>"}}
+    DO NOT reference dates or SURVEY_DATE in the WHERE clause. Dates are handled upstream on the project index.
+    If spatial analysis is required (not pure attribute filtering), return exactly __SPATIAL__.
 
     User request: {user_task}
     """
@@ -1048,27 +1078,30 @@ async def process_request(request_data: RequestData):
         "CrownSketch_Predictions","CHAT_INPUT"
     ]
 
-    # Step 1 — LLM: Decide if this is pure attribute filtering
-    crown_fields = ["Tree_ID","Species","Health","Height","Shape__Area","Shape__Length","SURVEY_DATE"]
+    # --- Step 1: get attribute-only WHERE (no SURVEY_DATE) ---
+    crown_fields = ["Tree_ID","Species","Health","Height","Shape__Area","Shape__Length"]
     sql_where, explanation = get_sql_filter_from_llm(user_task, crown_fields)
-    log_event("llm.where_decision", task_name=task_name, sql_where=sql_where, explanation=explanation)
-
-    # Fast path
+    
     if sql_where != "__SPATIAL__":
         try:
-            project_url = "https://services-eu1.arcgis.com/8uHkpVrXUjYCyrO4/arcgis/rest/services/Project_index/FeatureServer/0/query"
-            params = {"where": f"PROJECT_NAME = '{task_name}'", "outFields": "TREE_CROWNS,CHAT_OUTPUT", "returnGeometry": "false", "f": "json"}
-            r = requests.get(project_url, params=params, timeout=10)
-            r.raise_for_status()
-            proj_data = r.json()
-            if not proj_data.get("features"):
-                raise ValueError(f"No project found with the name '{task_name}'.")
+            year_hint = parse_year_from_text(user_task)
+            proj_attrs = pick_project_for_year(task_name, year_hint)
+            if not proj_attrs:
+                raise ValueError(f"No related projects found for '{task_name}'.")
     
-            tree_crowns_url = proj_data["features"][0]["attributes"]["TREE_CROWNS"]
-            results_url     = proj_data["features"][0]["attributes"]["CHAT_OUTPUT"]
+            crowns_url = _norm_layer(proj_attrs.get("TREE_CROWNS"))
+            results_url = _norm_layer(proj_attrs.get("CHAT_OUTPUT"))
+            if not crowns_url or not results_url:
+                raise ValueError("TREE_CROWNS or CHAT_OUTPUT URL missing for selected project.")
     
-            crowns = _norm_layer(tree_crowns_url)  # <-- normalize once
-            query_url = f"{crowns}/query"
+            # Kill any SURVEY_DATE bits, just in case
+            sql_where = sanitize_where_no_dates(sql_where)
+            if not sql_where:
+                # ensure there's at least a tautology if the whole thing got stripped
+                sql_where = "1=1"
+    
+            # Query crowns for the chosen project/year using ONLY attribute filters
+            query_url = f"{crowns_url}/query"
             filter_params = {"where": sql_where, "outFields": "*", "f": "geojson"}
             qr = requests.get(query_url, params=filter_params, timeout=20)
             qr.raise_for_status()
@@ -1076,22 +1109,20 @@ async def process_request(request_data: RequestData):
             gdf = gpd.GeoDataFrame.from_features(geojson.get("features", []))
     
             if gdf.empty:
-                return {"status": "completed", "message": f"No matching features found. Filter: {explanation}"}
+                return {"status": "completed", "message": f"No matching features found in {proj_attrs.get('PROJECT_NAME')}. Filter: {explanation}"}
     
-            # optional: clear old results
             delete_all_features(results_url)
-    
             post_features_to_layer(gdf, results_url)
     
             ids = gdf["Tree_ID"].astype(int).tolist() if "Tree_ID" in gdf else []
-    
             return {
                 "status": "completed",
-                "message": f"Posted {len(gdf)} matching features to results.\nFilter applied: {explanation}",
+                "message": f"Posted {len(gdf)} features from {proj_attrs.get('PROJECT_NAME')}.\nFilter: {explanation}",
                 "response": {"role": "assistant", "content": ids}
             }
         except Exception as e:
             return {"status": "error", "message": f"Fast path failed: {e}"}
+    
     
     # Heavy path setup — compute keys and flags
     do_gis_op = want_gis_task(user_task)
