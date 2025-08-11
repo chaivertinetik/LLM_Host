@@ -1250,8 +1250,10 @@ async def process_request(request_data: RequestData):
                     "content": result.get("tree_ids") if isinstance(result, dict) and "tree_ids" in result else message
                 }
             }
-        except Exception:
-            return {"status": "completed", "message": "Request not understood as a GIS task."}
+        except Exception as e:
+            log_event("heavy_path.both_error", task_name=task_name, error=str(e))
+            return {"status": "completed", "message": "Request not understood as a task requiring GIS operations or information."}
+
 
     elif do_info:
         response = agent.run(user_task)
