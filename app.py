@@ -4,7 +4,7 @@ import json
 import networkx as nx
 import vertexai
 import ee 
-import datetime
+from datetime import datetime, timezone, date
 import helper
 import time
 import LLM_Geo_Constants as constants
@@ -99,7 +99,7 @@ llm = GeminiLLM(model=model)
 
 
 # Global dictionary to track job statuses
-# job_status: Dict[str, Dict[str, str]] = {}
+job_status: Dict[str, Dict[str, str]] = {}
 
 # Load credentials from environment variable or file
 # def get_credentials():
@@ -113,9 +113,9 @@ llm = GeminiLLM(model=model)
 # --------------------- ARC GIS UPDATE---------------------
 async def trigger_cleanup(task_name):
     project_name = task_name
-    tree_crowns_url, delete_url = get_project_urls(project_name)
+    attrs = get_project_urls(task_name)
+    target_url = attrs.get("CHAT_OUTPUT")
     try:
-        target_url = delete_url
         query_url = f"{target_url}/0/query"
         delete_url = f"{target_url}/0/deleteFeatures"
         # Step 1: Get all existing OBJECTIDs
@@ -150,8 +150,8 @@ async def trigger_cleanup(task_name):
         raise HTTPException(status_code=500, detail=f"Cleanup failed: {str(e)}")
        
 @app.post("/clear")
-async def clear_state():
-    return await trigger_cleanup()
+async def clear_state(req: RequestData):
+    return await trigger_cleanup(req.task_name)
        
 def shapely_to_arcgis_geometry(geom):
     if geom.geom_type == "Polygon":
@@ -168,7 +168,13 @@ def shapely_to_arcgis_geometry(geom):
         raise ValueError(f"Unsupported geometry type: {geom.geom_type}")
 
 
-import requests
+FIELDS = [
+    "PROJECT_NAME","ORTHOMOSAIC","TREE_CROWNS","TREE_TOPS","ObjectId","PREDICTION",
+    "CHAT_OUTPUT","USER_CROWNS","USER_TOPS","SURVEY_DATE","CrownSketch",
+    "CrownSketch_Predictions","CHAT_INPUT"
+]
+
+
 
 def get_project_urls(project_name):
     query_url = "https://services-eu1.arcgis.com/8uHkpVrXUjYCyrO4/arcgis/rest/services/Project_index/FeatureServer/0/query"
@@ -426,22 +432,25 @@ def delete_all_features(target_url):
     print("Delete response:", delete_response.json())
 
 def ensure_list(obj):
-    # Handle numpy scalars and standard scalars
     if isinstance(obj, (int, float, np.integer, np.floating)):
         return [obj]
-    # Handle numpy arrays and pandas Series
     elif isinstance(obj, (np.ndarray, pd.Series)):
         return obj.tolist()
-    # Handle other iterable types (list, tuple, set)
     elif isinstance(obj, collections.abc.Iterable) and not isinstance(obj, (str, bytes)):
         return list(obj)
+    elif obj is None:
+        return []
     else:
-        pass
+        return [obj]
+
 
 def filter(FIDS, project_name):
     print("Made it to the filter function") 
     FIDS = ensure_list(FIDS)
-    tree_crowns_url, chat_output_url = get_project_urls(project_name)
+
+    attrs = get_project_urls(project_name)
+    tree_crowns_url = attrs.get("TREE_CROWNS")
+    chat_output_url = attrs.get("CHAT_OUTPUT")
 
     if not tree_crowns_url or not chat_output_url:
         raise ValueError("Required URLs missing in Project Index.")
@@ -819,8 +828,8 @@ def check_soil_suitability(coords: str) -> str:
 
 def get_geospatial_context(lat=40.7128, lon=-74.0060):
     point = ee.Geometry.Point([lon, lat])
-    year = datetime.date.today().year
-    today = datetime.date.today()
+    year = date.today().year
+    today = date.today()
 
     # Try using current year
     try_start = ee.Date.fromYMD(year, 1, 1)
