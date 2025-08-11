@@ -115,6 +115,7 @@ async def trigger_cleanup(task_name):
     project_name = task_name
     attrs = get_project_urls(task_name)
     target_url = attrs.get("CHAT_OUTPUT")
+    target_url = _norm_layer(target_url) 
     try:
         query_url = f"{target_url}/0/query"
         delete_url = f"{target_url}/0/deleteFeatures"
@@ -232,6 +233,17 @@ def _escape_like_literal(s: str) -> str:
     """
     s = s.replace("\\", "\\\\").replace("_", r"\_").replace("%", r"\%")
     return s
+
+def _norm_layer(u: str) -> str:
+    if not u: return u
+    u = u.rstrip('/')
+    # already has a layer id
+    if re.search(r'/FeatureServer/\d+$', u):
+        return u
+    # has FeatureServer root only
+    if u.endswith('/FeatureServer'):
+        return u + '/0'
+    return u  # leave as-is
 
 
 
@@ -355,6 +367,9 @@ def extract_geojson(url):
         if response.status_code == 200:
             geojson = response.json()
             gdf = gpd.GeoDataFrame.from_features(geojson["features"])
+            if gdf is None or gdf.empty:
+                print("No crowns returned; nothing to post.")
+                return
             return gdf
         else:
             print(f"Failed to fetch GeoJSON: {response.status_code}")
@@ -1017,13 +1032,15 @@ async def process_request(request_data: RequestData):
                 date_label = _fmt_date(attrs.get("SURVEY_DATE"))
                 crowns_url = attrs.get("TREE_CROWNS")
                 points_url = attrs.get("USER_TOPS") or attrs.get("TREE_TOPS")
-                if crowns_url:
+                crowns = _norm_layer(crowns_url)
+                points = _norm_layer(points_url)
+                if crowns:
                     data_locations.append(
-                        f"Tree crown GeoJSON ({date_label}): {crowns_url}/0/query?where=1%3D1&outFields=*&f=geojson."
+                        f"Tree crown GeoJSON ({date_label}): {crowns}/query?where=1%3D1&outFields=*&f=geojson."
                     )
-                if points_url:
+                if points:
                     data_locations.append(
-                        f"Point input GeoJSON ({date_label}): {points_url}/0/query?where=1%3D1&outFields=*&f=geojson."
+                        f"Point input GeoJSON ({date_label}): {points}/query?where=1%3D1&outFields=*&f=geojson."
                     )
 
             result = long_running_task(user_task, task_name, data_locations)
@@ -1074,13 +1091,15 @@ async def process_request(request_data: RequestData):
                 date_label = _fmt_date(attrs.get("SURVEY_DATE"))
                 crowns_url = attrs.get("TREE_CROWNS")
                 points_url = attrs.get("USER_TOPS") or attrs.get("TREE_TOPS")
-                if crowns_url:
+                crowns = _norm_layer(crowns_url)
+                points = _norm_layer(points_url)
+                if crowns:
                     data_locations.append(
-                        f"Tree crown GeoJSON ({date_label}): {crowns_url}/0/query?where=1%3D1&outFields=*&f=geojson."
+                        f"Tree crown GeoJSON ({date_label}): {crowns}/query?where=1%3D1&outFields=*&f=geojson."
                     )
-                if points_url:
+                if points:
                     data_locations.append(
-                        f"Point input GeoJSON ({date_label}): {points_url}/0/query?where=1%3D1&outFields=*&f=geojson."
+                        f"Point input GeoJSON ({date_label}): {points}/query?where=1%3D1&outFields=*&f=geojson."
                     )
 
             result = long_running_task(user_task, task_name, data_locations)
