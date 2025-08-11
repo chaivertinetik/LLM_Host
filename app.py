@@ -168,22 +168,101 @@ def shapely_to_arcgis_geometry(geom):
         raise ValueError(f"Unsupported geometry type: {geom.geom_type}")
 
 
+import requests
+
 def get_project_urls(project_name):
     query_url = "https://services-eu1.arcgis.com/8uHkpVrXUjYCyrO4/arcgis/rest/services/Project_index/FeatureServer/0/query"
+    
+    # List of all fields you want from the service
+    fields = [
+        "PROJECT_NAME",
+        "ORTHOMOSAIC",
+        "TREE_CROWNS",
+        "TREE_TOPS",
+        "PREDICTION",
+        "CHAT_OUTPUT",
+        "USER_CROWNS",
+        "USER_TOPS",
+        "SURVEY_DATE",
+        "CrownSketch",
+        "CrownSketch_Predictions",
+        "CHAT_INPUT"
+    ]
+    
     params = {
         "where": f"PROJECT_NAME = '{project_name}'",
-        "outFields": "TREE_CROWNS,CHAT_OUTPUT",
+        "outFields": ",".join(fields),
         "f": "json",
     }
 
     response = requests.get(query_url, params=params, timeout=10)
+    response.raise_for_status()
     data = response.json()
 
     if not data.get("features"):
         raise ValueError(f"No project found with the name '{project_name}'.")
 
-    attributes = data["features"][0]["attributes"]
-    return attributes.get("TREE_CROWNS"), attributes.get("CHAT_OUTPUT")
+    # Return as a dictionary of all requested attributes
+    return data["features"][0]["attributes"]
+
+def relation_key(project_name: str) -> str:
+    """
+    Return 'DE_BOLSTONE' from inputs like:
+      - 'DE_BOLSTONE_2024'
+      - 'de_bolstone_2025_q2'
+      - 'DE__BOLSTONE__2024'
+    Rules: split on underscores/spaces, take first TWO non-empty parts, uppercased.
+    """
+    tokens = [t for t in re.split(r'[_\s]+', project_name.strip()) if t]
+    if len(tokens) < 2:
+        # If only one token, treat that as the key (edge case)
+        return tokens[0].upper() if tokens else ""
+    return f"{tokens[0].upper()}_{tokens[1].upper()}"
+
+def _escape_like_literal(s: str) -> str:
+    """
+    ArcGIS/SQL LIKE escapes: '_' matches one char, '%' matches many.
+    We want literal underscores from our key, so escape '_' and '%' and '\' itself.
+    """
+    s = s.replace("\\", "\\\\").replace("_", r"\_").replace("%", r"\%")
+    return s
+
+
+
+def get_related_projects(project_name: str) -> list[dict]:
+    """
+    Fetch ALL Project_index rows whose PROJECT_NAME starts with the relation key.
+    e.g., key 'DE_BOLSTONE' -> PROJECT_NAME LIKE 'DE\_BOLSTONE%'
+    Sorted by SURVEY_DATE desc (fallback ObjectId).
+    """
+    key = relation_key(project_name)
+    if not key:
+        return []
+
+    like_prefix = _escape_like_literal(key) + "%"  # e.g., 'DE\_BOLSTONE%'
+    where = f"PROJECT_NAME LIKE '{like_prefix}' ESCAPE '\\'"
+
+    url = "https://services-eu1.arcgis.com/8uHkpVrXUjYCyrO4/arcgis/rest/services/Project_index/FeatureServer/0/query"
+    params = {
+        "where": where,
+        "outFields": ",".join(FIELDS),
+        "returnGeometry": "false",
+        "f": "json",
+    }
+    r = requests.get(url, params=params, timeout=15)
+    r.raise_for_status()
+    data = r.json()
+    records = [f["attributes"] for f in data.get("features", [])]
+
+    # newest first by SURVEY_DATE (fallback ObjectId)
+    records.sort(key=lambda a: (a.get("SURVEY_DATE") or 0, a.get("ObjectId") or 0), reverse=True)
+    return records
+
+
+def are_related(a: str, b: str) -> bool:
+    """Quick check if two project names share the same relation key."""
+    return relation_key(a) == relation_key(b)
+
 
 #CRS data is aligned and the same 
 # def extract_geojson(service_url):
@@ -862,66 +941,96 @@ agent = initialize_agent(
 )
 
 # --------------------- Handle App process---------------------
-  
 @app.post("/process")
 async def process_request(request_data: RequestData):
     user_task = request_data.task.strip().lower()
     task_name = request_data.task_name
+
     if re.search(r"\b(clear|reset|cleanup|clean|wipe)\b", user_task):
         return await trigger_cleanup(task_name)
        
     if not is_geospatial_task(user_task):
-        return {
-            "status": "completed",
-            "message": "I haven't been programmed to do that"
-        }
-    # Generate a unique job ID
-    # job_id = str(uuid.uuid4())
-    # job_status[job_id] = {"status": "queued", "message": "Task is queued for processing"}
-    
-    do_gis_op= want_gis_task(user_task)
-    do_info = wants_additional_info(user_task)
+        return {"status": "completed", "message": "I haven't been programmed to do that"}
+
+    do_gis_op = want_gis_task(user_task)
+    do_info   = wants_additional_info(user_task)
+
+    # --- inline helpers (kept minimal) ---
+    def _fmt_date(ms):
+        if not ms:
+            return "unknown-date"
+        return datetime.fromtimestamp(ms/1000, tz=timezone.utc).strftime("%Y-%m-%d")
+
+    FIELDS = [
+        "PROJECT_NAME","ORTHOMOSAIC","TREE_CROWNS","TREE_TOPS","ObjectId","PREDICTION",
+        "CHAT_OUTPUT","USER_CROWNS","USER_TOPS","SURVEY_DATE","CrownSketch",
+        "CrownSketch_Predictions","CHAT_INPUT"
+    ]
+
+    # Build relation key from first two underscore-separated tokens
+    # e.g., "DE_BOLSTONE_2024" -> base_key "DE_BOLSTONE"
+    tokens = [t for t in re.split(r'[_\s]+', (task_name or "").strip()) if t]
+    if len(tokens) >= 2:
+        base_key = f"{tokens[0].upper()}_{tokens[1].upper()}"
+    elif tokens:
+        base_key = tokens[0].upper()
+    else:
+        base_key = ""
+
+    # Escape for LIKE (treat '_' literally) and make prefix
+    like_prefix = base_key.replace("\\", "\\\\").replace("_", r"\_").replace("%", r"\%") + "%"
+    where_clause = f"PROJECT_NAME LIKE '{like_prefix}' ESCAPE '\\'"
+
+    query_url = "https://services-eu1.arcgis.com/8uHkpVrXUjYCyrO4/arcgis/rest/services/Project_index/FeatureServer/0/query"
+    # ----------------------------------------------
 
     if do_gis_op and do_info:
         try:
-            tree_crowns_url, chat_output_url = get_project_urls(task_name)
-            if task_name in ["TT_GCW1_Summer", "TT_GCW1_Winter"]:
-                tree_crown_summer, _ = get_project_urls("TT_GCW1_Summer")
-                tree_crown_winter, _ = get_project_urls("TT_GCW1_Winter")
-            
-                # Fetch CRS for each relevant URL
-                # crs_current = fetch_crs(tree_crowns_url)
-                # crs_summer = fetch_crs(tree_crown_summer)
-                # crs_winter = fetch_crs(tree_crown_winter)
-                # (CRS: EPSG:{crs_current})
-                # (CRS: EPSG:{crs_summer})
-                #( CRS: EPSG:{crs_winter})
-                data_locations = [
-                    f"Tree crown geoJSON shape file: {tree_crowns_url}/0/query?where=1%3D1&outFields=*&f=geojson.",
-                    f"Before storm tree crown geoJSON: {tree_crown_summer}/0/query?where=1%3D1&outFields=*&f=geojson.",
-                    f"After storm tree crown geoJSON: {tree_crown_winter}/0/query?where=1%3D1&outFields=*&f=geojson."
-                ]
-            else:
-                # Fetch CRS for the single URL
-                # crs_current = fetch_crs(tree_crowns_url)
-                # (CRS: EPSG:{crs_current})
-                data_locations = [
-                    f"Tree crown geoJSON shape file: {tree_crowns_url}/0/query?where=1%3D1&outFields=*&f=geojson."
-                ]
-            # background_tasks.add_task(long_running_task, job_id, user_task, task_name, data_locations)
+            params = {
+                "where": where_clause,
+                "outFields": ",".join(FIELDS),
+                "returnGeometry": "false",
+                "f": "json",
+            }
+            r = requests.get(query_url, params=params, timeout=15)
+            r.raise_for_status()
+            data = r.json()
+            records = [f["attributes"] for f in data.get("features", [])]
+            if not records:
+                raise ValueError(f"No related projects found for '{task_name}'.")
+
+            # newest first by SURVEY_DATE (fallback ObjectId)
+            records.sort(key=lambda a: (a.get("SURVEY_DATE") or 0, a.get("ObjectId") or 0), reverse=True)
+
+            # Build data_locations for MULTI-DATE crowns + point input (prefer USER_TOPS)
+            data_locations = []
+            for attrs in records:
+                date_label = _fmt_date(attrs.get("SURVEY_DATE"))
+                crowns_url = attrs.get("TREE_CROWNS")
+                points_url = attrs.get("USER_TOPS") or attrs.get("TREE_TOPS")
+                if crowns_url:
+                    data_locations.append(
+                        f"Tree crown GeoJSON ({date_label}): {crowns_url}/0/query?where=1%3D1&outFields=*&f=geojson."
+                    )
+                if points_url:
+                    data_locations.append(
+                        f"Point input GeoJSON ({date_label}): {points_url}/0/query?where=1%3D1&outFields=*&f=geojson."
+                    )
+
             result = long_running_task(user_task, task_name, data_locations)
             message = result.get("message") if isinstance(result, dict) else str(result)
+
             reasoning_prompt = (
-                    f"User asked: {user_task}\n"
-                    f"Batch task results summary: {message}\n"
-                    "Use the GIS tools (soil, climate, tree health, etc.) to answer the user's question."
+                f"User asked: {user_task}\n"
+                f"Batch task results summary: {message}\n"
+                "Use the GIS tools (soil, climate, tree health, etc.) to answer the user's question."
             )
-            try:    
+            try:
                 reasoning_response = agent.run(reasoning_prompt)
                 combined_message = f"{message}\n\nAdditional Analysis:\n{reasoning_response}"
-            except Exception as e: 
-                combined_message= message
-            
+            except Exception:
+                combined_message = message
+
             return {
                 "status": "completed",
                 "message": combined_message,
@@ -930,38 +1039,41 @@ async def process_request(request_data: RequestData):
                     "content": result.get("tree_ids") if isinstance(result, dict) and "tree_ids" in result else message
                 }
             }
-            
-        # return {"status": "success", "job_id": job_id, "message": "Processing started..."}
-        except Exception as e:
+
+        except Exception:
             return {"status": "completed", "message": "Request not understood as a task requiring GIS operations or information."}
-    elif do_gis_op: 
-        
+
+    elif do_gis_op:
         try:
-            tree_crowns_url, chat_output_url = get_project_urls(task_name)
-            if task_name in ["TT_GCW1_Summer", "TT_GCW1_Winter"]:
-                tree_crown_summer, _ = get_project_urls("TT_GCW1_Summer")
-                tree_crown_winter, _ = get_project_urls("TT_GCW1_Winter")
-            
-                # Fetch CRS for each relevant URL
-                # crs_current = fetch_crs(tree_crowns_url)
-                # crs_summer = fetch_crs(tree_crown_summer)
-                # crs_winter = fetch_crs(tree_crown_winter)
-                # (CRS: EPSG:{crs_current})
-                # (CRS: EPSG:{crs_summer})
-                #( CRS: EPSG:{crs_winter})
-                data_locations = [
-                    f"Tree crown geoJSON shape file: {tree_crowns_url}/0/query?where=1%3D1&outFields=*&f=geojson.",
-                    f"Before storm tree crown geoJSON: {tree_crown_summer}/0/query?where=1%3D1&outFields=*&f=geojson.",
-                    f"After storm tree crown geoJSON: {tree_crown_winter}/0/query?where=1%3D1&outFields=*&f=geojson."
-                ]
-            else:
-                # Fetch CRS for the single URL
-                # crs_current = fetch_crs(tree_crowns_url)
-                # (CRS: EPSG:{crs_current})
-                data_locations = [
-                    f"Tree crown geoJSON shape file: {tree_crowns_url}/0/query?where=1%3D1&outFields=*&f=geojson."
-                ]
-            # background_tasks.add_task(long_running_task, job_id, user_task, task_name, data_locations)
+            params = {
+                "where": where_clause,
+                "outFields": ",".join(FIELDS),
+                "returnGeometry": "false",
+                "f": "json",
+            }
+            r = requests.get(query_url, params=params, timeout=15)
+            r.raise_for_status()
+            data = r.json()
+            records = [f["attributes"] for f in data.get("features", [])]
+            if not records:
+                raise ValueError(f"No related projects found for '{task_name}'.")
+
+            records.sort(key=lambda a: (a.get("SURVEY_DATE") or 0, a.get("ObjectId") or 0), reverse=True)
+
+            data_locations = []
+            for attrs in records:
+                date_label = _fmt_date(attrs.get("SURVEY_DATE"))
+                crowns_url = attrs.get("TREE_CROWNS")
+                points_url = attrs.get("USER_TOPS") or attrs.get("TREE_TOPS")
+                if crowns_url:
+                    data_locations.append(
+                        f"Tree crown GeoJSON ({date_label}): {crowns_url}/0/query?where=1%3D1&outFields=*&f=geojson."
+                    )
+                if points_url:
+                    data_locations.append(
+                        f"Point input GeoJSON ({date_label}): {points_url}/0/query?where=1%3D1&outFields=*&f=geojson."
+                    )
+
             result = long_running_task(user_task, task_name, data_locations)
             message = result.get("message") if isinstance(result, dict) else str(result)
 
@@ -973,10 +1085,10 @@ async def process_request(request_data: RequestData):
                     "content": result.get("tree_ids") if isinstance(result, dict) and "tree_ids" in result else message
                 }
             }
-        except Exception as e:
+        except Exception:
             return {"status": "completed", "message": "Request not understood as a GIS task."}
 
-    elif do_info: 
+    elif do_info:
         response = agent.run(user_task)
         return {"status": "completed", "response": response}
     
