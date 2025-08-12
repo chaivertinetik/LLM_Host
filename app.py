@@ -716,6 +716,8 @@ def long_running_task(user_task: str, task_name: str, data_locations: list):
 
 # === Simulated tools ===
 def get_geospatial_context_tool(coords: str) -> str:
+    #dynamically get based on map 
+    coords= 40.7128, -74.0060
     lat, lon = map(float, coords.split(","))
     context = get_geospatial_context(lat, lon)  # Your GEE function
     return json.dumps(context)
