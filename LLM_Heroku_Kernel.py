@@ -234,7 +234,8 @@ class Solution():
                     print(f"Attempt {count}: Generating response...")
             
                 # Call the model with the correct argument format
-                response = self.model.generate_content(prompt)  # Pass the prompt directly as a string
+                #prompt
+                response = self.model.generate_content(full_prompt)  # Pass the prompt directly as a string
                 isSucceed = True  # Successfully generated response
                 response_text = response.text  # Extract the text from the response
 
