@@ -4,7 +4,7 @@ import json
 import networkx as nx
 import vertexai
 import ee 
-from datetime import datetime, timezone, date
+import datetime
 import helper
 import time
 import LLM_Geo_Constants as constants
@@ -21,8 +21,6 @@ import autopep8
 import numpy as np
 import collections.abc
 import pandas as pd
-import logging
-import sys
 from vertexai.generative_models import GenerativeModel
 from vertexai.language_models import TextGenerationModel
 from google.oauth2 import service_account
@@ -68,29 +66,6 @@ credentials = service_account.Credentials.from_service_account_info(credentials_
 # service_account_email = credentials_data.get("client_email")
 # print(service_account_email)
 
-
-# -----Logging Setup ------
-
-
-logger = logging.getLogger("app")
-logger.setLevel(logging.INFO)
-handler = logging.StreamHandler(sys.stdout)
-handler.setFormatter(logging.Formatter("%(message)s"))  # one JSON line per event
-logger.handlers = [handler]
-
-def log_event(event: str, **fields):
-    payload = {
-        "ts": datetime.utcnow().isoformat(timespec="seconds") + "Z",
-        "event": event,
-        **fields,
-    }
-    # Avoid logging huge objects or secrets
-    for k in list(payload.keys()):
-        if k.lower() in {"google_credentials", "earth_credentials"}:
-            payload[k] = "[redacted]"
-    logger.info(json.dumps(payload, ensure_ascii=False))
-    
-
 # === Init Vertex AI ===
 vertexai.init(
     project="disco-parsec-444415-c4",
@@ -124,7 +99,7 @@ llm = GeminiLLM(model=model)
 
 
 # Global dictionary to track job statuses
-job_status: Dict[str, Dict[str, str]] = {}
+# job_status: Dict[str, Dict[str, str]] = {}
 
 # Load credentials from environment variable or file
 # def get_credentials():
@@ -138,10 +113,9 @@ job_status: Dict[str, Dict[str, str]] = {}
 # --------------------- ARC GIS UPDATE---------------------
 async def trigger_cleanup(task_name):
     project_name = task_name
-    attrs = get_project_urls(task_name)
-    target_url = attrs.get("CHAT_OUTPUT")
-    target_url = _norm_layer(target_url) 
+    tree_crowns_url, delete_url = get_project_urls(project_name)
     try:
+        target_url = delete_url
         query_url = f"{target_url}/0/query"
         delete_url = f"{target_url}/0/deleteFeatures"
         # Step 1: Get all existing OBJECTIDs
@@ -176,8 +150,8 @@ async def trigger_cleanup(task_name):
         raise HTTPException(status_code=500, detail=f"Cleanup failed: {str(e)}")
        
 @app.post("/clear")
-async def clear_state(req: RequestData):
-    return await trigger_cleanup(req.task_name)
+async def clear_state():
+    return await trigger_cleanup()
        
 def shapely_to_arcgis_geometry(geom):
     if geom.geom_type == "Polygon":
@@ -194,118 +168,22 @@ def shapely_to_arcgis_geometry(geom):
         raise ValueError(f"Unsupported geometry type: {geom.geom_type}")
 
 
-FIELDS = [
-    "PROJECT_NAME","ORTHOMOSAIC","TREE_CROWNS","TREE_TOPS","ObjectId","PREDICTION",
-    "CHAT_OUTPUT","USER_CROWNS","USER_TOPS","SURVEY_DATE","CrownSketch",
-    "CrownSketch_Predictions","CHAT_INPUT"
-]
-
-
-
 def get_project_urls(project_name):
     query_url = "https://services-eu1.arcgis.com/8uHkpVrXUjYCyrO4/arcgis/rest/services/Project_index/FeatureServer/0/query"
-    
-    # List of all fields you want from the service
-    fields = [
-        "PROJECT_NAME",
-        "ORTHOMOSAIC",
-        "TREE_CROWNS",
-        "TREE_TOPS",
-        "PREDICTION",
-        "CHAT_OUTPUT",
-        "USER_CROWNS",
-        "USER_TOPS",
-        "SURVEY_DATE",
-        "CrownSketch",
-        "CrownSketch_Predictions",
-        "CHAT_INPUT"
-    ]
-    
     params = {
         "where": f"PROJECT_NAME = '{project_name}'",
-        "outFields": ",".join(fields),
+        "outFields": "TREE_CROWNS,CHAT_OUTPUT",
         "f": "json",
     }
 
     response = requests.get(query_url, params=params, timeout=10)
-    response.raise_for_status()
     data = response.json()
 
     if not data.get("features"):
         raise ValueError(f"No project found with the name '{project_name}'.")
 
-    # Return as a dictionary of all requested attributes
-    return data["features"][0]["attributes"]
-
-def relation_key(project_name: str) -> str:
-    """
-    Return 'DE_BOLSTONE' from inputs like:
-      - 'DE_BOLSTONE_2024'
-      - 'de_bolstone_2025_q2'
-      - 'DE__BOLSTONE__2024'
-    Rules: split on underscores/spaces, take first TWO non-empty parts, uppercased.
-    """
-    tokens = [t for t in re.split(r'[_\s]+', project_name.strip()) if t]
-    if len(tokens) < 2:
-        # If only one token, treat that as the key (edge case)
-        return tokens[0].upper() if tokens else ""
-    return f"{tokens[0].upper()}_{tokens[1].upper()}"
-
-def _escape_like_literal(s: str) -> str:
-    """
-    ArcGIS/SQL LIKE escapes: '_' matches one char, '%' matches many.
-    We want literal underscores from our key, so escape '_' and '%' and '\' itself.
-    """
-    s = s.replace("\\", "\\\\").replace("_", r"\_").replace("%", r"\%")
-    return s
-
-def _norm_layer(u: str) -> str:
-    if not u: return u
-    u = u.rstrip('/')
-    # already has a layer id
-    if re.search(r'/FeatureServer/\d+$', u):
-        return u
-    # has FeatureServer root only
-    if u.endswith('/FeatureServer'):
-        return u + '/0'
-    return u  # leave as-is
-
-
-
-def get_related_projects(project_name: str) -> list[dict]:
-    """
-    Fetch ALL Project_index rows whose PROJECT_NAME starts with the relation key.
-    e.g., key 'DE_BOLSTONE' -> PROJECT_NAME LIKE 'DE\_BOLSTONE%'
-    Sorted by SURVEY_DATE desc (fallback ObjectId).
-    """
-    key = relation_key(project_name)
-    if not key:
-        return []
-
-    like_prefix = _escape_like_literal(key) + "%"  # e.g., 'DE\_BOLSTONE%'
-    where = f"PROJECT_NAME LIKE '{like_prefix}' ESCAPE '\\'"
-
-    url = "https://services-eu1.arcgis.com/8uHkpVrXUjYCyrO4/arcgis/rest/services/Project_index/FeatureServer/0/query"
-    params = {
-        "where": where,
-        "outFields": ",".join(FIELDS),
-        "returnGeometry": "false",
-        "f": "json",
-    }
-    r = requests.get(url, params=params, timeout=15)
-    r.raise_for_status()
-    data = r.json()
-    records = [f["attributes"] for f in data.get("features", [])]
-
-    # newest first by SURVEY_DATE (fallback ObjectId)
-    records.sort(key=lambda a: (a.get("SURVEY_DATE") or 0, a.get("ObjectId") or 0), reverse=True)
-    return records
-
-
-def are_related(a: str, b: str) -> bool:
-    """Quick check if two project names share the same relation key."""
-    return relation_key(a) == relation_key(b)
-
+    attributes = data["features"][0]["attributes"]
+    return attributes.get("TREE_CROWNS"), attributes.get("CHAT_OUTPUT")
 
 #CRS data is aligned and the same 
 # def extract_geojson(service_url):
@@ -392,9 +270,6 @@ def extract_geojson(url):
         if response.status_code == 200:
             geojson = response.json()
             gdf = gpd.GeoDataFrame.from_features(geojson["features"])
-            if gdf is None or gdf.empty:
-                print("No crowns returned; nothing to post.")
-                return
             return gdf
         else:
             print(f"Failed to fetch GeoJSON: {response.status_code}")
@@ -472,25 +347,22 @@ def delete_all_features(target_url):
     print("Delete response:", delete_response.json())
 
 def ensure_list(obj):
+    # Handle numpy scalars and standard scalars
     if isinstance(obj, (int, float, np.integer, np.floating)):
         return [obj]
+    # Handle numpy arrays and pandas Series
     elif isinstance(obj, (np.ndarray, pd.Series)):
         return obj.tolist()
+    # Handle other iterable types (list, tuple, set)
     elif isinstance(obj, collections.abc.Iterable) and not isinstance(obj, (str, bytes)):
         return list(obj)
-    elif obj is None:
-        return []
     else:
-        return [obj]
-
+        pass
 
 def filter(FIDS, project_name):
     print("Made it to the filter function") 
     FIDS = ensure_list(FIDS)
-
-    attrs = get_project_urls(project_name)
-    tree_crowns_url = attrs.get("TREE_CROWNS")
-    chat_output_url = attrs.get("CHAT_OUTPUT")
+    tree_crowns_url, chat_output_url = get_project_urls(project_name)
 
     if not tree_crowns_url or not chat_output_url:
         raise ValueError("Required URLs missing in Project Index.")
@@ -711,69 +583,6 @@ def want_gis_task(prompt: str) -> bool:
     # Fallback to GenAI classifier for ambiguous queries
     return wants_gis_task_genai(prompt)
 
-YEAR_RX = re.compile(r"\b(20\d{2})\b")
-
-def parse_year_from_text(text: str) -> int | None:
-    m = YEAR_RX.search(text)
-    return int(m.group(1)) if m else None
-
-def pick_project_for_year(task_name: str, year: int | None) -> dict | None:
-    # Use your relation_key() & get_related_projects() to list family members
-    records = get_related_projects(task_name)
-    if not records:
-        return None
-    if year is None:
-        # Fallback: current "task_name" year (last 4-digit year if present)
-        year = parse_year_from_text(task_name)
-
-    if year is not None:
-        start_ms = int(datetime(year, 1, 1, tzinfo=timezone.utc).timestamp() * 1000)
-        end_ms   = int(datetime(year, 12, 31, 23, 59, 59, tzinfo=timezone.utc).timestamp() * 1000)
-        candidates = [r for r in records if r.get("SURVEY_DATE") and start_ms <= int(r["SURVEY_DATE"]) <= end_ms]
-        if candidates:
-            # newest first is already sorted in get_related_projects(); take first match
-            return candidates[0]
-
-    # Fallback: first item (newest)
-    return records[0]
-    
-def sanitize_where_no_dates(sql: str) -> str:
-    if not sql:
-        return sql
-    # crude but effective: drop any clause that mentions SURVEY_DATE
-    return re.sub(r"\bSURVEY_DATE\b\s*[<>=!].*?(?:\bAND\b|\bOR\b|$)", "", sql, flags=re.IGNORECASE).strip().strip("AND ").strip("OR ")
-
-def get_sql_filter_from_llm(user_task: str, project_fields) -> tuple[str, str]:
-    """
-    Return (where_clause, explanation) or ("__SPATIAL__", reason)
-    """
-    prompt = f"""
-    You are an ArcGIS SQL generator.
-    Convert the user request into a WHERE clause for the crowns layer using ONLY these fields:
-    {', '.join(project_fields)}.
-
-    DO NOT reference dates or SURVEY_DATE in the WHERE clause. Dates are handled upstream on the project index.
-    If spatial analysis is required (not pure attribute filtering), return exactly __SPATIAL__.
-
-    User request: {user_task}
-    """
-    try:
-        raw = agent.run(prompt).strip()
-        data = json.loads(raw) if raw.startswith("{") else json.loads(re.search(r"\{.*\}$", raw, re.S).group(0))
-        where = str(data.get("where", "")).strip()
-        reason = str(data.get("reason", "")).strip()
-
-        # very basic guardrail
-        forbidden = [";", "--", "/*", "*/"]
-        if any(x in where for x in forbidden):
-            return "__SPATIAL__", "Blocked suspicious tokens in WHERE."
-        if not where:
-            return "__SPATIAL__", "LLM did not produce a WHERE clause."
-
-        return where, reason or "LLM attribute filter"
-    except Exception as e:
-        print(f"[LLM Filter Error] {e}")
-        return "__SPATIAL__", "LLM failed to produce a safe WHERE."
 
 def long_running_task(user_task: str, task_name: str, data_locations: list):
     try:
@@ -931,8 +740,8 @@ def check_soil_suitability(coords: str) -> str:
 
 def get_geospatial_context(lat=40.7128, lon=-74.0060):
     point = ee.Geometry.Point([lon, lat])
-    year = date.today().year
-    today = date.today()
+    year = datetime.date.today().year
+    today = datetime.date.today()
 
     # Try using current year
     try_start = ee.Date.fromYMD(year, 1, 1)
@@ -1053,146 +862,66 @@ agent = initialize_agent(
 )
 
 # --------------------- Handle App process---------------------
+  
 @app.post("/process")
 async def process_request(request_data: RequestData):
     user_task = request_data.task.strip().lower()
     task_name = request_data.task_name
-    log_event("process_request.start", task_name=task_name, user_task=user_task)
-    # Cleanup command check
     if re.search(r"\b(clear|reset|cleanup|clean|wipe)\b", user_task):
         return await trigger_cleanup(task_name)
-
+       
     if not is_geospatial_task(user_task):
-        return {"status": "completed", "message": "I haven't been programmed to do that"}
-
-    # Inline helpers
-    def _fmt_date(ms):
-        if not ms:
-            return "unknown-date"
-        return datetime.fromtimestamp(ms/1000, tz=timezone.utc).strftime("%Y-%m-%d")
-
-    # All fields from Project_index
-    FIELDS = [
-        "PROJECT_NAME","ORTHOMOSAIC","TREE_CROWNS","TREE_TOPS","ObjectId","PREDICTION",
-        "CHAT_OUTPUT","USER_CROWNS","USER_TOPS","SURVEY_DATE","CrownSketch",
-        "CrownSketch_Predictions","CHAT_INPUT"
-    ]
-
-    # --- Step 1: get attribute-only WHERE (no SURVEY_DATE) ---
-    crown_fields = ["Tree_ID","Species","Health","Height","Shape__Area","Shape__Length"]
-    sql_where, explanation = get_sql_filter_from_llm(user_task, crown_fields)
+        return {
+            "status": "completed",
+            "message": "I haven't been programmed to do that"
+        }
+    # Generate a unique job ID
+    # job_id = str(uuid.uuid4())
+    # job_status[job_id] = {"status": "queued", "message": "Task is queued for processing"}
     
-    if sql_where != "__SPATIAL__":
-        try:
-            year_hint = parse_year_from_text(user_task)
-            proj_attrs = pick_project_for_year(task_name, year_hint)
-            if not proj_attrs:
-                raise ValueError(f"No related projects found for '{task_name}'.")
-    
-            crowns_url = _norm_layer(proj_attrs.get("TREE_CROWNS"))
-            results_url = _norm_layer(proj_attrs.get("CHAT_OUTPUT"))
-            if not crowns_url or not results_url:
-                raise ValueError("TREE_CROWNS or CHAT_OUTPUT URL missing for selected project.")
-    
-            # Kill any SURVEY_DATE bits, just in case
-            sql_where = sanitize_where_no_dates(sql_where)
-            if not sql_where:
-                # ensure there's at least a tautology if the whole thing got stripped
-                sql_where = "1=1"
-    
-            # Query crowns for the chosen project/year using ONLY attribute filters
-            query_url = f"{crowns_url}/query"
-            filter_params = {"where": sql_where, "outFields": "*", "f": "geojson"}
-            qr = requests.get(query_url, params=filter_params, timeout=20)
-            qr.raise_for_status()
-            geojson = qr.json()
-            gdf = gpd.GeoDataFrame.from_features(geojson.get("features", []))
-    
-            if gdf.empty:
-                return {"status": "completed", "message": f"No matching features found in {proj_attrs.get('PROJECT_NAME')}. Filter: {explanation}"}
-    
-            delete_all_features(results_url)
-            post_features_to_layer(gdf, results_url)
-    
-            ids = gdf["Tree_ID"].astype(int).tolist() if "Tree_ID" in gdf else []
-            return {
-                "status": "completed",
-                "message": f"Posted {len(gdf)} features from {proj_attrs.get('PROJECT_NAME')}.\nFilter: {explanation}",
-                "response": {"role": "assistant", "content": ids}
-            }
-        except Exception as e:
-            return {"status": "error", "message": f"Fast path failed: {e}"}
-    
-    
-    # Heavy path setup — compute keys and flags
-    do_gis_op = want_gis_task(user_task)
-    do_info   = wants_additional_info(user_task)
-    
-    tokens = [t for t in re.split(r'[_\s]+', (task_name or '').strip()) if t]
-    if len(tokens) >= 2:
-        base_key = f"{tokens[0].upper()}_{tokens[1].upper()}"
-    elif tokens:
-        base_key = tokens[0].upper()
-    else:
-        base_key = ""
-    
-    like_prefix = base_key.replace("\\", "\\\\").replace("_", r"\_").replace("%", r"\%") + "%"
-    where_clause = f"PROJECT_NAME LIKE '{like_prefix}' ESCAPE '\\'"
-
-
-    query_url = "https://services-eu1.arcgis.com/8uHkpVrXUjYCyrO4/arcgis/rest/services/Project_index/FeatureServer/0/query"
-    # ----------------------------------------------
-    log_event("routing.decision", task_name=task_name, do_gis_op=do_gis_op, do_info=do_info)
+    do_gis_op= want_gis_task(user_task)
+    do_info = wants_additional_info(user_task)
 
     if do_gis_op and do_info:
         try:
-            params = {
-                "where": where_clause,
-                "outFields": ",".join(FIELDS),
-                "returnGeometry": "false",
-                "f": "json",
-            }
-            r = requests.get(query_url, params=params, timeout=15)
-            r.raise_for_status()
-            data = r.json()
-            records = [f["attributes"] for f in data.get("features", [])]
-            if not records:
-                raise ValueError(f"No related projects found for '{task_name}'.")
-
-            # newest first by SURVEY_DATE (fallback ObjectId)
-            records.sort(key=lambda a: (a.get("SURVEY_DATE") or 0, a.get("ObjectId") or 0), reverse=True)
-
-            # Build data_locations for MULTI-DATE crowns + point input (prefer USER_TOPS)
-            data_locations = []
-            for attrs in records:
-                date_label = _fmt_date(attrs.get("SURVEY_DATE"))
-                crowns_url = attrs.get("TREE_CROWNS")
-                points_url = attrs.get("USER_TOPS") or attrs.get("TREE_TOPS")
-                crowns = _norm_layer(crowns_url)
-                points = _norm_layer(points_url)
-                if crowns:
-                    data_locations.append(
-                        f"Tree crown GeoJSON ({date_label}): {crowns}/query?where=1%3D1&outFields=*&f=geojson."
-                    )
-                if points:
-                    data_locations.append(
-                        f"Point input GeoJSON ({date_label}): {points}/query?where=1%3D1&outFields=*&f=geojson."
-                    )
-
+            tree_crowns_url, chat_output_url = get_project_urls(task_name)
+            if task_name in ["TT_GCW1_Summer", "TT_GCW1_Winter"]:
+                tree_crown_summer, _ = get_project_urls("TT_GCW1_Summer")
+                tree_crown_winter, _ = get_project_urls("TT_GCW1_Winter")
+            
+                # Fetch CRS for each relevant URL
+                # crs_current = fetch_crs(tree_crowns_url)
+                # crs_summer = fetch_crs(tree_crown_summer)
+                # crs_winter = fetch_crs(tree_crown_winter)
+                # (CRS: EPSG:{crs_current})
+                # (CRS: EPSG:{crs_summer})
+                #( CRS: EPSG:{crs_winter})
+                data_locations = [
+                    f"Tree crown geoJSON shape file: {tree_crowns_url}/0/query?where=1%3D1&outFields=*&f=geojson.",
+                    f"Before storm tree crown geoJSON: {tree_crown_summer}/0/query?where=1%3D1&outFields=*&f=geojson.",
+                    f"After storm tree crown geoJSON: {tree_crown_winter}/0/query?where=1%3D1&outFields=*&f=geojson."
+                ]
+            else:
+                # Fetch CRS for the single URL
+                # crs_current = fetch_crs(tree_crowns_url)
+                # (CRS: EPSG:{crs_current})
+                data_locations = [
+                    f"Tree crown geoJSON shape file: {tree_crowns_url}/0/query?where=1%3D1&outFields=*&f=geojson."
+                ]
+            # background_tasks.add_task(long_running_task, job_id, user_task, task_name, data_locations)
             result = long_running_task(user_task, task_name, data_locations)
             message = result.get("message") if isinstance(result, dict) else str(result)
-
             reasoning_prompt = (
-                f"User asked: {user_task}\n"
-                f"Batch task results summary: {message}\n"
-                "Use the GIS tools (soil, climate, tree health, etc.) to answer the user's question."
+                    f"User asked: {user_task}\n"
+                    f"Batch task results summary: {message}\n"
+                    "Use the GIS tools (soil, climate, tree health, etc.) to answer the user's question."
             )
-            try:
+            try:    
                 reasoning_response = agent.run(reasoning_prompt)
                 combined_message = f"{message}\n\nAdditional Analysis:\n{reasoning_response}"
-            except Exception:
-                combined_message = message
-
+            except Exception as e: 
+                combined_message= message
+            
             return {
                 "status": "completed",
                 "message": combined_message,
@@ -1201,44 +930,38 @@ async def process_request(request_data: RequestData):
                     "content": result.get("tree_ids") if isinstance(result, dict) and "tree_ids" in result else message
                 }
             }
-
-        except Exception:
-            log_event("heavy_path.both_error", task_name=task_name, error=str(e))
+            
+        # return {"status": "success", "job_id": job_id, "message": "Processing started..."}
+        except Exception as e:
             return {"status": "completed", "message": "Request not understood as a task requiring GIS operations or information."}
-
-    elif do_gis_op:
+    elif do_gis_op: 
+        
         try:
-            params = {
-                "where": where_clause,
-                "outFields": ",".join(FIELDS),
-                "returnGeometry": "false",
-                "f": "json",
-            }
-            r = requests.get(query_url, params=params, timeout=15)
-            r.raise_for_status()
-            data = r.json()
-            records = [f["attributes"] for f in data.get("features", [])]
-            if not records:
-                raise ValueError(f"No related projects found for '{task_name}'.")
-
-            records.sort(key=lambda a: (a.get("SURVEY_DATE") or 0, a.get("ObjectId") or 0), reverse=True)
-
-            data_locations = []
-            for attrs in records:
-                date_label = _fmt_date(attrs.get("SURVEY_DATE"))
-                crowns_url = attrs.get("TREE_CROWNS")
-                points_url = attrs.get("USER_TOPS") or attrs.get("TREE_TOPS")
-                crowns = _norm_layer(crowns_url)
-                points = _norm_layer(points_url)
-                if crowns:
-                    data_locations.append(
-                        f"Tree crown GeoJSON ({date_label}): {crowns}/query?where=1%3D1&outFields=*&f=geojson."
-                    )
-                if points:
-                    data_locations.append(
-                        f"Point input GeoJSON ({date_label}): {points}/query?where=1%3D1&outFields=*&f=geojson."
-                    )
-
+            tree_crowns_url, chat_output_url = get_project_urls(task_name)
+            if task_name in ["TT_GCW1_Summer", "TT_GCW1_Winter"]:
+                tree_crown_summer, _ = get_project_urls("TT_GCW1_Summer")
+                tree_crown_winter, _ = get_project_urls("TT_GCW1_Winter")
+            
+                # Fetch CRS for each relevant URL
+                # crs_current = fetch_crs(tree_crowns_url)
+                # crs_summer = fetch_crs(tree_crown_summer)
+                # crs_winter = fetch_crs(tree_crown_winter)
+                # (CRS: EPSG:{crs_current})
+                # (CRS: EPSG:{crs_summer})
+                #( CRS: EPSG:{crs_winter})
+                data_locations = [
+                    f"Tree crown geoJSON shape file: {tree_crowns_url}/0/query?where=1%3D1&outFields=*&f=geojson.",
+                    f"Before storm tree crown geoJSON: {tree_crown_summer}/0/query?where=1%3D1&outFields=*&f=geojson.",
+                    f"After storm tree crown geoJSON: {tree_crown_winter}/0/query?where=1%3D1&outFields=*&f=geojson."
+                ]
+            else:
+                # Fetch CRS for the single URL
+                # crs_current = fetch_crs(tree_crowns_url)
+                # (CRS: EPSG:{crs_current})
+                data_locations = [
+                    f"Tree crown geoJSON shape file: {tree_crowns_url}/0/query?where=1%3D1&outFields=*&f=geojson."
+                ]
+            # background_tasks.add_task(long_running_task, job_id, user_task, task_name, data_locations)
             result = long_running_task(user_task, task_name, data_locations)
             message = result.get("message") if isinstance(result, dict) else str(result)
 
@@ -1251,11 +974,9 @@ async def process_request(request_data: RequestData):
                 }
             }
         except Exception as e:
-            log_event("heavy_path.both_error", task_name=task_name, error=str(e))
-            return {"status": "completed", "message": "Request not understood as a task requiring GIS operations or information."}
+            return {"status": "completed", "message": "Request not understood as a GIS task."}
 
-
-    elif do_info:
+    elif do_info: 
         response = agent.run(user_task)
         return {"status": "completed", "response": response}
     
