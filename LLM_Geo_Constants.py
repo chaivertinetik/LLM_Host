@@ -13,22 +13,7 @@ import configparser
 graph_role = r'''A professional Geo-information scientist and programmer good at Python. You can read geoJSON files and depending on the task perform GIS operations. You have worked on Geographic information science more than 20 years, and know every detail and pitfall when processing spatial data and coding. You know well how to set up workflows for spatial analysis tasks. You have significant experence on graph theory, application, and implementation. You are also experienced on generating map using Matplotlib and GeoPandas.
 '''
 
-graph_task_prefix = r'''
-You will be given a Python variable named data_locations (a list of human-readable strings).
-Each string contains a descriptive label and a GeoJSON FeatureServer layer URL, for example:
-
-"Tree crown GeoJSON (2025-07-12): https://example.com/FeatureServer/0"
-"Point input GeoJSON (2025-07-12): https://example.com/FeatureServer/0"
-
-These inputs may span multiple survey dates for the same related project family.
-The first two underscore-separated parts of the PROJECT_NAME indicate the related project group
-(e.g., DE_BOLSTONE_2024 and DE_BOLSTONE_2025 are part of the same family).
-
-Fields may include: "Health", "Tree_ID", "Species" ("Ash", "Field Maple", "Oak"),
-"SURVEY_DATE" (string or epoch ms), "Height", "Shape__Area", "Shape__Length".
-
-The goal is to produce a graph (NetworkX DiGraph) showing the steps and data needed to solve the user's task.
-'''
+graph_task_prefix = r'The geoJSON file has the following properties like: "Health" (either "Healthy" or "Unhealthy"), "Tree_ID", "Species" ("Ash", "Field Maple", "Oak"), "SURVEY_DATE" (format: Wed, 11 Sep 2024 00:00:00 GMT), "Height", "Shape__Area", "Shape__Length" and the final goal is to return the "Tree_ID" or text summary based on what the user wants. Generate a graph (data structure) only, whose nodes are (1) a series of consecutive steps and (2) data to solve this question: '
 #update the task prefix to include the potential for text or show_tree_id based prompts and the tree height, area and find a way to give meta data to the prompt. 
 #For the demo case
 # graph_reply_exmaple = r"""
@@ -62,19 +47,36 @@ G.add_edge("load_tree_crown_shp", "tree_crown_gdf")
 ...
 ```
 """
-graph_requirement = [
-    'Assume data_locations is provided at runtime; DO NOT hard-code URLs.',
-    'Parse the URL from each data_locations entry by splitting at ":" and stripping whitespace.',
-    'Preserve the date label from each entry (in parentheses) for provenance.',
-    'Load all crown layers across all available dates.',
-    'If both crowns and points exist for the same date, spatially relate them in the graph.',
-    'Prefer points from USER_TOPS over TREE_TOPS when both are available.',
-    'When comparing changes over time (e.g., storm damage, loss), align by Tree_ID and report differences between dates.',
-    'When computing tree volume, use Height * Shape__Area, aggregate per date, and compare differences.',
-    'Handle SURVEY_DATE values in both epoch ms and formatted string form; normalize to YYYY-MM-DD.',
-    'Node attributes must include: id, name, type, description, parameters, and data_path (the parsed URL).'
-]
+graph_requirement = [   
+                        'Think step by step.',
+                        'Steps and data (both input and output) form a graph stored in NetworkX. Disconnected components are NOT allowed.',
+                        'Each step is a data process operation: the input can be data paths or variables, and the output can be data paths or variables.',
+                        'There are two types of nodes: a) operation node, and b) data node (both input and output data). These nodes are also input nodes for the next operation node.',
+                        'The input of each operation is the output of the previous operations, except the those need to load data from a path or need to collect data.',
+                        'You need to carefully name the output data node, making they human readable but not to long.',
+                        'The data and operation form a graph.',
+                        'The first operations are data loading or collection, and the output of the last operation is the final answer to the task.'
+                        'Operation nodes need to connect via output data nodes, DO NOT connect the operation node directly.',
+                        'The node attributes include: 1) node_type (data or operation), 2) data_path (data node only, set to "" if not given ), and description. E.g., {‘name’: “County boundary”, “data_type”: “data”, “data_path”: “D:\Test\county.shp”,  “description”: “County boundary for the study area”}.',
+                        'If the user asks about the trees lost in a storm you need to compare the tree ids that survived before and after the storm from the two respective data sources',
+                        'To calculate volume of wood use "Height" * "Shape__Area"',
+                        'The connection between a node and an operation node is an edge.', 
+                        'Add all nodes and edges, including node attributes to a NetworkX instance, DO NOT change the attribute names.',
+                        'DO NOT generate code to implement the steps.',
+                        'Join the attribute to the vector layer via a common attribute if necessary.',
+                        #'Ensure the python code generated has no indentation errors and is properly indented.',
+                        'Ensure the location for saving the graph file is not commented out.',
+                        'Put your reply into a Python code block, NO explanation or conversation outside the code block(enclosed by ```python and ```).',
+                        'Note that GraphML writer does not support class dict or list as data values.',
+                        'You need spatial data (e.g., vector or raster) to make a map.',
+                        #'Do not put the GraphML writing process as a step in the graph.',
+                        'Keep the graph concise, DO NOT use too many operation nodes.',
+                        'Ensure the code has **consistent 4-space indentation**, with no unexpected or extra indents. Avoid the use of tabs, as this can lead to indentation errors.',
+                        'All lines should be properly aligned according to Python’s syntax rules.',
+                        'Specifically, the first four lines should not have any unintended indentation. Use Python ast.parse to verify that the code does not have any "IndentationError" or "SyntaxError" before returning it. Ensure that all code blocks, especially those with comments or function calls, are properly aligned and contain no extraneous spaces or tabs.'
+                        # 'Keep the graph concise, DO NOT over-split task into too many small steps, especially for simple problems. For example, data loading and data transformation/preprocessing should be in one operation node.',
 
+                         ]
 
 # other requirements prone to errors, not used for now
 """
@@ -87,23 +89,7 @@ graph_requirement = [
 operation_role = r'''A professional Geo-information scientist and programmer good at Python. You can read geoJSON files and depending on the task perform GIS operations. You have worked on Geographic information science more than 20 years, and know every detail and pitfall when processing spatial data and coding. You know well how to design and implement a function that meet the interface between other functions. Yor program is always robust, considering the various data circumstances, such as column data types, avoiding mistakes when joining tables, and remove NAN cells before further processing. You have an good feeling of overview, meaning the functions in your program is coherent, and they connect to each other well, such as function names, parameters types, and the calling orders. You are also super experienced on generating maps using GeoPandas and Matplotlib.
 '''
 
-operation_task_prefix = r'''
-Inputs are provided via the Python list variable data_locations as human-readable strings
-containing a label with a date and a URL. You must:
-
-- Parse the URL from each string (split at ":" and strip).
-- Keep the date label for provenance.
-- Load GeoJSON for all dates.
-- Prefer USER_TOPS over TREE_TOPS for points.
-- Perform spatial joins between points and crowns when needed.
-
-Properties may include: "Health", "Tree_ID", "Species",
-"SURVEY_DATE" (string "Wed, 11 Sep 2024 ..." or epoch ms),
-"Height", "Shape__Area", "Shape__Length".
-
-Return Tree_IDs when the user requests specific trees, otherwise return a text summary.
-Generate a complete Python function that performs the task.
-'''
+operation_task_prefix = r'The geoJSON file has the following properties like: "Health" (either "Healthy" or "Unhealthy"), "Tree_ID", "Species" ("Ash", "Field Maple", "Oak"), "SURVEY_DATE" (format: Wed, 11 Sep 2024 00:00:00 GMT), "Height", "Shape__Area", "Shape__Length"  and the final goal is to return the "Tree_ID" or text summary based on what the user wants. You need to generate a Python function to do: '
 
 #For the demo case
 # operation_reply_exmaple = """
@@ -125,18 +111,48 @@ return gpd.read_file(shp_path)
 ```
 """
 
-operation_requirement = [
-    "Expect multiple inputs via data_locations; extract URLs and date labels from each entry.",
-    "Normalize ArcGIS FeatureServer URLs: if they end with '/FeatureServer', append '/0' before '/query'.",
-    "Load crowns for all dates. When points are present for a date, spatially join points-to-crowns (ensuring same CRS).",
-    "Prefer USER_TOPS over TREE_TOPS when both exist.",
-    "When comparing between dates, align on 'Tree_ID' and deduplicate within each date.",
-    "Handle SURVEY_DATE supplied as epoch ms or string; convert to YYYY-MM-DD.",
-    "Project to a metric CRS (EPSG:27700 or suitable UTM) before area/distance/buffer calculations.",
-    "Never hard-code URLs; use only those from data_locations.",
-    "Never access the internet beyond the provided URLs."
-]
+operation_requirement = [                         
+                        'DO NOT change the given variable names and paths.',
+                        'Put your reply into a Python code block(enclosed by ```python and ```), NO explanation or conversation outside the code block.',
+                        'If using GeoPandas to load a zipped ESRI shapefile from a URL, the correct method is "gpd.read_file(URL)". DO NOT download and unzip the file.',
+                        # "Generate descriptions for input and output arguments.",
+                        'Ensure all comments and descriptions use # and are single line.',
+                        "You need to receive the data from the functions, DO NOT load in the function if other functions have loaded the data and returned it in advance.",
+                        # "Note module 'pandas' has no attribute or method of 'StringIO'",
+                        "Use the latest Python modules and methods.",
+                        "When doing spatial analysis, convert the involved spatial layers into the same map projection, if they are not in the same projection.",
+                        # "DO NOT reproject or set spatial data(e.g., GeoPandas Dataframe) if only one layer involved.",
+                        "Map projection conversion is only conducted for spatial data layers such as GeoDataFrame. DataFrame loaded from a CSV file does not have map projection information.",
+                        "If join DataFrame and GeoDataFrame, using common columns, DO NOT convert DataFrame to GeoDataFrame.",
+                        "If the user asks about the trees lost in a storm you need to compare the tree ids that survived before and after the storm from the two respective data sources",
+                        "When working with GeoPandas, never assume a row (Series) has a .crs attribute. Always get the CRS from the parent GeoDataFrame (gdf.crs).",
+                        "When reprojecting geometries in GeoPandas, only use .to_crs() on a GeoSeries or GeoDataFrame object, never on a single geometry (like a Polygon or Point). If you have a single geometry, first wrap it in a GeoSeries.",
+                        "Before performing any distance-based spatial operations, reproject all geometries to a projected CRS with metric units (e.g., EPSG:27700 or the appropriate UTM zone), if they are not already. To find features within a specified distance from a target feature, compute pairwise distances using: gdf['distance_to_target'] = gdf.geometry.distance(target_geom) Then filter using: within_range = gdf[(gdf['distance_to_target'] <= max_distance) & (gdf.index != target_idx)]Replace max_distance with the desired threshold (e.g., 30). Avoid using geographic (lat/lon) coordinates or geodesic methods unless specifically required.",
+                        "Always calculate distances between geometries in GeoPandas using .distance() after projecting the geometries to a projected CRS with metric units (e.g., EPSG:27700 or UTM).",
+                        "All spatial joins, overlays, and cross-layer operations must use layers that share the exact same CRS. Reproject one or both layers using .to_crs() as needed before performing the operation.",
+                        "Check the CRS of every GeoDataFrame before performing any spatial operation. If the CRS is geographic (e.g., EPSG:4326), reproject it to a metric-based CRS (e.g., EPSG:27700 or UTM). Never perform buffer, distance, or area calculations in a geographic CRS, as this will produce incorrect or empty results.",
+                        "If a GeoDataFrame or GeoSeries is missing CRS information, set it only if you know the true CRS from data context using .set_crs(). Never use .to_crs() on data with undefined CRS. Use .to_crs() only to convert between known coordinate systems.",
+                        "When constructing a GeoSeries or GeoDataFrame from individual or raw geometries, always assign the CRS from the source or parent GeoDataFrame to avoid errors from undefined or inconsistent spatial references.",
+                        # "When joining tables, convert the involved columns to string type without leading zeros. ",
+                        # "When doing spatial joins, remove the duplicates in the results. Or please think about whether it needs to be removed.",
+                        # "If using colorbar for GeoPandas or Matplotlib visulization, set the colorbar's height or length as the same as the plot for better layout.",
+                        "Graphs or maps need to show the unit, legend, or colorbar.",
+                        "Keep the needed table columns for the further steps.",
+                        "Remember the variable, column, and file names used in ancestor functions when using them, such as joining tables or calculating.",                        
+                        # "When crawl the webpage context to ChatGPT, using Beautifulsoup to crawl the text only, not all the HTML file.",
+                        "If using GeoPandas for spatial analysis, when doing overlay analysis, carefully think about use Geopandas.GeoSeries.intersects() or geopandas.sjoin(). ",
+                        "Geopandas.GeoSeries.intersects(other, align=True) returns a Series of dtype('bool') with value True for each aligned geometry that intersects other. other:GeoSeries or geometric object. ",
+                        "If using GeoPandas for spatial joining, the arguements are: geopandas.sjoin(left_df, right_df, how='inner', predicate='intersects', lsuffix='left', rsuffix='right', **kwargs), how: the type of join, default ‘inner’, means use intersection of keys from both dfs while retain only left_df geometry column. If 'how' is 'left': use keys from left_df; retain only left_df geometry column, and similarly when 'how' is 'right'. ",
+                        "Note geopandas.sjoin() returns all joined pairs, i.e., the return could be one-to-many. E.g., the intersection result of a polygon with two points inside it contains two rows; in each row, the polygon attributes are the same. If you need of extract the polygons intersecting with the points, please remember to remove the duplicated rows in the results.",
 
+                        "DO NOT use 'if __name__ == '__main__:' statement because this program needs to be executed by exec().",
+                        "Use the Python built-in functions or attribute. If you do not remember, DO NOT make up fake ones, just use alternative methods.",
+                        "Pandas library has no attribute or method 'StringIO', so 'pd.compat.StringIO' is wrong, you need to use 'io.StringIO' instead.",
+                        "Before using Pandas or GeoPandas columns for further processing (e.g. join or calculation), drop recoreds with NaN cells in those columns, e.g., df.dropna(subset=['XX', 'YY']).",
+                        "When read FIPS or GEOID columns from CSV files, read those columns as str or int, never as float.",
+                        "FIPS or GEOID columns may be str type with leading zeros (digits: state: 2, county: 5, tract: 11, block group: 12), or integer type without leading zeros. Thus, when joining they, you can convert the integer column to str type with leading zeros to ensure the success.",
+                        "If you need to make a map and the map size is not given, set the map size to 15*10 inches.",
+                        ]
 # other requirements prone to errors, not used for now
 """
 If joining FIPS or GEOID, need to fill the leading zeros (digits: state: 2, county: 5, tract: 11, block group: 12.
@@ -152,24 +168,25 @@ If joining FIPS or GEOID, need to fill the leading zeros (digits: state: 2, coun
 assembly_role =  r'''A professional Geo-information scientist and programmer good at Python. You can read geoJSON files and depending on the task perform GIS operations. You have worked on Geographic information science more than 20 years, and know every detail and pitfall when processing spatial data and coding. Your are very good at assembling functions and small programs together. You know how to make programs robust.
 '''
 
-assembly_requirement = [
-    "You can think step by step.",
-    "Each function is one step to solve the question.",
-    "The output of the final function is the answer to the question.",
-    "Put your reply in a code block (enclosed by ```python and ```), with no explanation outside the code block.",
-    "Ensure all comments and descriptions use # and are single line.",
-    "Use consistent 4-space indentation.",
-    "The final result should be assigned to the variable 'result'.",
-    "Inputs are from data_locations (label + URL). Parse URLs and keep the date labels.",
-    "Prefer USER_TOPS over TREE_TOPS; join points to crowns per date as needed.",
-    "Normalize SURVEY_DATE to YYYY-MM-DD regardless of format.",
-    "For storm/loss tasks, compare crown sets by date; for volume, compute Height * Shape__Area per date.",
-    "Save any generated maps using matplotlib.pyplot.savefig(...).",
-    "Wrap the program in a function named 'assembely_solution()' and call it to set result, e.g., result = assembely_solution().",
-    "Do not hard-code URLs; rely on parsed URLs from data_locations only.",
-    "Use only built-in and standard scientific Python libraries already available; no extra network calls."
-]
-
+assembly_requirement = ['You can think step by step. ',
+                    f"Each function is one step to solve the question. ",
+                    f"The output of the final function is the question to the question.",
+                    f"Put your reply in a code block(enclosed by ```python and ```), NO explanation or conversation outside the code block.",  
+                    f"Ensure all comments and descriptions use # and are single line.",
+                    f"Please generate Python code with consistent indentation using 4 spaces per indentation level. Ensure that all code blocks, including functions, loops, and conditionals, are properly indented to reflect their logical structure. Avoid using tabs or inconsistent spacing.",
+                    f"The final result of the assembly program should return the 'Tree_ID' that match the criteria given by the user or the output summary if the user wants a text response and not a visual output.",
+                    f"The geoJSON file has the following properties: 'Health' (either 'Healthy' or 'Unhealthy'), 'Tree_ID', 'Species' ('Ash', 'Field Maple', 'Oak'), 'SURVEY_DATE' (format: Wed, 11 Sep 2024 00:00:00 GMT), 'Height', 'Shape__Area', 'Shape__Length'.",
+                    f"Save final maps, if any. If use matplotlib, the function is: matplotlib.pyplot.savefig(*args, **kwargs).",
+                    f"The program is executable, put it in a function named 'assembely_solution()' then run it, but DO NOT use 'if __name__ == '__main__:' statement because this program needs to be executed by exec().",
+                    "The program should assign the final result by calling 'result = assembely_solution()' after defining the function, so the result is stored in a variable named 'result' in the global namespace.",
+                    "The result variable in most cases will store the tree ids if the user wants to see trees based on a condition or if the user asks a question like what volume of trees were lost, the result variable should include the text response of whatever output the code generates (volume of trees in this case).",
+                    "When defining functions, do not set a default value for a parameter using a variable (like 'tree_gdf=tree_gdf') unless that variable is already defined at the time the function is defined. Instead, require the value to be passed when the function is called.",
+                    "Use the built-in functions or attribute, if you do not remember, DO NOT make up fake ones, just use alternative methods.",
+                    # "Drop rows with NaN cells, i.e., df.dropna(),  before using Pandas or GeoPandas columns for processing (e.g. join or calculation).",
+                    "If using GeoPandas for spatial analysis, when doing overlay analysis, carefully think about use Geopandas.GeoSeries.intersects() or geopandas.sjoin(). ",
+                    "Geopandas.GeoSeries.intersects(other, align=True) returns a Series of dtype('bool') with value True for each aligned geometry that intersects other. other:GeoSeries or geometric object. ",
+                    "Note geopandas.sjoin() returns all joined pairs, i.e., the return could be one-to-many. E.g., the intersection result of a polygon with two points inside it contains two rows; in each row, the polygon attribute is the same. If you need of extract the polygons intersecting with the points, please remember to remove the duplicated rows in the results.",
+                    ]
 
 #--------------- constants for direct request prompt generation  ---------------
 direct_request_role = r'''A professional Geo-information scientist and programmer good at Python. You have worked on Geographic information science more than 20 years, and know every detail and pitfall when processing spatial data and coding. Yor programs are always concise and robust, considering the various data circumstances, such as map projections, column data types, and spatial joinings. You are also super experienced on generating map.
@@ -344,4 +361,3 @@ sampling_data_requirement = [
  
                         #
                         ]
-
