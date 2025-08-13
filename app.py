@@ -113,7 +113,8 @@ llm = GeminiLLM(model=model)
 # --------------------- ARC GIS UPDATE---------------------
 async def trigger_cleanup(task_name):
     project_name = task_name
-    tree_crowns_url, delete_url = get_project_urls(project_name)
+    attrs = get_project_urls(task_name)
+    delete_url = attrs.get("CHAT_OUTPUT")
     try:
         target_url = delete_url
         query_url = f"{target_url}/0/query"
@@ -170,20 +171,38 @@ def shapely_to_arcgis_geometry(geom):
 
 def get_project_urls(project_name):
     query_url = "https://services-eu1.arcgis.com/8uHkpVrXUjYCyrO4/arcgis/rest/services/Project_index/FeatureServer/0/query"
+    
+    # List of all fields you want from the service
+    fields = [
+        "PROJECT_NAME",
+        "ORTHOMOSAIC",
+        "TREE_CROWNS",
+        "TREE_TOPS",
+        "PREDICTION",
+        "CHAT_OUTPUT",
+        "USER_CROWNS",
+        "USER_TOPS",
+        "SURVEY_DATE",
+        "CrownSketch",
+        "CrownSketch_Predictions",
+        "CHAT_INPUT"
+    ]
+    
     params = {
         "where": f"PROJECT_NAME = '{project_name}'",
-        "outFields": "TREE_CROWNS,CHAT_OUTPUT",
+        "outFields": ",".join(fields),
         "f": "json",
     }
 
     response = requests.get(query_url, params=params, timeout=10)
+    response.raise_for_status()
     data = response.json()
 
     if not data.get("features"):
         raise ValueError(f"No project found with the name '{project_name}'.")
 
-    attributes = data["features"][0]["attributes"]
-    return attributes.get("TREE_CROWNS"), attributes.get("CHAT_OUTPUT")
+    # Return as a dictionary of all requested attributes
+    return data["features"][0]["attributes"]
 
 #CRS data is aligned and the same 
 # def extract_geojson(service_url):
@@ -362,7 +381,10 @@ def ensure_list(obj):
 def filter(FIDS, project_name):
     print("Made it to the filter function") 
     FIDS = ensure_list(FIDS)
-    tree_crowns_url, chat_output_url = get_project_urls(project_name)
+
+    attrs = get_project_urls(project_name)
+    tree_crowns_url = attrs.get("TREE_CROWNS")
+    chat_output_url = attrs.get("CHAT_OUTPUT")
 
     if not tree_crowns_url or not chat_output_url:
         raise ValueError("Required URLs missing in Project Index.")
