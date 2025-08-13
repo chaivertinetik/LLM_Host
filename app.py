@@ -37,7 +37,7 @@ from pydantic import BaseModel
 from langchain.agents import initialize_agent, Tool
 from langchain.agents.agent_types import AgentType
 from langchain_core.language_models import LLM
-
+from google.cloud import firestore 
 
 # --------------------- Setup FASTAPI app ---------------------
 # Initialize FastAPI app
@@ -54,6 +54,7 @@ app.add_middleware(
 class RequestData(BaseModel):
     task: str = "No task provided."
     task_name: str = "default_task"
+    session_id: str
 
 # --------------------- SETUP and INIT---------------------
 
@@ -79,7 +80,7 @@ with open(key_path, 'w') as f:
     f.write(os.environ['EARTH_CREDENTIALS'])
 earth_credentials= ee.ServiceAccountCredentials(SERVICE_ACCOUNT, key_path)
 ee.Initialize(earth_credentials, project='disco-parsec-444415-c4')
-
+db = firestore.Client()
 # --------------------- GIS CODE AGENT WRAPPER ---------------------
 
 class GeminiLLM(LLM):
@@ -107,6 +108,23 @@ llm = GeminiLLM(model=model)
 #     return service_account.Credentials.from_service_account_info(credentials_info)
 
 
+def load_history(session_id:str, max_turns=10):
+        doc= db.collection("chat_histories").document(session_id).get()
+        history= doc.to_dict().get("history", []) if doc.exists else []
+        return history[ -2* max_turns:]
+    
+def save_history(session_id: str, history: list): 
+    db.collection("chat_histories").document(session_id).set({"history": history})
+        
+def build_conversation_prompt(self, new_user_prompt, history, max_turns=10):
+    recent= history[-2*max_turns]
+        # Get last N user+assistant pairs (so 2N total entries)
+    prompt_text = ""
+    for entry in recent:
+        prefix = "User: " if entry['role'] == 'user' else "Assistant: "
+        prompt_text += f"{prefix}{entry['content']}\n"
+    prompt_text += f"User: {new_user_prompt}\nAssistant:"
+    return prompt_text
 
 
 
@@ -626,7 +644,8 @@ def long_running_task(user_task: str, task_name: str, data_locations: list):
             task=user_task,
             task_name=task_name,
             save_dir=save_dir,
-            data_locations=data_locations,
+            data_locations=data_locations
+    
         )
 
         # Generate solution graph
@@ -865,11 +884,7 @@ tools = [
         func=get_geospatial_context_tool,
         description="Returns NDVI, precipitation, temperature, soil moisture, land cover, and elevation for given coordinates"
     ),
-    Tool(name="ClimateData", func=get_climate_info, description="Returns climate risk..."),
-    Tool(name="PopulationStats", func=get_population_info, description="Returns population density..."),
-    Tool(name="TreeHealthCheck", func=check_tree_health, description="Assesses existing tree health at given coordinates"),
-    Tool(name="TreeBenefitAssessment", func=assess_tree_benefit, description="Estimates environmental impact of planting trees"),
-    Tool(name="SoilSuitability", func=check_soil_suitability, description="Checks soil type, pH, and suitability for tree planting")
+    Tool(name="TreeBenefitAssessment", func=assess_tree_benefit, description="Estimates environmental impact of planting trees")
     # gis_batch_tool
 ]
 
@@ -891,10 +906,17 @@ agent = initialize_agent(
 async def process_request(request_data: RequestData):
     user_task = request_data.task.strip().lower()
     task_name = request_data.task_name
+    session_id = request_data.session_id
     if re.search(r"\b(clear|reset|cleanup|clean|wipe)\b", user_task):
         return await trigger_cleanup(task_name)
        
-    if not is_geospatial_task(user_task):
+    
+    history = load_history(session_id, max_turns=10)
+    full_context = build_conversation_prompt(user_task, history) 
+    if not is_geospatial_task(full_context):
+        history.append({'role': 'user', 'content': user_task})
+        history.append({'role': 'assistant', 'content': "Not programmed to do that."})
+        save_history(session_id, history)
         return {
             "status": "completed",
             "message": "I haven't been programmed to do that"
@@ -933,18 +955,24 @@ async def process_request(request_data: RequestData):
                     f"Tree crown geoJSON shape file: {tree_crowns_url}/0/query?where=1%3D1&outFields=*&f=geojson."
                 ]
             # background_tasks.add_task(long_running_task, job_id, user_task, task_name, data_locations)
-            result = long_running_task(user_task, task_name, data_locations)
+            result = long_running_task(user_task, task_name, data_locations, session_id)
             message = result.get("message") if isinstance(result, dict) else str(result)
             reasoning_prompt = (
                     f"User asked: {user_task}\n"
                     f"Batch task results summary: {message}\n"
                     "Use the GIS tools (soil, climate, tree health, etc.) to answer the user's question."
             )
+            full_context = build_conversation_prompt(reasoning_prompt, history) 
+            
             try:    
-                reasoning_response = agent.run(reasoning_prompt)
+                reasoning_response = agent.run(full_context)
+                
                 combined_message = f"{message}\n\nAdditional Analysis:\n{reasoning_response}"
             except Exception as e: 
                 combined_message= message
+            history.append({'role': 'user', 'content': user_task})
+            history.append({'role': 'assistant', 'content': combined_message})
+            save_history(session_id, history)
             
             return {
                 "status": "completed",
@@ -986,9 +1014,13 @@ async def process_request(request_data: RequestData):
                     f"Tree crown geoJSON shape file: {tree_crowns_url}/0/query?where=1%3D1&outFields=*&f=geojson."
                 ]
             # background_tasks.add_task(long_running_task, job_id, user_task, task_name, data_locations)
-            result = long_running_task(user_task, task_name, data_locations)
+            result = long_running_task(full_context, task_name, data_locations, session_id)
             message = result.get("message") if isinstance(result, dict) else str(result)
-
+            
+            history.append({'role': 'assistant', 'content': user_task})
+            history.append({'role': 'assistant', 'content': message})
+            save_history(session_id, history)
+            
             return {
                 "status": "completed",
                 "message": message,
@@ -1001,7 +1033,10 @@ async def process_request(request_data: RequestData):
             return {"status": "completed", "message": "Request not understood as a GIS task."}
 
     elif do_info: 
-        response = agent.run(user_task)
+        response = agent.run(full_context)
+        history.append({'role': 'assistant', 'content': user_task})
+        history.append({'role': 'assistant', 'content': response})
+        save_history(session_id, history)
         return {"status": "completed", "response": response}
     
     return {"status": "completed", "message": "Request not understood as a task requiring geospatial data."}
@@ -1017,3 +1052,6 @@ async def get_status(job_id: str):
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=int(os.environ.get("PORT", 8080)))
+
+
+
