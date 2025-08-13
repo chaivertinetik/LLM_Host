@@ -83,7 +83,6 @@ class Solution():
         # {node_name: "", function_descption: "", function_definition:"", return_line:""
         # operation_prompt:"", operation_code:""}
         self.assembly_prompt = ""
-
         self.parent_solution = None
         self.model_name = "gemini-2.0-flash-001"
         self.model = GenerativeModel("gemini-2.0-flash-001")
@@ -92,9 +91,7 @@ class Solution():
         self.assembly_LLM_response = ""
         self.code_for_assembly = ""
         self.graph_prompt = ""
-
         self.data_locations_str = '\n'.join([f"{idx + 1}. {line}" for idx, line in enumerate(self.data_locations)])
-
         # Example Graph Requirement (you might need to update this with your constants module)
         graph_requirement = constants.graph_requirement.copy()
         graph_requirement.append(f"Save the network into GraphML format, save it at: {self.graph_file}")
@@ -199,15 +196,6 @@ class Solution():
         # You can reinitialize the model here if needed, e.g.,
         # self.model = initialize_model()
 
-    def build_conversation_prompt(self, new_user_prompt, max_turns=10):
-        history = self.chat_history[-2*max_turns:]  # Get last N user+assistant pairs (so 2N total entries)
-        prompt_text = ""
-        for entry in history:
-            prefix = "User: " if entry['role'] == 'user' else "Assistant: "
-            prompt_text += f"{prefix}{entry['content']}\n"
-        prompt_text += f"User: {new_user_prompt}\nAssistant:"
-        return prompt_text
-
     def get_LLM_reply(self,
                   prompt,
                   verbose=True,
@@ -222,9 +210,6 @@ class Solution():
             system_role = self.role
         count = 0
         isSucceed = False
-        full_prompt= self.build_conversation_prompt(prompt, max_turns=history_turns)
-                      
-        
         response_text = ""
         sleep_time = sleep_sec 
         while not isSucceed and count < retry_cnt:
@@ -235,7 +220,7 @@ class Solution():
             
                 # Call the model with the correct argument format
                 #prompt
-                response = self.model.generate_content(full_prompt)  # Pass the prompt directly as a string
+                response = self.model.generate_content(prompt)  # Pass the prompt directly as a string
                 isSucceed = True  # Successfully generated response
                 response_text = response.text  # Extract the text from the response
 
@@ -251,10 +236,6 @@ class Solution():
         if not isSucceed:
             raise RuntimeError("Failed to get a response from the model after multiple retries.")
         
-        self.chat_history.append({'role': 'user', 'content': prompt})
-        # Save the generated response to chat history
-        self.chat_history.append({'role': 'assistant', 'content': response_text})
-
         if verbose:
             print(f"\nResponse:\n{response_text}\n")
 
