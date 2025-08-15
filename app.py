@@ -758,7 +758,7 @@ def long_running_task(user_task: str, task_name: str, data_locations: list):
 # === Simulated tools ===
 def get_geospatial_context_tool(coords: str) -> str:
     #dynamically get based on map 
-    
+    coords= "40.7128,-74.0060"
     lat, lon = map(float, coords.split(","))
     context = get_geospatial_context(lat, lon)  # Your GEE function
     return json.dumps(context)
@@ -785,7 +785,7 @@ def get_climate_info(coords: str = "40.7128,-74.0060") -> str:
     temperature = context.get("Temperature (°C)", 0)
     ndvi = context.get("NDVI (mean)", 0)
 
-    flood_risk = "High" if precipitation is"40.7128,-74.0060"> 1000 else "Moderate" if precipitation > 500 else "Low"
+    flood_risk = "High" if precipitation = "40.7128,-74.0060"> 1000 else "Moderate" if precipitation > 500 else "Low"
     sea_level_rise_estimate_m = 1.2  # Placeholder: for real, integrate NOAA data externally
 
     climate_msg = (f"Climate summary at {coords}:\n"
@@ -824,7 +824,7 @@ def assess_tree_benefit(coords: str = "40.7128,-74.0060") -> dict:
         "Reference Data": geo
     }
 
-def check_soil_suitability(coords: str = "40.7128,-74.0060") -> str:
+def check_soil_suitability(coords: str) -> str:
     context_json = get_geospatial_context_tool(coords)
     context = json.loads(context_json)
     
