@@ -785,7 +785,7 @@ def get_climate_info(coords: str = "40.7128,-74.0060") -> str:
     temperature = context.get("Temperature (°C)", 0)
     ndvi = context.get("NDVI (mean)", 0)
 
-    flood_risk = "High" if precipitation = "40.7128,-74.0060"> 1000 else "Moderate" if precipitation > 500 else "Low"
+    flood_risk = "High" if precipitation > 1000 else "Moderate" if precipitation > 500 else "Low"
     sea_level_rise_estimate_m = 1.2  # Placeholder: for real, integrate NOAA data externally
 
     climate_msg = (f"Climate summary at {coords}:\n"
