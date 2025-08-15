@@ -1021,7 +1021,7 @@ async def process_request(request_data: RequestData):
             history.append({'role': 'assistant', 'content': message})
             save_history(session_id, history)
             
-            return {
+            return { 
                 "status": "completed",
                 "message": message,
                 "response": {
@@ -1052,5 +1052,7 @@ async def get_status(job_id: str):
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=int(os.environ.get("PORT", 8080)))
+
+#teest
 
 
