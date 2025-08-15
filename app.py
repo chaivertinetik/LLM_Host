@@ -679,7 +679,7 @@ def long_running_task(user_task: str, task_name: str, data_locations: list):
         assembly_LLM_response = solution.get_LLM_assembly_response(review=False)
         solution.assembly_LLM_response = assembly_LLM_response
         solution.save_solution()
-
+        
         # Run the generated code
         #gemini-1.5-flash-002
         model = GenerativeModel("gemini-2.0-flash-001")
@@ -747,7 +747,7 @@ def long_running_task(user_task: str, task_name: str, data_locations: list):
                     "message": str(result)
                 }
         
-
+     
     except Exception as e:
         print(f"Error during execution: {e}")
         #job_status[job_id] = {"status": "failed", "message": str(e)}
@@ -758,28 +758,91 @@ def long_running_task(user_task: str, task_name: str, data_locations: list):
 # === Simulated tools ===
 def get_geospatial_context_tool(coords: str) -> str:
     #dynamically get based on map 
-    coords= 40.7128, -74.0060
+    
     lat, lon = map(float, coords.split(","))
     context = get_geospatial_context(lat, lon)  # Your GEE function
     return json.dumps(context)
     
-def get_zoning_info(coords: str) -> str:
-    return f"Zoning: Residential permitted, max height 50ft at {coords}"
+def get_zoning_info(coords: str = "40.7128,-74.0060") -> str:
+    # Since zoning isn't directly in Earth Engine data, we use land cover and forest loss as proxy
+    context_json = get_geospatial_context_tool(coords)
+    context = json.loads(context_json)
 
-def get_climate_info(coords: str) -> str:
-    return f"Climate: High flood risk zone, sea-level rise of 1.2m expected at {coords}"
-
-def get_population_info(coords: str) -> str:
-    return f"Population: 11,000 people/km² at {coords}"
+    land_cover = context.get("Land Cover Class (ESA)", "Unknown")
+    forest_loss_year = context.get("Forest Loss Year (avg)", "N/A")
     
-def check_tree_health(coords: str) -> str:
-    return f"Tree Health: Moderate tree cover, signs of drought stress at {coords}"
+    zoning_msg = f"Land cover class: {land_cover}."
+    if forest_loss_year != 'N/A':
+        zoning_msg += f" Recent forest loss observed, average year: {forest_loss_year}."
+    zoning_msg += " Tree planting recommended in reforestation or conservation zones."
 
-def assess_tree_benefit(coords: str) -> str:
-    return f"Tree Benefits: High potential for carbon capture and shade cooling at {coords}"
+def get_climate_info(coords: str = "40.7128,-74.0060") -> str:
+    
+    context_json = get_geospatial_context_tool(coords)
+    context = json.loads(context_json)
+    
+    precipitation = context.get("Precipitation (mm)", 0)
+    temperature = context.get("Temperature (°C)", 0)
+    ndvi = context.get("NDVI (mean)", 0)
 
-def check_soil_suitability(coords: str) -> str:
-    return f"Soil: Slightly compacted clay, pH 6.5 – suitable for native tree species at {coords}"
+    flood_risk = "High" if precipitation is"40.7128,-74.0060"> 1000 else "Moderate" if precipitation > 500 else "Low"
+    sea_level_rise_estimate_m = 1.2  # Placeholder: for real, integrate NOAA data externally
+
+    climate_msg = (f"Climate summary at {coords}:\n"
+                   f"Precipitation: {precipitation} mm (Flood Risk: {flood_risk})\n"
+                   f"Mean Temperature: {temperature} °C\n"
+                   f"Vegetation Health (NDVI): {ndvi}\n"
+                   f"Estimated sea-level rise: {sea_level_rise_estimate_m} m over next decades")
+                   
+    return climate_msg
+
+    
+def check_tree_health(coords: str = "40.7128,-74.0060")  -> dict:
+    ee_result = get_geospatial_context_tool(coords)
+    context = json.loads(ee_result)
+    health_comment = "Healthy canopy" if context["NDVI (mean)"] > 0.5 else "Canopy thinning or stress"
+    drought_comment = "Low drought stress" if context["Soil Moisture (m3/m3)"] > 0.25 else "Signs of drought stress"
+    return {
+        "Location": coords,
+        "Canopy NDVI": context["NDVI (mean)"],
+        "Soil Moisture": context["Soil Moisture (m3/m3)"],
+        "Health Assessment": f"{health_comment}; {drought_comment}",
+        "Forestry Recommendation": (
+            "Monitor for canopy decline; consider supplemental watering and replace non-native stressed species."
+        )
+    }
+
+def assess_tree_benefit(coords: str = "40.7128,-74.0060") -> dict:
+    # Example: Logic grounded in context
+    geo = json.loads(get_geospatial_context_tool(coords))
+    benefit = "Excellent for carbon capture" if geo["NDVI (mean)"] > 0.7 and geo["Precipitation (mm)"] > 600 else "Moderate"
+    cooling = "Substantial cooling from mature canopy" if geo["Land Cover Class (ESA)"] == "Forest" else "Potential cooling with reforestation"
+    return {
+        "Location": coords,
+        "Carbon Capture Potential": benefit,
+        "Shade/Cooling Impact": cooling,
+        "Reference Data": geo
+    }
+
+def check_soil_suitability(coords: str = "40.7128,-74.0060") -> str:
+    context_json = get_geospatial_context_tool(coords)
+    context = json.loads(context_json)
+    
+    # Use soil moisture, elevation or land cover info as proxy for soil suitability
+    soil_moisture = context.get("Soil Moisture (m3/m3)", None)
+    elevation = context.get("Elevation (m)", None)
+    land_cover = context.get("Land Cover Class (ESA)", "Unknown")
+
+    # Simplified interpretation rules (expand or replace with richer logic)
+    if soil_moisture is not None and 0.2 <= soil_moisture <= 0.4:
+        moisture_msg = "Suitable soil moisture for native tree species growth."
+    else:
+        moisture_msg = "Soil moisture outside ideal range; irrigation or species choice recommended."
+
+    return (f"Soil suitability at {coords}:\n"
+            f"{moisture_msg}\n"
+            f"Elevation: {elevation} m\n"
+            f"Land Cover Type: {land_cover}")
 
 def get_geospatial_context(lat=40.7128, lon=-74.0060):
     point = ee.Geometry.Point([lon, lat])
@@ -793,7 +856,7 @@ def get_geospatial_context(lat=40.7128, lon=-74.0060):
     # Fallback default year
     fallback_start = ee.Date('2023-01-01')
     fallback_end = ee.Date('2023-12-31')
-
+    
     def fetch(collection_id, selector, start, end, scale):
         try:
             coll = ee.ImageCollection(collection_id) \
@@ -878,15 +941,14 @@ def get_geospatial_context(lat=40.7128, lon=-74.0060):
 # )
 
 tools = [
-    Tool(name="ZoningLookup", func=get_zoning_info, description="Returns zoning rules..."),
-    Tool(
-        name="EarthEngineContext",
-        func=get_geospatial_context_tool,
-        description="Returns NDVI, precipitation, temperature, soil moisture, land cover, and elevation for given coordinates"
-    ),
-    Tool(name="TreeBenefitAssessment", func=assess_tree_benefit, description="Estimates environmental impact of planting trees")
+    Tool(name="ZoningLookup", func=get_zoning_info, description="Provides zoning-related land cover and forest loss info as proxy to guide tree planting recommendations."),
+    Tool(name="ClimateLookUp", func=get_climate_info, description="Returns precipitation, temperature, vegetation health (NDVI), flood risk, and sea level rise estimates for forestry planning."),
+    Tool(name="CheckTreeHealth", func=check_tree_health, description="Assess how healthy the trees are using the canopy cover and soil."),
+    Tool(name="SoilSuitabilityCheck",func=check_soil_suitability,description="Analyzes soil moisture, elevation, and land cover to evaluate suitability for native tree species planting."), 
+    Tool(name="TreeBenefitAssessment", func=assess_tree_benefit, description="Estimates carbon capture potential and cooling benefits based on NDVI, precipitation, and land cover data.")
     # gis_batch_tool
 ]
+
 
 
 
@@ -927,7 +989,7 @@ async def process_request(request_data: RequestData):
     
     do_gis_op= want_gis_task(user_task)
     do_info = wants_additional_info(user_task)
-
+    
     if do_gis_op and do_info:
         try:
             tree_crowns_url, chat_output_url = get_project_urls(task_name)
@@ -982,7 +1044,7 @@ async def process_request(request_data: RequestData):
                     "content": result.get("tree_ids") if isinstance(result, dict) and "tree_ids" in result else message
                 }
             }
-            
+        
         # return {"status": "success", "job_id": job_id, "message": "Processing started..."}
         except Exception as e:
             return {"status": "completed", "message": "Request not understood as a task requiring GIS operations or information."}
@@ -993,7 +1055,7 @@ async def process_request(request_data: RequestData):
             if task_name in ["TT_GCW1_Summer", "TT_GCW1_Winter"]:
                 tree_crown_summer, _ = get_project_urls("TT_GCW1_Summer")
                 tree_crown_winter, _ = get_project_urls("TT_GCW1_Winter")
-            
+                
                 # Fetch CRS for each relevant URL
                 # crs_current = fetch_crs(tree_crowns_url)
                 # crs_summer = fetch_crs(tree_crown_summer)
