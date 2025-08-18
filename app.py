@@ -54,7 +54,7 @@ app.add_middleware(
 class RequestData(BaseModel):
     task: str = "No task provided."
     task_name: str = "default_task"
-    session_id: str
+   
 
 # --------------------- SETUP and INIT---------------------
 
@@ -968,7 +968,7 @@ agent = initialize_agent(
 async def process_request(request_data: RequestData):
     user_task = request_data.task.strip().lower()
     task_name = request_data.task_name
-    session_id = request_data.session_id
+    session_id = request_data.task_name
     if re.search(r"\b(clear|reset|cleanup|clean|wipe)\b", user_task):
         return await trigger_cleanup(task_name)
        
