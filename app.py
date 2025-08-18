@@ -203,7 +203,10 @@ def get_project_urls(project_name):
         "SURVEY_DATE",
         "CrownSketch",
         "CrownSketch_Predictions",
-        "CHAT_INPUT"
+        "CHAT_INPUT",
+        "CHAT_OUTPUT_POINT ",
+        "CHAT_OUTPUT_POLYGON",
+        "CHAT_OUTPUT_LINE "
     ]
     
     params = {
@@ -402,27 +405,47 @@ def filter(FIDS, project_name):
 
     attrs = get_project_urls(project_name)
     tree_crowns_url = attrs.get("TREE_CROWNS")
-    chat_output_url = attrs.get("CHAT_OUTPUT")
 
-    if not tree_crowns_url or not chat_output_url:
-        raise ValueError("Required URLs missing in Project Index.")
+    if not tree_crowns_url:
+        raise ValueError("TREE_CROWNS URL missing in Project Index.")
 
     gdf = extract_geojson(tree_crowns_url)
 
     print("Columns in GDF:", gdf.columns.tolist())
+    print("Geometry types in GDF:", gdf.geom_type.unique())
 
-    if "Tree_ID" in gdf.columns:
-        # Ensure TREE_ID is treated as integers for matching
-        gdf["Tree_ID"] = gdf["Tree_ID"].astype(int)
-        ash_gdf = gdf[gdf["Tree_ID"].isin(FIDS)]
+    if "Tree_ID" not in gdf.columns:
+        raise ValueError("Column 'Tree_ID' not found in GeoDataFrame.")
 
-        # Delete all features before posting new ones
-        delete_all_features(chat_output_url)
+    # Ensure Tree_ID is integer
+    gdf["Tree_ID"] = gdf["Tree_ID"].astype(int)
+    gdf_to_push = gdf[gdf["Tree_ID"].isin(FIDS)]
 
-        # Then post
-        post_features_to_layer(ash_gdf, chat_output_url)
+    if gdf_to_push.empty:
+        print("No matching Tree_IDs found.")
+        return
+
+    # Determine correct chat output URL based on geometry type
+    geom_types = set(gdf_to_push.geom_type.unique())
+    if geom_types & {"Point", "MultiPoint"}:
+        chat_output_url = attrs.get("CHAT_OUTPUT_POINT")
+    elif geom_types & {"Polygon", "MultiPolygon"}:
+        chat_output_url = attrs.get("CHAT_OUTPUT_POLYGON")
+    elif geom_types & {"LineString", "MultiLineString"}:
+        chat_output_url = attrs.get("CHAT_OUTPUT_LINE")
     else:
-        print("Column 'Species' not found in GeoDataFrame.")   
+        raise ValueError(f"Unsupported geometry types found: {geom_types}")
+
+    if not chat_output_url:
+        raise ValueError("Matching CHAT_OUTPUT URL missing in Project Index.")
+
+    # Delete existing features before posting
+    delete_all_features(chat_output_url)
+
+    # Post new features
+    post_features_to_layer(gdf_to_push, chat_output_url)
+    print(f"Pushed {len(gdf_to_push)} features to {chat_output_url}")
+
 
 # --------------------- ERDO LLM main functions ---------------------
 
