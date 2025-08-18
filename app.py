@@ -414,15 +414,31 @@ def filter(FIDS, project_name):
     print("Columns in GDF:", gdf.columns.tolist())
     print("Geometry types in GDF:", gdf.geom_type.unique())
 
-    if "Tree_ID" not in gdf.columns:
-        raise ValueError("Column 'Tree_ID' not found in GeoDataFrame.")
+    # Decide which ID column to use
+    id_column = None
+    for candidate in ["Tree_ID", "OBJECTID", "FID", "Id"]:
+        if candidate in gdf.columns:
+            id_column = candidate
+            break
 
-    # Ensure Tree_ID is integer
-    gdf["Tree_ID"] = gdf["Tree_ID"].astype(int)
-    gdf_to_push = gdf[gdf["Tree_ID"].isin(FIDS)]
+    if not id_column:
+        raise ValueError("No suitable ID column found in GeoDataFrame (Tree_ID, OBJECTID, FID, Id).")
+
+    print(f"Using ID column: {id_column}")
+
+    # Ensure IDs are integers (when possible)
+    try:
+        gdf[id_column] = gdf[id_column].astype(int)
+        FIDS = [int(fid) for fid in FIDS]
+    except Exception:
+        # If not convertible to int, keep as string
+        gdf[id_column] = gdf[id_column].astype(str)
+        FIDS = [str(fid) for fid in FIDS]
+
+    gdf_to_push = gdf[gdf[id_column].isin(FIDS)]
 
     if gdf_to_push.empty:
-        print("No matching Tree_IDs found.")
+        print("No matching IDs found.")
         return
 
     # Determine correct chat output URL based on geometry type
