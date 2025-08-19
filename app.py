@@ -80,7 +80,7 @@ with open(key_path, 'w') as f:
     f.write(os.environ['EARTH_CREDENTIALS'])
 earth_credentials= ee.ServiceAccountCredentials(SERVICE_ACCOUNT, key_path)
 ee.Initialize(earth_credentials, project='disco-parsec-444415-c4')
-db = firestore.Client()
+db = firestore.Client(project="disco-parsec-444415-c4", credentials=credentials)
 # --------------------- GIS CODE AGENT WRAPPER ---------------------
 
 class GeminiLLM(LLM):
