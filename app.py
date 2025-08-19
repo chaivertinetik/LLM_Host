@@ -493,7 +493,10 @@ def filter(gdf_or_fids, project_name):
             elif kind == "line":
                 chat_output_url = get_attr(attrs, "CHAT_OUTPUT_LINE")
             else:
-                chat_output_url = get_attr(attrs, "CHAT_OUTPUT_POLYGON")
+                try:
+                    chat_output_url = get_attr(attrs, "CHAT_OUTPUT_POLYGON")
+                except:
+                    chat_output_url = get_attr(attrs, "CHAT_OUTPUT")
 
             if not chat_output_url:
                 raise ValueError(f"Matching CHAT_OUTPUT URL missing in Project Index for {kind}.")
