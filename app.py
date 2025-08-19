@@ -116,7 +116,7 @@ def load_history(session_id:str, max_turns=10):
 def save_history(session_id: str, history: list): 
     db.collection("chat_histories").document(session_id).set({"history": history})
         
-def build_conversation_prompt(self, new_user_prompt, history, max_turns=10):
+def build_conversation_prompt(new_user_prompt, history, max_turns=10):
     recent= history[-2*max_turns]
         # Get last N user+assistant pairs (so 2N total entries)
     prompt_text = ""
