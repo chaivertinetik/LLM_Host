@@ -116,15 +116,18 @@ def load_history(session_id:str, max_turns=10):
 def save_history(session_id: str, history: list): 
     db.collection("chat_histories").document(session_id).set({"history": history})
         
-def build_conversation_prompt(new_user_prompt, history, max_turns=10):
-    recent= history[-2*max_turns]
-        # Get last N user+assistant pairs (so 2N total entries)
-    prompt_text = ""
+def build_conversation_prompt(new_user_prompt: str,
+                              history: list | None = None,
+                              max_turns: int = 10) -> str:
+    history = history or []
+    recent = history[-2 * max_turns:]
+    lines = []
     for entry in recent:
-        prefix = "User: " if entry['role'] == 'user' else "Assistant: "
-        prompt_text += f"{prefix}{entry['content']}\n"
-    prompt_text += f"User: {new_user_prompt}\nAssistant:"
-    return prompt_text
+        prefix = "User: " if entry.get('role') == 'user' else "Assistant: "
+        lines.append(f"{prefix}{entry.get('content', '')}")
+    lines.append(f"User: {new_user_prompt}")
+    lines.append("Assistant:")
+    return "\n".join(lines)
 
 
 
