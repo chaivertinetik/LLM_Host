@@ -399,68 +399,199 @@ def ensure_list(obj):
     else:
         pass
 
-def filter(FIDS, project_name):
-    print("Made it to the filter function") 
-    FIDS = ensure_list(FIDS)
+
+def filter(gdf_or_fids, project_name):
+    """
+    If gdf_or_fids is a GeoDataFrame (or GeoJSON) -> push those features directly (LLM already filtered).
+    If gdf_or_fids is a list/iterable of IDs -> fetch source crowns, filter by ID, then push.
+    """
+    print("Made it to the filter function")
 
     attrs = get_project_urls(project_name)
-    tree_crowns_url = attrs.get("TREE_CROWNS")
-
+    tree_crowns_url = get_attr(attrs, "TREE_CROWNS")
     if not tree_crowns_url:
         raise ValueError("TREE_CROWNS URL missing in Project Index.")
 
+    # --- Case 1: Direct GDF provided ---
+    gdf_direct = to_gdf(gdf_or_fids)
+    if gdf_direct is not None and not gdf_direct.empty:
+        print("Operating in GDF mode (direct push, no masking).")
+
+        # Split by geometry type
+        groups = {
+            "point": gdf_direct[gdf_direct.geom_type.isin(["Point", "MultiPoint"])],
+            "line": gdf_direct[gdf_direct.geom_type.isin(["LineString", "MultiLineString"])],
+            "polygon": gdf_direct[gdf_direct.geom_type.isin(["Polygon", "MultiPolygon"])],
+        }
+        for kind, sub in groups.items():
+            if sub.empty:
+                continue
+            if kind == "point":
+                chat_output_url = get_attr(attrs, "CHAT_OUTPUT_POINT")
+            elif kind == "line":
+                chat_output_url = get_attr(attrs, "CHAT_OUTPUT_LINE")
+            else:
+                chat_output_url = get_attr(attrs, "CHAT_OUTPUT_POLYGON")
+
+            if not chat_output_url:
+                raise ValueError(f"Matching CHAT_OUTPUT URL missing in Project Index for {kind}.")
+
+            delete_all_features(chat_output_url)
+            post_features_to_layer(sub, chat_output_url)
+            print(f"Pushed {len(sub)} {kind} feature(s) to {chat_output_url}")
+        return
+
+    # --- Case 2: FIDs provided (masking required) ---
+    print("Operating in FID mode (fetch + mask).")
+    FIDS = ensure_list(gdf_or_fids)
+
     gdf = extract_geojson(tree_crowns_url)
+    if gdf is None or gdf.empty:
+        print("Source crowns are empty or unavailable.")
+        return
 
     print("Columns in GDF:", gdf.columns.tolist())
     print("Geometry types in GDF:", gdf.geom_type.unique())
 
-    # Decide which ID column to use
+    # Pick ID column
     id_column = None
     for candidate in ["Tree_ID", "OBJECTID", "FID", "Id"]:
         if candidate in gdf.columns:
             id_column = candidate
             break
-
     if not id_column:
-        raise ValueError("No suitable ID column found in GeoDataFrame (Tree_ID, OBJECTID, FID, Id).")
+        raise ValueError("No suitable ID column found (Tree_ID, OBJECTID, FID, Id).")
 
     print(f"Using ID column: {id_column}")
-
-    # Ensure IDs are integers (when possible)
-    try:
-        gdf[id_column] = gdf[id_column].astype(int)
-        FIDS = [int(fid) for fid in FIDS]
-    except Exception:
-        # If not convertible to int, keep as string
-        gdf[id_column] = gdf[id_column].astype(str)
-        FIDS = [str(fid) for fid in FIDS]
-
-    gdf_to_push = gdf[gdf[id_column].isin(FIDS)]
-
+    mask = normalize_ids(gdf[id_column], FIDS)
+    gdf_to_push = gdf[mask]
     if gdf_to_push.empty:
         print("No matching IDs found.")
         return
 
-    # Determine correct chat output URL based on geometry type
-    geom_types = set(gdf_to_push.geom_type.unique())
+    # Split & push
+    for kind, sub in {
+        "point": gdf_to_push[gdf_to_push.geom_type.isin(["Point", "MultiPoint"])],
+        "line": gdf_to_push[gdf_to_push.geom_type.isin(["LineString", "MultiLineString"])],
+        "polygon": gdf_to_push[gdf_to_push.geom_type.isin(["Polygon", "MultiPolygon"])],
+    }.items():
+        if sub.empty:
+            continue
+        chat_output_url = (
+            get_attr(attrs, "CHAT_OUTPUT_POINT") if kind == "point"
+            else get_attr(attrs, "CHAT_OUTPUT_LINE") if kind == "line"
+            else get_attr(attrs, "CHAT_OUTPUT_POLYGON")
+        )
+        if not chat_output_url:
+            raise ValueError(f"Matching CHAT_OUTPUT URL missing for {kind}.")
+        delete_all_features(chat_output_url)
+        post_features_to_layer(sub, chat_output_url)
+        print(f"Pushed {len(sub)} {kind} feature(s) to {chat_output_url}")
+
+
+
+# --- Helpers ---------------------------------------------------------------
+
+def get_attr(attrs: dict, key: str):
+    """Robust attribute getter that tolerates trailing spaces in field names."""
+    # exact
+    if key in attrs: 
+        return attrs[key]
+    # try with a single trailing space
+    if (key + " ") in attrs:
+        return attrs[key + " "]
+    # try stripped keys map
+    stripped = {k.strip(): v for k, v in attrs.items()}
+    return stripped.get(key)
+
+def to_gdf(maybe_gdf):
+    """Accept a GeoDataFrame, a GeoJSON string/dict, or return None if not GDF-like."""
+    try:
+        import geopandas as gpd
+        from geopandas import GeoDataFrame
+        if isinstance(maybe_gdf, gpd.GeoDataFrame):
+            return maybe_gdf
+        # Try dict-like GeoJSON
+        if isinstance(maybe_gdf, dict) and "type" in maybe_gdf:
+            feats = maybe_gdf.get("features")
+            if feats:
+                return gpd.GeoDataFrame.from_features(feats)
+        # Try stringified GeoJSON
+        if isinstance(maybe_gdf, str):
+            try:
+                gj = json.loads(maybe_gdf)
+                feats = gj.get("features")
+                if feats:
+                    return gpd.GeoDataFrame.from_features(feats)
+            except Exception:
+                pass
+    except Exception:
+        pass
+    return None
+
+def normalize_ids(series, ids):
+    """Try int match first; if that fails, fall back to string match."""
+    try:
+        s_int = series.astype("int64", errors="raise")
+        ids_int = [int(x) for x in ensure_list(ids)]
+        return s_int.isin(ids_int)
+    except Exception:
+        s_str = series.astype(str)
+        ids_str = [str(x) for x in ensure_list(ids)]
+        return s_str.isin(ids_str)
+
+def geometry_target_key(geom_types: set):
+    """Map geometry types to the correct CHAT_OUTPUT_* key name (no trailing space)."""
     if geom_types & {"Point", "MultiPoint"}:
-        chat_output_url = attrs.get("CHAT_OUTPUT_POINT")
-    elif geom_types & {"Polygon", "MultiPolygon"}:
-        chat_output_url = attrs.get("CHAT_OUTPUT_POLYGON")
-    elif geom_types & {"LineString", "MultiLineString"}:
-        chat_output_url = attrs.get("CHAT_OUTPUT_LINE")
-    else:
-        raise ValueError(f"Unsupported geometry types found: {geom_types}")
+        return "CHAT_OUTPUT_POINT"
+    if geom_types & {"LineString", "MultiLineString"}:
+        return "CHAT_OUTPUT_LINE"
+    if geom_types & {"Polygon", "MultiPolygon"}:
+        return "CHAT_OUTPUT_POLYGON"
+    raise ValueError(f"Unsupported geometry types found: {geom_types}")
 
-    if not chat_output_url:
-        raise ValueError("Matching CHAT_OUTPUT URL missing in Project Index.")
+# Upgrade geometry conversion: Point/Line/Polygon + Multi*
+def shapely_to_arcgis_geometry(geom):
+    gt = geom.geom_type
+    coords = mapping(geom)["coordinates"]
 
-    # Delete existing features before posting
-    delete_all_features(chat_output_url)
+    if gt in ("Point",):
+        x, y = coords
+        return {"x": x, "y": y, "spatialReference": {"wkid": 4326}}
+    if gt in ("MultiPoint",):
+        points = [{"x": x, "y": y} for x, y in coords]
+        return {"points": [[p["x"], p["y"]] for p in points], "spatialReference": {"wkid": 4326}}
 
-    # Post new features
-    post_features_to_layer(gdf_to_push, chat_output_url)
-    print(f"Pushed {len(gdf_to_push)} features to {chat_output_url}")
+    if gt in ("LineString",):
+        return {"paths": [coords], "spatialReference": {"wkid": 4326}}
+    if gt in ("MultiLineString",):
+        return {"paths": [path for path in coords], "spatialReference": {"wkid": 4326}}
+
+    if gt in ("Polygon",):
+        return {"rings": coords, "spatialReference": {"wkid": 4326}}
+    if gt in ("MultiPolygon",):
+        # Flatten multipolygon into list of rings
+        rings = [ring for polygon in coords for ring in polygon]
+        return {"rings": rings, "spatialReference": {"wkid": 4326}}
+
+    raise ValueError(f"Unsupported geometry type: {gt}")
+
+def ensure_list(obj):
+    if obj is None:
+        return []
+    if isinstance(obj, (int, float, np.integer, np.floating)):
+        return [obj]
+    if isinstance(obj, (np.ndarray, pd.Series, list, tuple, set)):
+        return list(obj)
+    # If it’s a string with commas, split; else wrap
+    if isinstance(obj, str):
+        s = obj.strip()
+        if s.startswith("[") or s.startswith("{"):  # likely JSON -> leave to to_gdf or json parsing
+            return [s]
+        if "," in s:
+            return [x.strip() for x in s.split(",") if x.strip() != ""]
+        return [s]
+    return [obj]
 
 
 # --------------------- ERDO LLM main functions ---------------------
