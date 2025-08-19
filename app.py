@@ -129,62 +129,63 @@ def build_conversation_prompt(self, new_user_prompt, history, max_turns=10):
 
 
 # --------------------- ARC GIS UPDATE---------------------
-async def trigger_cleanup(task_name):
-    project_name = task_name
-    attrs = get_project_urls(task_name)
-    delete_url = attrs.get("CHAT_OUTPUT")
+async def trigger_cleanup(task_name: str):
     try:
-        target_url = delete_url
-        query_url = f"{target_url}/0/query"
-        delete_url = f"{target_url}/0/deleteFeatures"
-        # Step 1: Get all existing OBJECTIDs
-        params = {
-           "where": "1=1",
-           "returnIdsOnly": "true",
-           "f": "json"
-        }
-        response = requests.get(query_url, params=params)
-        data = response.json()
-        object_ids = data.get("objectIds", [])
-        if not object_ids:
-           print("No features to delete.")
-           return {
-              "status": "success",
-              "message": "No features to delete.",
-              "response": response.text
-           }
-        # Step 2: Delete by OBJECTIDs
-        delete_params = {
-        "objectIds": ",".join(map(str, object_ids)),
-        "f": "json"
-        }
-        delete_response = requests.post(delete_url, data=delete_params)
-        
+        attrs = get_project_urls(task_name)
+
+        target_keys = ["CHAT_OUTPUT_POINT", "CHAT_OUTPUT_LINE", "CHAT_OUTPUT_POLYGON"]
+        urls = [get_attr(attrs, k) for k in target_keys]
+        # Fallback: legacy single output
+        legacy = get_attr(attrs, "CHAT_OUTPUT")
+        if legacy:
+            urls.append(legacy)
+
+        cleaned_any = False
+        for target_url in [u for u in urls if u]:
+            query_url = f"{target_url}/0/query"
+            delete_url = f"{target_url}/0/deleteFeatures"
+
+            params = {"where": "1=1", "returnIdsOnly": "true", "f": "json"}
+            r = requests.get(query_url, params=params)
+            ids = r.json().get("objectIds", [])
+            if not ids:
+                continue
+
+            del_params = {"objectIds": ",".join(map(str, ids)), "f": "json"}
+            dr = requests.post(delete_url, data=del_params)
+            cleaned_any = True
+
         return {
             "status": "success",
-            "message": "Cleanup triggered successfully.",
-            "response": delete_response.text
+            "message": "Cleanup completed." if cleaned_any else "Nothing to delete."
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Cleanup failed: {str(e)}")
-       
+      
 @app.post("/clear")
 async def clear_state():
-    return await trigger_cleanup()
+    return await trigger_cleanup(task_name)
        
 def shapely_to_arcgis_geometry(geom):
-    if geom.geom_type == "Polygon":
-        return {
-            "rings": mapping(geom)["coordinates"],
-            "spatialReference": {"wkid": 4326}
-        }
-    elif geom.geom_type == "MultiPolygon":
-        return {
-            "rings": [ring for polygon in mapping(geom)["coordinates"] for ring in polygon],
-            "spatialReference": {"wkid": 4326}
-        }
-    else:
-        raise ValueError(f"Unsupported geometry type: {geom.geom_type}")
+    gt = geom.geom_type
+    coords = mapping(geom)["coordinates"]
+
+    if gt == "Point":
+        x, y = coords
+        return {"x": x, "y": y, "spatialReference": {"wkid": 4326}}
+    if gt == "MultiPoint":
+        return {"points": [[x, y] for x, y in coords], "spatialReference": {"wkid": 4326}}
+    if gt == "LineString":
+        return {"paths": [coords], "spatialReference": {"wkid": 4326}}
+    if gt == "MultiLineString":
+        return {"paths": [path for path in coords], "spatialReference": {"wkid": 4326}}
+    if gt == "Polygon":
+        return {"rings": coords, "spatialReference": {"wkid": 4326}}
+    if gt == "MultiPolygon":
+        rings = [ring for polygon in coords for ring in polygon]
+        return {"rings": rings, "spatialReference": {"wkid": 4326}}
+
+    raise ValueError(f"Unsupported geometry type: {gt}")
 
 
 def get_project_urls(project_name):
@@ -385,19 +386,6 @@ def delete_all_features(target_url):
     }
     delete_response = requests.post(delete_url, data=delete_params)
     print("Delete response:", delete_response.json())
-
-def ensure_list(obj):
-    # Handle numpy scalars and standard scalars
-    if isinstance(obj, (int, float, np.integer, np.floating)):
-        return [obj]
-    # Handle numpy arrays and pandas Series
-    elif isinstance(obj, (np.ndarray, pd.Series)):
-        return obj.tolist()
-    # Handle other iterable types (list, tuple, set)
-    elif isinstance(obj, collections.abc.Iterable) and not isinstance(obj, (str, bytes)):
-        return list(obj)
-    else:
-        pass
 
 
 def filter(gdf_or_fids, project_name):
@@ -1168,10 +1156,14 @@ async def process_request(request_data: RequestData):
     
     if do_gis_op and do_info:
         try:
-            tree_crowns_url, chat_output_url = get_project_urls(task_name)
+            attrs = get_project_urls(task_name)
+            tree_crowns_url = get_attr(attrs, "TREE_CROWNS")
+            roi_url = get_attr(attrs, "CHAT_INPUT")
             if task_name in ["TT_GCW1_Summer", "TT_GCW1_Winter"]:
-                tree_crown_summer, _ = get_project_urls("TT_GCW1_Summer")
-                tree_crown_winter, _ = get_project_urls("TT_GCW1_Winter")
+                attrs_summer = get_project_urls("TT_GCW1_Summer")
+                attrs_winter = get_project_urls("TT_GCW1_Winter")
+                tree_crown_summer = get_attr(attrs_summer, "TREE_CROWNS")
+                tree_crown_winter = get_attr(attrs_winter, "TREE_CROWNS")
             
                 # Fetch CRS for each relevant URL
                 # crs_current = fetch_crs(tree_crowns_url)
@@ -1227,10 +1219,14 @@ async def process_request(request_data: RequestData):
     elif do_gis_op: 
         
         try:
-            tree_crowns_url, chat_output_url = get_project_urls(task_name)
+            attrs = get_project_urls(task_name)
+            tree_crowns_url = get_attr(attrs, "TREE_CROWNS")
+            roi_url = get_attr(attrs, "CHAT_INPUT")
             if task_name in ["TT_GCW1_Summer", "TT_GCW1_Winter"]:
-                tree_crown_summer, _ = get_project_urls("TT_GCW1_Summer")
-                tree_crown_winter, _ = get_project_urls("TT_GCW1_Winter")
+                attrs_summer = get_project_urls("TT_GCW1_Summer")
+                attrs_winter = get_project_urls("TT_GCW1_Winter")
+                tree_crown_summer = get_attr(attrs_summer, "TREE_CROWNS")
+                tree_crown_winter = get_attr(attrs_winter, "TREE_CROWNS")
                 
                 # Fetch CRS for each relevant URL
                 # crs_current = fetch_crs(tree_crowns_url)
