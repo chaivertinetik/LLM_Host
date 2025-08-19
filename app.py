@@ -38,7 +38,7 @@ from langchain.agents import initialize_agent, Tool
 from langchain.agents.agent_types import AgentType
 from langchain_core.language_models import LLM
 from google.cloud import firestore 
-
+from shapely.ops import unary_union
 # --------------------- Setup FASTAPI app ---------------------
 # Initialize FastAPI app
 app = FastAPI()
@@ -318,45 +318,116 @@ def extract_geojson(url):
     except Exception as e:
         print(f"GeoJSON fetch error: {e}")
         return None
-        
+
+
+
+
+def get_roi_gdf(project_name: str) -> gpd.GeoDataFrame:
+    """Return CHAT_INPUT features as GDF in EPSG:4326 (empty if none)."""
+    try:
+        attrs = get_project_urls(project_name)
+        chat_input_url = get_attr(attrs, "CHAT_INPUT")
+        if not chat_input_url:
+            return gpd.GeoDataFrame(geometry=[])
+        wkid = fetch_crs(chat_input_url, default_wkid=4326)
+        gdf = extract_geojson(chat_input_url) or gpd.GeoDataFrame(geometry=[])
+        if gdf.empty:
+            return gdf
+        if gdf.crs is None:
+            gdf.set_crs(epsg=wkid, inplace=True)
+        if gdf.crs.to_epsg() != 4326:
+            gdf = gdf.to_crs(epsg=4326)
+        return gdf
+    except Exception as e:
+        print(f"get_roi_gdf error: {e}")
+        return gpd.GeoDataFrame(geometry=[])
+
+
 #change the batch_size based on the upper cap for Foxholes 
 #def post_features_to_layer(gdf, target_url):
-def post_features_to_layer(gdf, target_url, batch_size=800):
+def post_features_to_layer(gdf: gpd.GeoDataFrame, target_url: str, project_name: str, batch_size: int = 800):
+    """
+    Push features to an ArcGIS Feature Layer.
+    - If CHAT_INPUT ROI exists for project_name, clip gdf to ROI before pushing.
+    - If ROI is empty/missing, push all rows.
+    - Reprojects to EPSG:4326 for ArcGIS JSON geometry payloads.
+    """
     add_url = f"{target_url}/0/addFeatures"
     headers = {"Content-Type": "application/x-www-form-urlencoded"}
-
     allowed_fields = {"Health", "Tree_ID", "Species"}
-    # uncomment this for the batch implementation
-    # for start in range(0, len(gdf), batch_size):
-    #     batch_gdf=gdf.iloc[start:start+batch_size]
-    #     features=[]
-    # features = []
-    # for _, row in gdf.iterrows():
-    for start in range(0, len(gdf), batch_size):
-        batch_gdf=gdf.iloc[start:start+batch_size]
-        features=[]
+
+    if gdf is None or gdf.empty:
+        print("Nothing to push: input GeoDataFrame is empty.")
+        return
+
+    # --- 1) Prepare ROI (EPSG:4326) ---
+    roi_gdf = get_roi_gdf(project_name)  # empty if none
+    gdf_work = gdf.copy()
+
+    # Ensure gdf has a CRS and convert to 4326 (ArcGIS expects lon/lat)
+    try:
+        if gdf_work.crs is None:
+            # best-effort: assume 4326 if unknown
+            gdf_work.set_crs(epsg=4326, inplace=True, allow_override=True)
+        if gdf_work.crs.to_epsg() != 4326:
+            gdf_work = gdf_work.to_crs(epsg=4326)
+    except Exception as e:
+        print(f"CRS handling on input GDF failed, assuming EPSG:4326. Error: {e}")
+        gdf_work.set_crs(epsg=4326, inplace=True, allow_override=True)
+
+    # --- 2) Clip to ROI if present ---
+    if roi_gdf is not None and not roi_gdf.empty:
+        roi = roi_gdf
+        # If ROI not polygonal, buffer tiny amount to get area for intersection
+        try:
+            if not any(gt in ("Polygon", "MultiPolygon") for gt in roi.geometry.dropna().geom_type.unique()):
+                roi = roi.copy()
+                roi["geometry"] = roi.buffer(1e-8)
+        except Exception:
+            # If any geometry issues, try union then small buffer
+            try:
+                u = unary_union([g for g in roi.geometry.values if g and not g.is_empty])
+                roi = gpd.GeoDataFrame(geometry=[u.buffer(1e-8)], crs=roi.crs)
+            except Exception as _e:
+                print(f"ROI normalization failed, skipping clip. {_e}")
+                roi = gpd.GeoDataFrame(geometry=[])
+
+        if not roi.empty:
+            try:
+                # ensure same CRS (roi is already EPSG:4326 from get_roi_gdf)
+                gdf_work = gpd.overlay(gdf_work, roi, how="intersection")
+            except Exception as e:
+                print(f"overlay() failed, falling back to sjoin intersects. Error: {e}")
+                try:
+                    gdf_work = gdf_work.sjoin(roi, how="inner", predicate="intersects").drop(columns=[c for c in gdf_work.columns if c.endswith("_right")], errors="ignore")
+                except Exception as e2:
+                    print(f"sjoin() also failed; proceeding without clip. Error: {e2}")
+
+    if gdf_work is None or gdf_work.empty:
+        print("Nothing to push after ROI clip (result empty).")
+        return
+
+    # --- 3) Batch push ---
+    for start in range(0, len(gdf_work), batch_size):
+        batch_gdf = gdf_work.iloc[start:start + batch_size]
+        features = []
         for _, row in batch_gdf.iterrows():
             try:
                 arcgis_geom = shapely_to_arcgis_geometry(row.geometry)
-                attributes = {k: v for k, v in row.items() if k in allowed_fields}
-                features.append({
-                    "geometry": arcgis_geom,
-                    "attributes": attributes
-                })
+                attributes = {k: row.get(k) for k in allowed_fields if k in batch_gdf.columns}
+                features.append({"geometry": arcgis_geom, "attributes": attributes})
             except Exception as e:
                 print(f"Skipping row due to geometry error: {e}")
 
-        payload = {
-            "features": json.dumps(features),
-            "f": "json"
-        }
+        if not features:
+            continue
 
+        payload = {"features": json.dumps(features), "f": "json"}
         response = requests.post(add_url, data=payload, headers=headers)
+
         if response.status_code == 200:
-            # print(f"Batch {start//batch_size +1}: Features added successfully:", response.json())
-            print("Features added successfully:", response.json())
+            print(f"Pushed {len(features)} feature(s) to {target_url}:", response.json())
         else:
-            # print(f"Batch  {start//batch_size + 1} : Failed to add features:", response.text) 
             print("Failed to add features:", response.text)
 
 def delete_all_features(target_url):
@@ -425,7 +496,7 @@ def filter(gdf_or_fids, project_name):
                 raise ValueError(f"Matching CHAT_OUTPUT URL missing in Project Index for {kind}.")
 
             delete_all_features(chat_output_url)
-            post_features_to_layer(sub, chat_output_url)
+            post_features_to_layer(sub, chat_output_url, project_name)
             print(f"Pushed {len(sub)} {kind} feature(s) to {chat_output_url}")
         return
 
@@ -473,7 +544,7 @@ def filter(gdf_or_fids, project_name):
         if not chat_output_url:
             raise ValueError(f"Matching CHAT_OUTPUT URL missing for {kind}.")
         delete_all_features(chat_output_url)
-        post_features_to_layer(sub, chat_output_url)
+        post_features_to_layer(sub, chat_output_url, project_name)
         print(f"Pushed {len(sub)} {kind} feature(s) to {chat_output_url}")
 
 
