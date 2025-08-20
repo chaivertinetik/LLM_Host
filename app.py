@@ -132,10 +132,12 @@ def _json_default(obj):
 
 
 
-def load_history(session_id:str, max_turns=10):
-        doc= db.collection("chat_histories").document(session_id).get()
-        history= doc.to_dict().get("history", []) if doc.exists else []
-        return history[ -2* max_turns:]
+def load_history(session_id: str, max_turns=10):
+    messages_ref = db.collection("chat_histories").document(session_id).collection("messages")
+    docs = messages_ref.order_by("timestamp", direction="DESCENDING").limit(2 * max_turns).stream()
+    # Extract data and reverse so oldest message is first
+    history = [doc.to_dict() for doc in docs]
+    return history[::-1]
     
 def save_history(session_id: str, history: list): 
     msg_ref = db.collection("chat_histories").document(session_id).collection("messages")
@@ -145,11 +147,12 @@ def save_history(session_id: str, history: list):
         msg_ref.add(entry) 
     # db.collection("chat_histories").document(session_id).set({"history": history})
         
+
 def build_conversation_prompt(new_user_prompt: str,
                               history: list | None = None,
-                              max_turns: int = 10) -> str:
+                              max_interactions: int = 5) -> str:
     history = history or []
-    recent = history[-2 * max_turns:]
+    recent = history[-2 * max_interactions:]  # 2 messages per interaction
     lines = []
     for entry in recent:
         prefix = "User: " if entry.get('role') == 'user' else "Assistant: "
