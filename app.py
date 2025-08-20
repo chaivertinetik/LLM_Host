@@ -355,7 +355,10 @@ def get_roi_gdf(project_name: str) -> gpd.GeoDataFrame:
         if not chat_input_url:
             return gpd.GeoDataFrame(geometry=[])
         wkid = fetch_crs(chat_input_url, default_wkid=4326)
-        gdf = extract_geojson(chat_input_url) or gpd.GeoDataFrame(geometry=[])
+        gdf = extract_geojson(chat_input_url)
+        if gdf is None:
+            gdf = gpd.GeoDataFrame(geometry=[])
+
         if gdf.empty:
             return gdf
         if gdf.crs is None:
