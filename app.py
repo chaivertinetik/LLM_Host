@@ -192,24 +192,25 @@ async def trigger_cleanup(task_name: str):
 async def clear_state():
     return await trigger_cleanup(task_name)
        
-def shapely_to_arcgis_geometry(geom):
+def shapely_to_arcgis_geometry(geom, wkid: int):
     gt = geom.geom_type
     coords = mapping(geom)["coordinates"]
+    sr = {"spatialReference": {"wkid": wkid}}
 
     if gt == "Point":
         x, y = coords
-        return {"x": x, "y": y, "spatialReference": {"wkid": 4326}}
+        return {"x": x, "y": y, **sr}
     if gt == "MultiPoint":
-        return {"points": [[x, y] for x, y in coords], "spatialReference": {"wkid": 4326}}
+        return {"points": [list(pt) for pt in coords], **sr}
     if gt == "LineString":
-        return {"paths": [coords], "spatialReference": {"wkid": 4326}}
+        return {"paths": [coords], **sr}
     if gt == "MultiLineString":
-        return {"paths": [path for path in coords], "spatialReference": {"wkid": 4326}}
+        return {"paths": [path for path in coords], **sr}
     if gt == "Polygon":
-        return {"rings": coords, "spatialReference": {"wkid": 4326}}
+        return {"rings": coords, **sr}
     if gt == "MultiPolygon":
         rings = [ring for polygon in coords for ring in polygon]
-        return {"rings": rings, "spatialReference": {"wkid": 4326}}
+        return {"rings": rings, **sr}
 
     raise ValueError(f"Unsupported geometry type: {gt}")
 
@@ -333,21 +334,16 @@ def fetch_crs(base_url, timeout=10, default_wkid=4326):
 
 def extract_geojson(url):
     try:
-        wkid = fetch_crs(url, default_wkid=4326)
         r = requests.get(f"{url}/0/query?where=1%3D1&outFields=*&f=geojson", timeout=10)
         r.raise_for_status()
         gj = r.json()
         gdf = gpd.GeoDataFrame.from_features(gj["features"])
         if gdf.crs is None:
-            gdf.set_crs(epsg=wkid, inplace=True)
+            gdf.set_crs(epsg=4326, inplace=True)
         return gdf
     except Exception as e:
         print(f"GeoJSON fetch error: {e}")
         return None
-
-
-
-
 
 def get_roi_gdf(project_name: str) -> gpd.GeoDataFrame:
     """Return CHAT_INPUT features as GDF in EPSG:4326 (empty if none)."""
@@ -355,22 +351,14 @@ def get_roi_gdf(project_name: str) -> gpd.GeoDataFrame:
         attrs = get_project_urls(project_name)
         chat_input_url = get_attr(attrs, "CHAT_INPUT")
         if not chat_input_url:
-            return gpd.GeoDataFrame(geometry=[])
-        wkid = fetch_crs(chat_input_url, default_wkid=4326)
-        gdf = extract_geojson(chat_input_url)
+            return gpd.GeoDataFrame(geometry=[], crs="EPSG:4326")
+        gdf = extract_geojson(chat_input_url)  # tagged 4326 above
         if gdf is None:
-            gdf = gpd.GeoDataFrame(geometry=[])
-
-        if gdf.empty:
-            return gdf
-        if gdf.crs is None:
-            gdf.set_crs(epsg=wkid, inplace=True)
-        if gdf.crs.to_epsg() != 4326:
-            gdf = gdf.to_crs(epsg=4326)
+            return gpd.GeoDataFrame(geometry=[], crs="EPSG:4326")
         return gdf
     except Exception as e:
         print(f"get_roi_gdf error: {e}")
-        return gpd.GeoDataFrame(geometry=[])
+        return gpd.GeoDataFrame(geometry=[], crs="EPSG:4326")
 
 
 #change the batch_size based on the upper cap for Foxholes 
@@ -384,40 +372,37 @@ def post_features_to_layer(
     """
     Push features to an ArcGIS Feature Layer.
 
-    - If CHAT_INPUT ROI exists for project_name, clip gdf to ROI before pushing.
-    - If ROI is empty/missing or clip fails, push all rows.
-    - Reprojects to EPSG:4326 for ArcGIS JSON geometry payloads.
+    Steps:
+      - Determine target layer WKID (e.g., 3857 on AGOL).
+      - Ensure input GDF is valid and reprojected to layer WKID.
+      - Clip to ROI (also reprojected to layer WKID) if ROI exists.
+      - Push in batches with correct spatialReference.
     """
-
     add_url = f"{target_url}/0/addFeatures"
     headers = {"Content-Type": "application/x-www-form-urlencoded"}
-    allowed_fields = {"Health", "Tree_ID", "Species"}
 
-    # ---- Early outs ---------------------------------------------------------
-    if gdf is None:
-        print("Nothing to push: input is None.")
-        return
-    if gdf.empty:
-        print("Nothing to push: input GeoDataFrame is empty.")
+    if gdf is None or gdf.empty:
+        print("Nothing to push: input is None/empty.")
         return
 
-    # ---- 1) Prepare working copy & CRS -------------------------------------
+    # 0) What SR does the target layer use?
+    layer_wkid = fetch_crs(target_url, default_wkid=3857)  # your AGOL services use 3857
+    print(f"Target layer WKID: {layer_wkid}")
+
+    # 1) Working copy in known CRS
     gdf_work = gdf.copy()
-
     try:
+        # If input lacks CRS, assume it came from GeoJSON (4326)
         if gdf_work.crs is None:
-            # best-effort default; you can change this assumption if needed
             gdf_work.set_crs(epsg=4326, inplace=True, allow_override=True)
-        if gdf_work.crs.to_epsg() != 4326:
-            gdf_work = gdf_work.to_crs(epsg=4326)
+        # Reproject to the TARGET layer CRS (e.g., 3857)
+        if gdf_work.crs.to_epsg() != layer_wkid:
+            gdf_work = gdf_work.to_crs(epsg=layer_wkid)
     except Exception as e:
-        print(f"CRS handling on input GDF failed, assuming EPSG:4326. Error: {e}")
-        try:
-            gdf_work.set_crs(epsg=4326, inplace=True, allow_override=True)
-        except Exception as e2:
-            print(f"Failed to set CRS to EPSG:4326 on input GDF: {e2}")
+        print(f"CRS handling on input GDF failed: {e}")
+        return
 
-    # ---- 2) Fix invalid geometries on input (only for polygons) ---------------
+    # 2) Fix invalid geometries ONLY for polygons
     try:
         if not gdf_work.empty:
             poly_mask = gdf_work.geom_type.isin(["Polygon", "MultiPolygon"])
@@ -425,70 +410,58 @@ def post_features_to_layer(
     except Exception as e:
         print(f"Failed to fix polygon validity with buffer(0): {e}")
 
+    # 3) ROI: get in 4326 then project to layer_wkid
+    roi_gdf = get_roi_gdf(project_name)  # 4326 (see function above)
+    if roi_gdf is not None and not roi_gdf.empty:
+        try:
+            if roi_gdf.crs is None:
+                roi_gdf.set_crs(epsg=4326, inplace=True, allow_override=True)
+            if roi_gdf.crs.to_epsg() != layer_wkid:
+                roi_gdf = roi_gdf.to_crs(epsg=layer_wkid)
+        except Exception as e:
+            print(f"ROI CRS handling failed (continuing without ROI): {e}")
+            roi_gdf = gpd.GeoDataFrame(geometry=[], crs=f"EPSG:{layer_wkid}")
 
-    # ---- 3) Fetch ROI in EPSG:4326 & normalize ------------------------------
-    roi_gdf = get_roi_gdf(project_name)  # already returns EPSG:4326 (or empty)
-
-    # Log ROI status for clarity
-    roi_types = set()
-    try:
-        roi_types = set(roi_gdf.geom_type.unique()) if roi_gdf is not None and not roi_gdf.empty else set()
-    except Exception:
-        pass
-
-    print(
-        f"ROI status -> None? {roi_gdf is None}, "
-        f"empty? {getattr(roi_gdf, 'empty', True)}, "
-        f"crs={getattr(getattr(roi_gdf, 'crs', None), 'to_string', lambda: None)()}, "
-        f"geom_types={roi_types}"
-    )
-
-    # ---- 4) Clip to ROI if present & polygonal ------------------------------
+    # 4) Clip to polygonal ROI (still in layer_wkid) if present
     clipped = False
     pre_clip_count = len(gdf_work)
-
     if roi_gdf is not None and not roi_gdf.empty:
-        # Keep only polygonal ROI parts
         try:
-            roi = roi_gdf[roi_gdf.geom_type.isin(["Polygon", "MultiPolygon"])].copy()
+            roi_poly = roi_gdf[roi_gdf.geom_type.isin(["Polygon", "MultiPolygon"])].copy()
         except Exception:
-            roi = roi_gdf.copy()
+            roi_poly = roi_gdf.copy()
 
-        if roi is not None and not roi.empty:
-            # Ensure ROI geometries are valid
+        if not roi_poly.empty:
             try:
-                roi["geometry"] = roi.geometry.buffer(0)
+                # Clean ROI polys
+                roi_poly["geometry"] = roi_poly.geometry.buffer(0)
             except Exception as e:
-                print(f"Failed to buffer(0) ROI geometries: {e}")
+                print(f"ROI buffer(0) failed: {e}")
 
-            # (Optional) Dissolve ROI to reduce overlay artifacts with slivers
+            # Dissolve to reduce sliver artifacts
             try:
-                from shapely.ops import unary_union
-                u = unary_union([g for g in roi.geometry.values if g and not g.is_empty])
-                roi = gpd.GeoDataFrame(geometry=[u], crs=roi.crs)
+                u = unary_union([g for g in roi_poly.geometry.values if g and not g.is_empty])
+                roi_poly = gpd.GeoDataFrame(geometry=[u], crs=roi_poly.crs)
             except Exception as e:
-                print(f"ROI dissolve/unary_union failed (continuing without dissolve): {e}")
+                print(f"ROI dissolve failed (continuing): {e}")
 
-            # Clip using overlay; fallback to sjoin if overlay fails
+            # Clip
             try:
-                gdf_work = gpd.overlay(gdf_work, roi, how="intersection")
+                gdf_work = gpd.overlay(gdf_work, roi_poly, how="intersection")
                 clipped = True
             except Exception as e:
-                print(f"overlay() failed, falling back to sjoin intersects. Error: {e}")
+                print(f"overlay() failed, trying sjoin: {e}")
                 try:
-                    # sjoin returns join columns; keep only original columns + geometry
-                    joined = gdf_work.sjoin(roi[["geometry"]], how="inner", predicate="intersects")
-                    # Drop sjoin helper columns if present
-                    for col in ["index_right", "index_left"]:
+                    joined = gdf_work.sjoin(roi_poly[["geometry"]], how="inner", predicate="intersects")
+                    for col in ("index_right", "index_left"):
                         if col in joined.columns:
                             joined = joined.drop(columns=[col], errors="ignore")
-                    # If sjoin duplicated columns, keep the left/original geometry & columns
                     keep_cols = [c for c in gdf_work.columns if c in joined.columns] + ["geometry"]
-                    keep_cols = list(dict.fromkeys(keep_cols))  # de-dup while preserving order
+                    keep_cols = list(dict.fromkeys(keep_cols))
                     gdf_work = joined[keep_cols]
                     clipped = True
                 except Exception as e2:
-                    print(f"sjoin() also failed; proceeding WITHOUT clip. Error: {e2}")
+                    print(f"sjoin() failed; proceeding WITHOUT clip. Error: {e2}")
                     clipped = False
         else:
             print("ROI has no polygonal parts; skipping clip.")
@@ -498,24 +471,23 @@ def post_features_to_layer(
     post_clip_count = len(gdf_work)
     print(f"Clip result -> pre={pre_clip_count}, post={post_clip_count}, clipped={clipped}")
 
-    if gdf_work is None or gdf_work.empty:
+    if gdf_work.empty:
         print("Nothing to push after ROI clip (result empty).")
         return
 
-    # ---- 5) Batch & push to ArcGIS -----------------------------------------
+    # 5) Build features and push in batches
     total_pushed = 0
-    for start in range(0, len(gdf_work), batch_size):
-        batch_gdf = gdf_work.iloc[start:start + batch_size]
-        features = []
+    # build attribute column list (don’t send OBJECTID/geometry)
+    drop_cols = {"geometry", "OBJECTID"}
+    attr_cols = [c for c in gdf_work.columns if c not in drop_cols]
 
-        for _, row in batch_gdf.iterrows():
+    for start in range(0, len(gdf_work), batch_size):
+        batch = gdf_work.iloc[start:start + batch_size]
+        features = []
+        for _, row in batch.iterrows():
             try:
-                arcgis_geom = shapely_to_arcgis_geometry(row.geometry)
-                attributes = {
-                    k: _json_default(row.get(k))
-                    for k in allowed_fields
-                    if k in batch_gdf.columns
-                }
+                arcgis_geom = shapely_to_arcgis_geometry(row.geometry, wkid=layer_wkid)
+                attributes = {k: _json_default(row[k]) for k in attr_cols if k in batch.columns}
                 features.append({"geometry": arcgis_geom, "attributes": attributes})
             except Exception as e:
                 print(f"Skipping row due to geometry error: {e}")
@@ -525,21 +497,22 @@ def post_features_to_layer(
 
         payload = {"features": json.dumps(features, default=_json_default), "f": "json"}
         try:
-            response = requests.post(add_url, data=payload, headers=headers, timeout=30)
+            resp = requests.post(add_url, data=payload, headers=headers, timeout=60)
         except Exception as e:
             print(f"POST to {add_url} failed: {e}")
             continue
 
-        if response.status_code == 200:
+        if resp.status_code == 200:
             total_pushed += len(features)
             try:
-                print(f"Pushed {len(features)} feature(s) to {target_url}: {response.json()}")
+                print(f"Pushed {len(features)} feature(s) to {target_url}: {resp.json()}")
             except Exception:
                 print(f"Pushed {len(features)} feature(s) to {target_url}: (non-JSON response)")
         else:
-            print(f"Failed to add features (HTTP {response.status_code}): {response.text}")
+            print(f"Failed to add features (HTTP {resp.status_code}): {resp.text}")
 
     print(f"Done. Total features pushed: {total_pushed}")
+
 
 def delete_all_features(target_url):
     query_url = f"{target_url}/0/query"
@@ -723,31 +696,6 @@ def geometry_target_key(geom_types: set):
         return "CHAT_OUTPUT_POLYGON"
     raise ValueError(f"Unsupported geometry types found: {geom_types}")
 
-# Upgrade geometry conversion: Point/Line/Polygon + Multi*
-def shapely_to_arcgis_geometry(geom):
-    gt = geom.geom_type
-    coords = mapping(geom)["coordinates"]
-
-    if gt in ("Point",):
-        x, y = coords
-        return {"x": x, "y": y, "spatialReference": {"wkid": 4326}}
-    if gt in ("MultiPoint",):
-        points = [{"x": x, "y": y} for x, y in coords]
-        return {"points": [[p["x"], p["y"]] for p in points], "spatialReference": {"wkid": 4326}}
-
-    if gt in ("LineString",):
-        return {"paths": [coords], "spatialReference": {"wkid": 4326}}
-    if gt in ("MultiLineString",):
-        return {"paths": [path for path in coords], "spatialReference": {"wkid": 4326}}
-
-    if gt in ("Polygon",):
-        return {"rings": coords, "spatialReference": {"wkid": 4326}}
-    if gt in ("MultiPolygon",):
-        # Flatten multipolygon into list of rings
-        rings = [ring for polygon in coords for ring in polygon]
-        return {"rings": rings, "spatialReference": {"wkid": 4326}}
-
-    raise ValueError(f"Unsupported geometry type: {gt}")
 
 def ensure_list(obj):
     if obj is None:
