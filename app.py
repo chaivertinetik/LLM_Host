@@ -39,6 +39,7 @@ from langchain.agents.agent_types import AgentType
 from langchain_core.language_models import LLM
 from google.cloud import firestore 
 from shapely.ops import unary_union
+import rtree
 # --------------------- Setup FASTAPI app ---------------------
 # Initialize FastAPI app
 app = FastAPI()
@@ -332,17 +333,18 @@ def fetch_crs(base_url, timeout=10, default_wkid=4326):
 
 def extract_geojson(url):
     try:
-        response = requests.get(f"{url}/0/query?where=1%3D1&outFields=*&f=geojson", timeout=10)
-        if response.status_code == 200:
-            geojson = response.json()
-            gdf = gpd.GeoDataFrame.from_features(geojson["features"])
-            return gdf
-        else:
-            print(f"Failed to fetch GeoJSON: {response.status_code}")
-            return None
+        wkid = fetch_crs(url, default_wkid=4326)
+        r = requests.get(f"{url}/0/query?where=1%3D1&outFields=*&f=geojson", timeout=10)
+        r.raise_for_status()
+        gj = r.json()
+        gdf = gpd.GeoDataFrame.from_features(gj["features"])
+        if gdf.crs is None:
+            gdf.set_crs(epsg=wkid, inplace=True)
+        return gdf
     except Exception as e:
         print(f"GeoJSON fetch error: {e}")
         return None
+
 
 
 
@@ -373,78 +375,147 @@ def get_roi_gdf(project_name: str) -> gpd.GeoDataFrame:
 
 #change the batch_size based on the upper cap for Foxholes 
 #def post_features_to_layer(gdf, target_url):
-def post_features_to_layer(gdf: gpd.GeoDataFrame, target_url: str, project_name: str, batch_size: int = 800):
+def post_features_to_layer(
+    gdf: gpd.GeoDataFrame,
+    target_url: str,
+    project_name: str,
+    batch_size: int = 800,
+):
     """
     Push features to an ArcGIS Feature Layer.
+
     - If CHAT_INPUT ROI exists for project_name, clip gdf to ROI before pushing.
-    - If ROI is empty/missing, push all rows.
+    - If ROI is empty/missing or clip fails, push all rows.
     - Reprojects to EPSG:4326 for ArcGIS JSON geometry payloads.
     """
+
     add_url = f"{target_url}/0/addFeatures"
     headers = {"Content-Type": "application/x-www-form-urlencoded"}
     allowed_fields = {"Health", "Tree_ID", "Species"}
 
-    if gdf is None or gdf.empty:
+    # ---- Early outs ---------------------------------------------------------
+    if gdf is None:
+        print("Nothing to push: input is None.")
+        return
+    if gdf.empty:
         print("Nothing to push: input GeoDataFrame is empty.")
         return
 
-    # --- 1) Prepare ROI (EPSG:4326) ---
-    roi_gdf = get_roi_gdf(project_name)  # empty if none
+    # ---- 1) Prepare working copy & CRS -------------------------------------
     gdf_work = gdf.copy()
 
-    # Ensure gdf has a CRS and convert to 4326 (ArcGIS expects lon/lat)
     try:
         if gdf_work.crs is None:
-            # best-effort: assume 4326 if unknown
+            # best-effort default; you can change this assumption if needed
             gdf_work.set_crs(epsg=4326, inplace=True, allow_override=True)
         if gdf_work.crs.to_epsg() != 4326:
             gdf_work = gdf_work.to_crs(epsg=4326)
     except Exception as e:
         print(f"CRS handling on input GDF failed, assuming EPSG:4326. Error: {e}")
-        gdf_work.set_crs(epsg=4326, inplace=True, allow_override=True)
-
-    # --- 2) Clip to ROI if present ---
-    if roi_gdf is not None and not roi_gdf.empty:
-        roi = roi_gdf
-        # If ROI not polygonal, buffer tiny amount to get area for intersection
         try:
-            if not any(gt in ("Polygon", "MultiPolygon") for gt in roi.geometry.dropna().geom_type.unique()):
-                roi = roi.copy()
-                roi["geometry"] = roi.buffer(1e-8)
-        except Exception:
-            # If any geometry issues, try union then small buffer
-            try:
-                u = unary_union([g for g in roi.geometry.values if g and not g.is_empty])
-                roi = gpd.GeoDataFrame(geometry=[u.buffer(1e-8)], crs=roi.crs)
-            except Exception as _e:
-                print(f"ROI normalization failed, skipping clip. {_e}")
-                roi = gpd.GeoDataFrame(geometry=[])
+            gdf_work.set_crs(epsg=4326, inplace=True, allow_override=True)
+        except Exception as e2:
+            print(f"Failed to set CRS to EPSG:4326 on input GDF: {e2}")
 
-        if not roi.empty:
+    # ---- 2) Fix invalid geometries on input (only for polygons) ---------------
+    try:
+        if not gdf_work.empty:
+            poly_mask = gdf_work.geom_type.isin(["Polygon", "MultiPolygon"])
+            gdf_work.loc[poly_mask, "geometry"] = gdf_work.loc[poly_mask, "geometry"].buffer(0)
+    except Exception as e:
+        print(f"Failed to fix polygon validity with buffer(0): {e}")
+
+
+    # ---- 3) Fetch ROI in EPSG:4326 & normalize ------------------------------
+    roi_gdf = get_roi_gdf(project_name)  # already returns EPSG:4326 (or empty)
+
+    # Log ROI status for clarity
+    roi_types = set()
+    try:
+        roi_types = set(roi_gdf.geom_type.unique()) if roi_gdf is not None and not roi_gdf.empty else set()
+    except Exception:
+        pass
+
+    print(
+        f"ROI status -> None? {roi_gdf is None}, "
+        f"empty? {getattr(roi_gdf, 'empty', True)}, "
+        f"crs={getattr(getattr(roi_gdf, 'crs', None), 'to_string', lambda: None)()}, "
+        f"geom_types={roi_types}"
+    )
+
+    # ---- 4) Clip to ROI if present & polygonal ------------------------------
+    clipped = False
+    pre_clip_count = len(gdf_work)
+
+    if roi_gdf is not None and not roi_gdf.empty:
+        # Keep only polygonal ROI parts
+        try:
+            roi = roi_gdf[roi_gdf.geom_type.isin(["Polygon", "MultiPolygon"])].copy()
+        except Exception:
+            roi = roi_gdf.copy()
+
+        if roi is not None and not roi.empty:
+            # Ensure ROI geometries are valid
             try:
-                # ensure same CRS (roi is already EPSG:4326 from get_roi_gdf)
+                roi["geometry"] = roi.geometry.buffer(0)
+            except Exception as e:
+                print(f"Failed to buffer(0) ROI geometries: {e}")
+
+            # (Optional) Dissolve ROI to reduce overlay artifacts with slivers
+            try:
+                from shapely.ops import unary_union
+                u = unary_union([g for g in roi.geometry.values if g and not g.is_empty])
+                roi = gpd.GeoDataFrame(geometry=[u], crs=roi.crs)
+            except Exception as e:
+                print(f"ROI dissolve/unary_union failed (continuing without dissolve): {e}")
+
+            # Clip using overlay; fallback to sjoin if overlay fails
+            try:
                 gdf_work = gpd.overlay(gdf_work, roi, how="intersection")
+                clipped = True
             except Exception as e:
                 print(f"overlay() failed, falling back to sjoin intersects. Error: {e}")
                 try:
-                    gdf_work = gdf_work.sjoin(roi, how="inner", predicate="intersects").drop(columns=[c for c in gdf_work.columns if c.endswith("_right")], errors="ignore")
+                    # sjoin returns join columns; keep only original columns + geometry
+                    joined = gdf_work.sjoin(roi[["geometry"]], how="inner", predicate="intersects")
+                    # Drop sjoin helper columns if present
+                    for col in ["index_right", "index_left"]:
+                        if col in joined.columns:
+                            joined = joined.drop(columns=[col], errors="ignore")
+                    # If sjoin duplicated columns, keep the left/original geometry & columns
+                    keep_cols = [c for c in gdf_work.columns if c in joined.columns] + ["geometry"]
+                    keep_cols = list(dict.fromkeys(keep_cols))  # de-dup while preserving order
+                    gdf_work = joined[keep_cols]
+                    clipped = True
                 except Exception as e2:
-                    print(f"sjoin() also failed; proceeding without clip. Error: {e2}")
+                    print(f"sjoin() also failed; proceeding WITHOUT clip. Error: {e2}")
+                    clipped = False
+        else:
+            print("ROI has no polygonal parts; skipping clip.")
+    else:
+        print("No ROI found; skipping clip.")
+
+    post_clip_count = len(gdf_work)
+    print(f"Clip result -> pre={pre_clip_count}, post={post_clip_count}, clipped={clipped}")
 
     if gdf_work is None or gdf_work.empty:
         print("Nothing to push after ROI clip (result empty).")
         return
 
-    # --- 3) Batch push ---
+    # ---- 5) Batch & push to ArcGIS -----------------------------------------
+    total_pushed = 0
     for start in range(0, len(gdf_work), batch_size):
         batch_gdf = gdf_work.iloc[start:start + batch_size]
         features = []
+
         for _, row in batch_gdf.iterrows():
             try:
                 arcgis_geom = shapely_to_arcgis_geometry(row.geometry)
                 attributes = {
                     k: _json_default(row.get(k))
-                    for k in allowed_fields if k in batch_gdf.columns}
+                    for k in allowed_fields
+                    if k in batch_gdf.columns
+                }
                 features.append({"geometry": arcgis_geom, "attributes": attributes})
             except Exception as e:
                 print(f"Skipping row due to geometry error: {e}")
@@ -453,13 +524,22 @@ def post_features_to_layer(gdf: gpd.GeoDataFrame, target_url: str, project_name:
             continue
 
         payload = {"features": json.dumps(features, default=_json_default), "f": "json"}
-
-        response = requests.post(add_url, data=payload, headers=headers)
+        try:
+            response = requests.post(add_url, data=payload, headers=headers, timeout=30)
+        except Exception as e:
+            print(f"POST to {add_url} failed: {e}")
+            continue
 
         if response.status_code == 200:
-            print(f"Pushed {len(features)} feature(s) to {target_url}:", response.json())
+            total_pushed += len(features)
+            try:
+                print(f"Pushed {len(features)} feature(s) to {target_url}: {response.json()}")
+            except Exception:
+                print(f"Pushed {len(features)} feature(s) to {target_url}: (non-JSON response)")
         else:
-            print("Failed to add features:", response.text)
+            print(f"Failed to add features (HTTP {response.status_code}): {response.text}")
+
+    print(f"Done. Total features pushed: {total_pushed}")
 
 def delete_all_features(target_url):
     query_url = f"{target_url}/0/query"
