@@ -40,7 +40,6 @@ from langchain_core.language_models import LLM
 from google.cloud import firestore 
 from shapely.ops import unary_union
 import rtree
-from google.cloud.firestore_v1 import SERVER_TIMESTAMP
 # --------------------- Setup FASTAPI app ---------------------
 # Initialize FastAPI app
 app = FastAPI()
@@ -132,27 +131,19 @@ def _json_default(obj):
 
 
 
-def load_history(session_id: str, max_turns=10):
-    messages_ref = db.collection("chat_histories").document(session_id).collection("messages")
-    docs = messages_ref.order_by("timestamp", direction="DESCENDING").limit(2 * max_turns).stream()
-    # Extract data and reverse so oldest message is first
-    history = [doc.to_dict() for doc in docs]
-    return history[::-1]
+def load_history(session_id:str, max_turns=10):
+        doc= db.collection("chat_histories").document(session_id).get()
+        history= doc.to_dict().get("history", []) if doc.exists else []
+        return history[ -2* max_turns:]
     
 def save_history(session_id: str, history: list): 
-    msg_ref = db.collection("chat_histories").document(session_id).collection("messages")
-    for entry in history: 
-        entry=dict(entry)
-        entry['timestamp'] = SERVER_TIMESTAMP
-        msg_ref.add(entry) 
-    # db.collection("chat_histories").document(session_id).set({"history": history})
+    db.collection("chat_histories").document(session_id).set({"history": history})
         
-
 def build_conversation_prompt(new_user_prompt: str,
                               history: list | None = None,
-                              max_interactions: int = 5) -> str:
+                              max_turns: int = 10) -> str:
     history = history or []
-    recent = history[-2 * max_interactions:]  # 2 messages per interaction
+    recent = history[-2 * max_turns:]
     lines = []
     for entry in recent:
         prefix = "User: " if entry.get('role') == 'user' else "Assistant: "
@@ -1431,6 +1422,3 @@ async def get_status(job_id: str):
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=int(os.environ.get("PORT", 8080)))
-
-
-
