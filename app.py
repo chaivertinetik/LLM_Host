@@ -111,22 +111,23 @@ llm = GeminiLLM(model=model)
 
 def _json_default(obj):
     # numpy → python
-    if isinstance(obj, (_np.integer,)):
+    if isinstance(obj, (np.integer,)):
         return int(obj)
-    if isinstance(obj, (_np.floating,)):
+    if isinstance(obj, (np.floating,)):
         return float(obj)
-    if isinstance(obj, (_np.bool_,)):
+    if isinstance(obj, (np.bool_,)):
         return bool(obj)
     # datetime-like → ISO 8601
-    if isinstance(obj, (_dt.datetime, _dt.date)):
+    if isinstance(obj, (datetime.datetime, datetime.date)):
         return obj.isoformat()
     # pandas Timestamp/NaT
-    if isinstance(obj, _pd.Timestamp):
+    if isinstance(obj, pd.Timestamp):
         return obj.isoformat()
-    if obj is _pd.NaT:
+    if obj is pd.NaT:
         return None
     # safest fallback
     return str(obj)
+
 
 
 def load_history(session_id:str, max_turns=10):
