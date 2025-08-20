@@ -40,6 +40,7 @@ from langchain_core.language_models import LLM
 from google.cloud import firestore 
 from shapely.ops import unary_union
 import rtree
+from google.cloud.firestore_v1 import SERVER_TIMESTAMP
 # --------------------- Setup FASTAPI app ---------------------
 # Initialize FastAPI app
 app = FastAPI()
@@ -137,7 +138,12 @@ def load_history(session_id:str, max_turns=10):
         return history[ -2* max_turns:]
     
 def save_history(session_id: str, history: list): 
-    db.collection("chat_histories").document(session_id).set({"history": history})
+    msg_ref = db.collection("chat_histories").document(session_id).collection("messages")
+    for entry in history: 
+        entry=dict(entry)
+        entry['timestamp'] = SERVER_TIMESTAMP
+        msg_ref.add(entry) 
+    # db.collection("chat_histories").document(session_id).set({"history": history})
         
 def build_conversation_prompt(new_user_prompt: str,
                               history: list | None = None,
