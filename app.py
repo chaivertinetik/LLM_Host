@@ -108,6 +108,27 @@ llm = GeminiLLM(model=model)
 #     return service_account.Credentials.from_service_account_info(credentials_info)
 
 
+
+def _json_default(obj):
+    # numpy → python
+    if isinstance(obj, (_np.integer,)):
+        return int(obj)
+    if isinstance(obj, (_np.floating,)):
+        return float(obj)
+    if isinstance(obj, (_np.bool_,)):
+        return bool(obj)
+    # datetime-like → ISO 8601
+    if isinstance(obj, (_dt.datetime, _dt.date)):
+        return obj.isoformat()
+    # pandas Timestamp/NaT
+    if isinstance(obj, _pd.Timestamp):
+        return obj.isoformat()
+    if obj is _pd.NaT:
+        return None
+    # safest fallback
+    return str(obj)
+
+
 def load_history(session_id:str, max_turns=10):
         doc= db.collection("chat_histories").document(session_id).get()
         history= doc.to_dict().get("history", []) if doc.exists else []
@@ -417,7 +438,9 @@ def post_features_to_layer(gdf: gpd.GeoDataFrame, target_url: str, project_name:
         for _, row in batch_gdf.iterrows():
             try:
                 arcgis_geom = shapely_to_arcgis_geometry(row.geometry)
-                attributes = {k: row.get(k) for k in allowed_fields if k in batch_gdf.columns}
+                attributes = {
+                    k: _json_default(row.get(k))
+                    for k in allowed_fields if k in batch_gdf.columns}
                 features.append({"geometry": arcgis_geom, "attributes": attributes})
             except Exception as e:
                 print(f"Skipping row due to geometry error: {e}")
@@ -425,7 +448,8 @@ def post_features_to_layer(gdf: gpd.GeoDataFrame, target_url: str, project_name:
         if not features:
             continue
 
-        payload = {"features": json.dumps(features), "f": "json"}
+        payload = {"features": json.dumps(features, default=_json_default), "f": "json"}
+
         response = requests.post(add_url, data=payload, headers=headers)
 
         if response.status_code == 200:
