@@ -718,7 +718,7 @@ def ensure_list(obj):
 # --------------------- ERDO LLM main functions ---------------------
 
 def wants_map_output_keyword(prompt: str) -> bool:
-    keywords = ["show", "display", "highlight", "visualize", "which trees", "what trees"]
+    keywords = ["show", "display", "highlight", "visualize"]
     prompt_lower = prompt.lower()
     return any(kw in prompt_lower for kw in keywords)
 
@@ -732,13 +732,16 @@ def wants_map_output_genai(prompt: str) -> bool:
 
     model = GenerativeModel("gemini-2.0-flash-001")
     system_prompt = (
-        "Decide if the user's input is asking for a map, list, or visual display of spatial features. "
-        "Return only 'yes' or 'no'. Examples:\n"
+        "Decide if the user's input is asking for a map, geodataframe, or visual display of spatial features. "
+        "Return only 'yes' for dispalying on the map or 'no' for things that can't be mapped. Examples:\n"
         "- 'Show all healthy trees' -> yes\n"
         "- 'Map the lost trees' -> yes\n"
-        "- 'List trees with crown size over 5m' -> yes\n"
+        "- 'Show trees with crown size over 5m' -> yes\n"
+        "- 'List trees with crown size over 5m' -> no\n"
         "- 'What is the distance between trees' -> no\n"
         "- 'Visualize all ash trees' -> yes\n"
+        "- 'How many ash trees are there' -> no\n"
+        "- 'Count the number of oak trees' -> no\n"
         "- 'Which trees are missing?' -> yes\n"
         "- 'How much volume was lost?' -> no\n"
         "- 'What is the total number of trees?' -> no\n"
