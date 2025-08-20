@@ -27,6 +27,7 @@ pyvis
 networkx
 pandas 
 geopandas
+rtree
 vertexai
 Flask==2.2.5
 gunicorn==21.2.0
@@ -45,4 +46,5 @@ autopep8
 langchain
 langchain-community
 earthengine-api
+
 google-cloud-firestore
