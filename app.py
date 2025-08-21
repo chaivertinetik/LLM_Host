@@ -40,7 +40,7 @@ from langchain_core.language_models import LLM
 from google.cloud import firestore 
 from shapely.ops import unary_union
 import rtree
-from google.cloud.firestore_v1 import SERVER_TIMESTAMP
+from datetime import datetime, timezone
 
 # --------------------- Setup FASTAPI app ---------------------
 # Initialize FastAPI app
@@ -146,7 +146,7 @@ def save_history(session_id: str, history: list):
 
     for entry in history:
         entry_copy= dict(entry)
-        entry_copy['timestamp'] = SERVER_TIMESTAMP
+        entry_copy['timestamp'] = datetime.now(timezone.utc)
         msg_ref.add(entry_copy)
 
 
