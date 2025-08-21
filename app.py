@@ -40,8 +40,6 @@ from langchain_core.language_models import LLM
 from google.cloud import firestore 
 from shapely.ops import unary_union
 import rtree
-
-
 # --------------------- Setup FASTAPI app ---------------------
 # Initialize FastAPI app
 app = FastAPI()
@@ -132,30 +130,28 @@ def _json_default(obj):
     return str(obj)
 
 
-
+#Temporary : need to revert to the collections-> with documents version and fix the datetime serialization error 
 def load_history(session_id:str, max_turns=5):
-        collection_name= f"chat_histories_{session_id}"
-        msg_ref = db.collection(collection_name)
-        docs = msg_ref.order_by("timestamp", direction = 'DESCENDING').limit( 2 * max_turns).stream()
-        history = [doc.to_dict() for doc in docs][::-1]
-        return history
+        doc= db.collection("chat_histories").document(session_id).get()
+        history= doc.to_dict().get("history", []) if doc.exists else []
+        return history[ -2* max_turns:]
     
-def save_history(session_id: str, history: list): 
-    collection_name= f"chat_histories_{session_id}"
-    msg_ref = db.collection(collection_name)
+def save_history(session_id: str, history: list):
+    # Load existing history
+    doc = db.collection("chat_histories").document(session_id).get()
+    existing_history = doc.to_dict().get("history", []) if doc.exists else []
 
-    for entry in history:
-        entry_copy= dict(entry)
-        # This was causing serialization and conversion issues have patched out!
-        # entry_copy['timestamp'] = datetime.now(timezone.utc)
-        msg_ref.add(entry_copy)
+    # Append new history entries
+    combined_history = existing_history + history
 
-
-    #db.collection("chat_histories").document(session_id).set({"history": history})
+    # Save combined history back
+    db.collection("chat_histories").document(session_id).set({"history": combined_history})
         
-def build_conversation_prompt(new_user_prompt, history, max_turns=5):   
+def build_conversation_prompt(new_user_prompt: str,
+                              history: list | None = None,
+                              max_turns: int = 5) -> str:
     history = history or []
-    recent = history[-2 * max_turns:]  
+    recent = history[-2 * max_turns:]
     lines = []
     for entry in recent:
         prefix = "User: " if entry.get('role') == 'user' else "Assistant: "
@@ -775,7 +771,6 @@ def wants_map_output_genai(prompt: str) -> bool:
 def wants_map_output(prompt: str) -> bool:
     # First try keyword matching
     if wants_map_output_keyword(prompt):
-        print("it wanted the map here... ")
         return True
     # Fallback to GenAI classification
     return wants_map_output_genai(prompt)
@@ -937,7 +932,6 @@ def long_running_task(user_task: str, task_name: str, data_locations: list):
     try:
         # job_status[job_id] = {"status": "running", "message": "Task is in progress"}
         # Set up task and directories
-        print(f"Received user_task (should be single prompt): {user_task}")
         save_dir = os.path.join(os.getcwd(), task_name)
         os.makedirs(save_dir, exist_ok=True)
         # Initialize Vertex AI done at the start. 
