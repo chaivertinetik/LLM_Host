@@ -771,7 +771,6 @@ def wants_map_output_genai(prompt: str) -> bool:
 def wants_map_output(prompt: str) -> bool:
     # First try keyword matching
     if wants_map_output_keyword(prompt):
-        print("it wanted the map here... ")
         return True
     # Fallback to GenAI classification
     return wants_map_output_genai(prompt)
@@ -933,7 +932,7 @@ def long_running_task(user_task: str, task_name: str, data_locations: list):
     try:
         # job_status[job_id] = {"status": "running", "message": "Task is in progress"}
         # Set up task and directories
-        print(f"Received user_task (should be single prompt): {user_task}")
+        # print(f"Received user_task (should be single prompt): {user_task}")
         save_dir = os.path.join(os.getcwd(), task_name)
         os.makedirs(save_dir, exist_ok=True)
         # Initialize Vertex AI done at the start. 
@@ -1047,9 +1046,12 @@ def long_running_task(user_task: str, task_name: str, data_locations: list):
                 filter(geojson,task_name)
             elif isinstance(result, list): 
                 filter(result,task_name)
+            message = f"Task '{task_name}' executed successfully."
+            if isinstance(result, str):
+                message = result
             return {
                 "status": "completed",
-                "message": f"Task '{task_name}' executed successfully.",
+                "message": message,
                 "tree_ids": result if isinstance(result, list) else (result.to_json() if hasattr(result, "to_json") and "GeoDataFrame" in str(type(result)) else None)
             }
         # job_status[job_id] = {"status": "completed", "message": f"Task '{task_name}' executed successfully, adding it to the map shortly."}
