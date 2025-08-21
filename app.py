@@ -744,7 +744,7 @@ def wants_map_output_genai(prompt: str) -> bool:
         "Return only 'yes' for dispalying on the map or 'no' for things that can't be mapped. Examples:\n"
         "- 'Show all healthy trees' -> yes\n"
         "- 'Map the lost trees' -> yes\n"
-        "- 'Count the ash trees' -> no\n"
+        "- 'Can you count the ash trees' -> no\n"
         "- 'How many ash trees are there' -> no\n"
         "- 'Show trees with crown size over 5m' -> yes\n"
         "- 'List trees with crown size over 5m' -> no\n"
@@ -771,6 +771,7 @@ def wants_map_output_genai(prompt: str) -> bool:
 def wants_map_output(prompt: str) -> bool:
     # First try keyword matching
     if wants_map_output_keyword(prompt):
+        print("it wanted the map here... ")
         return True
     # Fallback to GenAI classification
     return wants_map_output_genai(prompt)
@@ -932,6 +933,7 @@ def long_running_task(user_task: str, task_name: str, data_locations: list):
     try:
         # job_status[job_id] = {"status": "running", "message": "Task is in progress"}
         # Set up task and directories
+        print(f"Received user_task (should be single prompt): {user_task}")
         save_dir = os.path.join(os.getcwd(), task_name)
         os.makedirs(save_dir, exist_ok=True)
         # Initialize Vertex AI done at the start. 
