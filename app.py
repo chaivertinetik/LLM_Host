@@ -146,7 +146,8 @@ def save_history(session_id: str, history: list):
 
     for entry in history:
         entry_copy= dict(entry)
-        entry_copy['timestamp'] = datetime.now(timezone.utc)
+        # This was causing serialization and conversion issues have patched out!
+        # entry_copy['timestamp'] = datetime.now(timezone.utc)
         msg_ref.add(entry_copy)
 
 
