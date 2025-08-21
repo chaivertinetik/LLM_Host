@@ -40,7 +40,7 @@ from langchain_core.language_models import LLM
 from google.cloud import firestore 
 from shapely.ops import unary_union
 import rtree
-from datetime import datetime, timezone
+
 
 # --------------------- Setup FASTAPI app ---------------------
 # Initialize FastAPI app
