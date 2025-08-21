@@ -152,7 +152,7 @@ def save_history(session_id: str, history: list):
 
     #db.collection("chat_histories").document(session_id).set({"history": history})
         
-def build_conversation_prompt(self, new_user_prompt, history, max_turns=5):
+def build_conversation_prompt(new_user_prompt, history, max_turns=5):
     recent= history[-2*max_turns]
         
     history = history or []
