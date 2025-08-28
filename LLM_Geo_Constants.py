@@ -74,7 +74,7 @@ graph_requirement = [
                         'Ensure the code has **consistent 4-space indentation**, with no unexpected or extra indents. Avoid the use of tabs, as this can lead to indentation errors.',
                         'All lines should be properly aligned according to Python’s syntax rules.',
                         'Specifically, the first four lines should not have any unintended indentation. Use Python ast.parse to verify that the code does not have any "IndentationError" or "SyntaxError" before returning it. Ensure that all code blocks, especially those with comments or function calls, are properly aligned and contain no extraneous spaces or tabs.',
-                        'The purpose of running the LLM generated code is to obtain a geodataframe of trees that will be displayed using our own inbuilt function, or to return a textual response to the user, not generate a spatial plot or anything else (especially don't truncate or mess with the generated geodataframe)!'
+                        'The purpose of running the LLM generated code is to obtain a geodataframe of trees that will be displayed using our own inbuilt function, or to return a textual response to the user, not generate a spatial plot or anything else, especially don't truncate or mess with the generated geodataframe!'
                         # 'Keep the graph concise, DO NOT over-split task into too many small steps, especially for simple problems. For example, data loading and data transformation/preprocessing should be in one operation node.',
 
                          ]
@@ -91,7 +91,7 @@ operation_role = r'''A professional Geo-information scientist and programmer goo
 '''
 
 operation_task_prefix = r'The geoJSON file has the following properties like: "Health" (either "Healthy" or "Unhealthy"), "Tree_ID", "Species" ("Ash", "Field Maple", "Oak"), "Species_Conf", "Health_Conf", "SURVEY_DATE" (format: Wed, 11 Sep 2024 00:00:00 GMT), "Height", "Shape__Area", "Shape__Length"  and the final goal is to return a GeoDataFrame containing the relevant data or a text summary based on what the user wants. The purpose of running the LLM generated code is to obtain a geodataframe 
-of trees that will be displayed using our own inbuilt function, or to return a textual response to the user, not generate a spatial plot or anything else (especially don't truncate or mess with the generated geodataframe)! You need to generate a Python function to do: '
+of trees that will be displayed using our own inbuilt function, or to return a textual response to the user, not generate a spatial plot or anything else, especially don't truncate or mess with the generated geodataframe! You need to generate a Python function to do: '
 
 #For the demo case
 # operation_reply_exmaple = """
@@ -168,7 +168,7 @@ If joining FIPS or GEOID, need to fill the leading zeros (digits: state: 2, coun
 
 #--------------- constants for assembly prompt generation  ---------------
 assembly_role =  r'''A professional Geo-information scientist and programmer good at Python. You can read geoJSON files and depending on the task perform GIS operations. You have worked on Geographic information science more than 20 years, and know every detail and pitfall when processing spatial data and coding. Your are very good at assembling functions and small programs together. You know how to make programs robust. The purpose of running the LLM generated code is to obtain a geodataframe 
-of trees that will be displayed using our own inbuilt function, or to return a textual response to the user, not generate a spatial plot or anything else (especially don't truncate or mess with the generated geodataframe)!
+of trees that will be displayed using our own inbuilt function, or to return a textual response to the user, not generate a spatial plot or anything else, especially don't truncate or mess with the generated geodataframe!
 '''
 
 assembly_requirement = ['You can think step by step. ',
@@ -363,5 +363,6 @@ sampling_data_requirement = [
  
                         #
                         ]
+
 
 
