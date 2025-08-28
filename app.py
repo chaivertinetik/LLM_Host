@@ -359,33 +359,28 @@ def post_features_to_layer(gdf, target_url, batch_size=800):
             # print(f"Batch  {start//batch_size + 1} : Failed to add features:", response.text) 
             print("Failed to add features:", response.text)
 
-def delete_all_features(target_url):
-    query_url = f"{target_url}/0/query"
-    delete_url = f"{target_url}/0/deleteFeatures"
+def sanitise_delete_urls(target_url: str):
+    target_url = target_url.rstrip("/")
+    m = re.search(r"(.*?/FeatureServer)(?:/(\d+))?$", target_url)
+    if not m:
+        raise ValueError(f"Invalid FeatureServer URL: {target_url}")
+    base, layer = m.groups()
+    layer = layer or "0"
+    return f"{base}/{layer}/query", f"{base}/{layer}/deleteFeatures"
 
-    # Step 1: Get all existing OBJECTIDs
-    params = {
-        "where": "1=1",
-        "returnIdsOnly": "true",
-        "f": "json"
-    }
+def delete_all_features(target_url):
+    query_url, delete_url = sanitise_delete_urls(target_url)
+    params = {"where": "1=1", "returnIdsOnly": "true", "f": "json"}
     response = requests.get(query_url, params=params)
     data = response.json()
-
     object_ids = data.get("objectIds", [])
     if not object_ids:
         print("No features to delete.")
         return
-
-    print(f"Deleting {len(object_ids)} existing features...")
-
-    # Step 2: Delete by OBJECTIDs
-    delete_params = {
-        "objectIds": ",".join(map(str, object_ids)),
-        "f": "json"
-    }
+    delete_params = {"objectIds": ",".join(map(str, object_ids)), "f": "json"}
     delete_response = requests.post(delete_url, data=delete_params)
-    print("Delete response:", delete_response.json())
+    print("Delete response:", delete_response.text)
+
 
 def ensure_list(obj):
     # Handle numpy scalars and standard scalars
@@ -401,30 +396,53 @@ def ensure_list(obj):
         pass
 
 def filter(FIDS, project_name):
-    print("Made it to the filter function") 
-
-    # Case 1: If FIDS is already a GeoDataFrame, skip filtering
+    print("Made it to the filter function")
+    # Always get URLs up front so they're in scope
+    tree_crowns_url, chat_output_url = get_project_urls(project_name)
+    if not tree_crowns_url or not chat_output_url:
+        raise ValueError("Required URLs missing in Project Index.")
+    # CASE A: Already a GeoDataFrame → post as-is
     if isinstance(FIDS, gpd.GeoDataFrame):
-        post_gdf = FIDS
+        post_gdf = FIDS.copy()
     else:
-        # Make sure it's a list (for isin())
-        if FIDS is None:
-            raise ValueError("FIDS cannot be None.")
-        FIDS = ensure_list(FIDS)
-
-        tree_crowns_url, chat_output_url = get_project_urls(project_name)
-        if not tree_crowns_url or not chat_output_url:
-            raise ValueError("Required URLs missing in Project Index.")
-
-        gdf = extract_geojson(tree_crowns_url)
-        print("Columns in GDF:", gdf.columns.tolist())
-
-        if "Tree_ID" in gdf.columns:
-            gdf["Tree_ID"] = gdf["Tree_ID"].astype(int)
-            post_gdf = gdf[gdf["Tree_ID"].isin(FIDS)]
+        # If a GeoJSON string was passed, try to parse into a GDF
+        if isinstance(FIDS, str):
+            try:
+                parsed = json.loads(FIDS)
+                if "features" in parsed:
+                    post_gdf = gpd.GeoDataFrame.from_features(parsed["features"])
+                else:
+                    raise ValueError("Invalid GeoJSON: missing 'features'.")
+            except json.JSONDecodeError:
+                # Not GeoJSON → treat as IDs below
+                parsed = None
+                post_gdf = None
         else:
-            raise ValueError("Column 'Tree_ID' not found in GeoDataFrame.")
-
+            parsed = None
+            post_gdf = None
+        # If we still don't have a GDF, assume we have ID(s)
+        if post_gdf is None:
+            ids = ensure_list(FIDS)
+            # Defensive: drop Nones if they slipped in
+            ids = [i for i in ids if i is not None]
+            if len(ids) == 0:
+                raise ValueError("No valid IDs provided to filter().")
+            # Fetch crowns and filter by Tree_ID
+            gdf = extract_geojson(tree_crowns_url)
+            if gdf is None or gdf.empty:
+                raise ValueError("Tree crowns layer returned no data.")
+            if "Tree_ID" not in gdf.columns:
+                raise ValueError("Column 'Tree_ID' not found in GeoDataFrame.")
+            # Make both sides comparable, tolerate strings/ints
+            gdf["Tree_ID"] = pd.to_numeric(gdf["Tree_ID"], errors="coerce")
+            ids_num = pd.to_numeric(pd.Series(ids), errors="coerce").dropna().astype(int).tolist()
+            if len(ids_num) == 0:
+                raise ValueError("No numeric IDs could be parsed from FIDS.")
+            post_gdf = gdf[gdf["Tree_ID"].isin(ids_num)].copy()
+    if post_gdf.empty:
+        print("Filter produced an empty GeoDataFrame. Nothing to post.")
+        delete_all_features(chat_output_url)  # optional: clear layer anyway
+        return
     # Post workflow
     delete_all_features(chat_output_url)
     post_features_to_layer(post_gdf, chat_output_url)
@@ -550,13 +568,7 @@ def long_running_task(user_task: str, task_name: str, data_locations: list):
         if wants_map_output(user_task):
             
             print("Execution completed.")
-            if hasattr(result, "to_json") and "GeoDataFrame" in str(type(result)):
-                geojson = result.to_json()
-                filter(geojson,task_name)
-            
-            elif isinstance(result, list): 
-                filter(result,task_name)
-            
+            filter(result, task_name)          
             message = f"Task '{task_name}' executed successfully."
             if isinstance(result, str):
                 message = result
