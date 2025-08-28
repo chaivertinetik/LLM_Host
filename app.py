@@ -99,7 +99,7 @@ class GeminiLLM(LLM):
         return "code-gemini"
     
 # === Create Gemini model ===
-model = GenerativeModel("gemini-2.5-flash")
+model = GenerativeModel("gemini-2.0-flash-001")
 llm = GeminiLLM(model=model)
 
 
@@ -744,7 +744,7 @@ def wants_map_output_genai(prompt: str) -> bool:
     
     vertexai.init(project="disco-parsec-444415-c4", location="us-central1", credentials=credentials)
 
-    model = GenerativeModel("gemini-2.5-flash")
+    model = GenerativeModel("gemini-2.0-flash-001")
     system_prompt = (
         "Decide if the user's input is asking for a map, geodataframe, or visual display of spatial features. "
         "Return only 'yes' for dispalying on the map or 'no' for things that can't be mapped. Examples:\n"
@@ -789,7 +789,7 @@ def is_geospatial_task(prompt: str) -> bool:
     credentials = service_account.Credentials.from_service_account_info(credentials_data)
     vertexai.init(project="disco-parsec-444415-c4", location="us-central1", credentials=credentials)
     # gemini-1.5-flash-002
-    model = GenerativeModel("gemini-2.5-flash")
+    model = GenerativeModel("gemini-2.0-flash-001")
     system_prompt = (
         "Decide if the user's input is related to geospatial analysis or geospatial data. "
         "This includes queries about map features, tree health, species, spatial attributes, survey date, spatial selections, overlays, or analysis."
@@ -845,7 +845,7 @@ def wants_additional_info_genai(prompt: str) -> bool:
     credentials = service_account.Credentials.from_service_account_info(credentials_data)
     vertexai.init(project="disco-parsec-444415-c4", location="us-central1", credentials=credentials)
 
-    model = GenerativeModel("gemini-2.5-flash")
+    model = GenerativeModel("gemini-2.0-flash-001")
     system_prompt = (
         "Decide if the user's input is asking for additional geospatial explanation or advice, "
         "beyond simply showing or listing features. This includes queries about reasons, causes, impact, recommendations, "
@@ -898,7 +898,7 @@ def wants_gis_task_genai(prompt: str) -> bool:
     credentials = service_account.Credentials.from_service_account_info(credentials_data)
     vertexai.init(project="disco-parsec-444415-c4", location="us-central1", credentials=credentials)
 
-    model = GenerativeModel("gemini-2.5-flash")
+    model = GenerativeModel("gemini-2.0-flash-001")
 
     system_prompt = (
         "Decide if the user's input is asking for a geospatial operation involving spatial data processing or analysis. "
@@ -993,7 +993,7 @@ def long_running_task(user_task: str, task_name: str, data_locations: list):
         
         # Run the generated code
         #gemini-1.5-flash-002
-        model = GenerativeModel("gemini-2.5-flash")
+        model = GenerativeModel("gemini-2.0-flash-001")
         for attempt in range(10):
            try: 
               response = model.generate_content(solution.assembly_prompt)
