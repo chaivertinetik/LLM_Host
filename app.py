@@ -61,8 +61,9 @@ async def trigger_cleanup(task_name):
     tree_crowns_url, delete_url = get_project_urls(project_name)
     try:
         target_url = delete_url
-        query_url = f"{target_url}/0/query"
-        delete_url = f"{target_url}/0/deleteFeatures"
+        # query_url = f"{target_url}/0/query"
+        # delete_url = f"{target_url}/0/deleteFeatures"
+        query_url, delete_url = sanitise_delete_urls(target_url)
         # Step 1: Get all existing OBJECTIDs
         params = {
            "where": "1=1",
