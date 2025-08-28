@@ -302,8 +302,27 @@ def extract_geojson(url):
         
 #change the batch_size based on the upper cap for Foxholes 
 #def post_features_to_layer(gdf, target_url):
+def sanitise_add_url(target_url: str) -> str:
+    """
+    Ensure the ArcGIS FeatureServer URL ends with /<layerId>/addFeatures.
+    If no layerId is present, defaults to layer 0.
+    """
+    # Remove trailing slashes
+    target_url = target_url.rstrip("/")
+
+    # Regex to detect if URL ends with /FeatureServer or /FeatureServer/<layerId>
+    match = re.search(r"(.*?/FeatureServer)(?:/(\d+))?$", target_url)
+    if not match:
+        raise ValueError(f"Invalid FeatureServer URL: {target_url}")
+
+    base, layer = match.groups()
+    if layer is None:
+        layer = "0"  # default to layer 0 if not provided
+
+    return f"{base}/{layer}/addFeatures"
+    
 def post_features_to_layer(gdf, target_url, batch_size=800):
-    add_url = f"{target_url}/0/addFeatures"
+    add_url = sanitise_add_url(target_url)
     headers = {"Content-Type": "application/x-www-form-urlencoded"}
 
     allowed_fields = {"Health", "Tree_ID", "Species"}
