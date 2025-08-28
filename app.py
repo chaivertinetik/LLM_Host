@@ -543,12 +543,23 @@ def long_running_task(user_task: str, task_name: str, data_locations: list):
         print("Final result:", result)
        
         if wants_map_output(user_task):
-            filter(result,task_name)
+            
             print("Execution completed.")
+            if hasattr(result, "to_json") and "GeoDataFrame" in str(type(result)):
+                geojson = result.to_json()
+                filter(geojson,task_name)
+            
+            elif isinstance(result, list): 
+                filter(result,task_name)
+            
+            message = f"Task '{task_name}' executed successfully."
+            if isinstance(result, str):
+                message = result
+                
             return {
                 "status": "completed",
-                "message": f"Task '{task_name}' executed successfully.",
-                "tree_ids": result if isinstance(result, list) else None
+                "message": message,
+                "tree_ids": result if isinstance(result, list) else (result.to_json() if hasattr(result, "to_json") and "GeoDataFrame" in str(type(result)) else None)
             }
         # job_status[job_id] = {"status": "completed", "message": f"Task '{task_name}' executed successfully, adding it to the map shortly."}
         else: 
