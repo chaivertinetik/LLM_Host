@@ -517,27 +517,27 @@ class Solution():
     
     
     def get_LLM_assembly_response(self, review=True):
-        self.prompt_for_assembly_program()
-        assembly_LLM_response = helper.get_LLM_reply(prompt=self.assembly_prompt,
-                          system_role=constants.assembly_role,
-                          retry_cnt=10,
-                          sleep_sec=20
-                          # model=r"gpt-4",
-                         )
-        self.assembly_LLM_response = assembly_LLM_response
-        self.code_for_assembly = helper.extract_code(self.assembly_LLM_response)
+        # self.prompt_for_assembly_program()
+        # assembly_LLM_response = helper.get_LLM_reply(prompt=self.assembly_prompt,
+        #                   system_role=constants.assembly_role,
+        #                   retry_cnt=10,
+        #                   sleep_sec=20
+        #                   # model=r"gpt-4",
+        #                  )
+        # self.assembly_LLM_response = assembly_LLM_response
+        # self.code_for_assembly = helper.extract_code(self.assembly_LLM_response)
         
-        try:
-            code_for_assembly = helper.extract_code(response=self.assembly_LLM_response, verbose=False)
-        except Exception as e:
-                code_for_assembly = ""
+        # try:
+        #     code_for_assembly = helper.extract_code(response=self.assembly_LLM_response, verbose=False)
+        # except Exception as e:
+        #         code_for_assembly = ""
                 
-        self.code_for_assembly = code_for_assembly
+        # self.code_for_assembly = code_for_assembly
 
-        if review:
-            self.ask_LLM_to_review_assembly_code()
+        # if review:
+        #     self.ask_LLM_to_review_assembly_code()
         
-        return self.assembly_LLM_response
+        return self.prompt_for_assembly_program()
     
     def save_solution(self):
 #         , graph=True
@@ -795,5 +795,6 @@ class Solution():
         #     new_code = code
 
         # self.direct_request_code = new_code
+
 
 
