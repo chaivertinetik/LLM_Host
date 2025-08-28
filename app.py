@@ -402,28 +402,33 @@ def ensure_list(obj):
 
 def filter(FIDS, project_name):
     print("Made it to the filter function") 
-    FIDS = ensure_list(FIDS)
-    tree_crowns_url, chat_output_url = get_project_urls(project_name)
 
-    if not tree_crowns_url or not chat_output_url:
-        raise ValueError("Required URLs missing in Project Index.")
-
-    gdf = extract_geojson(tree_crowns_url)
-
-    print("Columns in GDF:", gdf.columns.tolist())
-
-    if "Tree_ID" in gdf.columns:
-        # Ensure TREE_ID is treated as integers for matching
-        gdf["Tree_ID"] = gdf["Tree_ID"].astype(int)
-        ash_gdf = gdf[gdf["Tree_ID"].isin(FIDS)]
-
-        # Delete all features before posting new ones
-        delete_all_features(chat_output_url)
-
-        # Then post
-        post_features_to_layer(ash_gdf, chat_output_url)
+    # Case 1: If FIDS is already a GeoDataFrame, skip filtering
+    if isinstance(FIDS, gpd.GeoDataFrame):
+        post_gdf = FIDS
     else:
-        print("Column 'Species' not found in GeoDataFrame.")   
+        # Make sure it's a list (for isin())
+        if FIDS is None:
+            raise ValueError("FIDS cannot be None.")
+        FIDS = ensure_list(FIDS)
+
+        tree_crowns_url, chat_output_url = get_project_urls(project_name)
+        if not tree_crowns_url or not chat_output_url:
+            raise ValueError("Required URLs missing in Project Index.")
+
+        gdf = extract_geojson(tree_crowns_url)
+        print("Columns in GDF:", gdf.columns.tolist())
+
+        if "Tree_ID" in gdf.columns:
+            gdf["Tree_ID"] = gdf["Tree_ID"].astype(int)
+            post_gdf = gdf[gdf["Tree_ID"].isin(FIDS)]
+        else:
+            raise ValueError("Column 'Tree_ID' not found in GeoDataFrame.")
+
+    # Post workflow
+    delete_all_features(chat_output_url)
+    post_features_to_layer(post_gdf, chat_output_url)
+
        
 def clean_indentation(code):
      # Split the code into lines
