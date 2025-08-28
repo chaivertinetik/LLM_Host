@@ -39,6 +39,7 @@ from langchain.agents.agent_types import AgentType
 from langchain_core.language_models import LLM
 from google.cloud import firestore 
 from shapely.ops import unary_union
+from sentence_transformers import SentenceTransformer
 import rtree
 # --------------------- Setup FASTAPI app ---------------------
 # Initialize FastAPI app
@@ -82,6 +83,8 @@ with open(key_path, 'w') as f:
 earth_credentials= ee.ServiceAccountCredentials(SERVICE_ACCOUNT, key_path)
 ee.Initialize(earth_credentials, project='disco-parsec-444415-c4')
 db = firestore.Client(project="disco-parsec-444415-c4", credentials=credentials)
+
+emd_model = SentenceTransformer('all-MiniLM-L6-v2')
 # --------------------- GIS CODE AGENT WRAPPER ---------------------
 
 class GeminiLLM(LLM):
@@ -96,7 +99,7 @@ class GeminiLLM(LLM):
         return "code-gemini"
     
 # === Create Gemini model ===
-model = GenerativeModel("gemini-2.0-flash-001")
+model = GenerativeModel("gemini-2.5-flash")
 llm = GeminiLLM(model=model)
 
 
@@ -741,7 +744,7 @@ def wants_map_output_genai(prompt: str) -> bool:
     
     vertexai.init(project="disco-parsec-444415-c4", location="us-central1", credentials=credentials)
 
-    model = GenerativeModel("gemini-2.0-flash-001")
+    model = GenerativeModel("gemini-2.5-flash")
     system_prompt = (
         "Decide if the user's input is asking for a map, geodataframe, or visual display of spatial features. "
         "Return only 'yes' for dispalying on the map or 'no' for things that can't be mapped. Examples:\n"
@@ -786,7 +789,7 @@ def is_geospatial_task(prompt: str) -> bool:
     credentials = service_account.Credentials.from_service_account_info(credentials_data)
     vertexai.init(project="disco-parsec-444415-c4", location="us-central1", credentials=credentials)
     # gemini-1.5-flash-002
-    model = GenerativeModel("gemini-2.0-flash-001")
+    model = GenerativeModel("gemini-2.5-flash")
     system_prompt = (
         "Decide if the user's input is related to geospatial analysis or geospatial data. "
         "This includes queries about map features, tree health, species, spatial attributes, survey date, spatial selections, overlays, or analysis."
@@ -842,7 +845,7 @@ def wants_additional_info_genai(prompt: str) -> bool:
     credentials = service_account.Credentials.from_service_account_info(credentials_data)
     vertexai.init(project="disco-parsec-444415-c4", location="us-central1", credentials=credentials)
 
-    model = GenerativeModel("gemini-2.0-flash-001")
+    model = GenerativeModel("gemini-2.5-flash")
     system_prompt = (
         "Decide if the user's input is asking for additional geospatial explanation or advice, "
         "beyond simply showing or listing features. This includes queries about reasons, causes, impact, recommendations, "
@@ -895,7 +898,7 @@ def wants_gis_task_genai(prompt: str) -> bool:
     credentials = service_account.Credentials.from_service_account_info(credentials_data)
     vertexai.init(project="disco-parsec-444415-c4", location="us-central1", credentials=credentials)
 
-    model = GenerativeModel("gemini-2.0-flash-001")
+    model = GenerativeModel("gemini-2.5-flash")
 
     system_prompt = (
         "Decide if the user's input is asking for a geospatial operation involving spatial data processing or analysis. "
@@ -990,7 +993,7 @@ def long_running_task(user_task: str, task_name: str, data_locations: list):
         
         # Run the generated code
         #gemini-1.5-flash-002
-        model = GenerativeModel("gemini-2.0-flash-001")
+        model = GenerativeModel("gemini-2.5-flash")
         for attempt in range(10):
            try: 
               response = model.generate_content(solution.assembly_prompt)
@@ -1231,6 +1234,50 @@ def get_geospatial_context(lat=40.7128, lon=-74.0060):
         "Elevation (m)": elevation.get('elevation', 'N/A')
     }
 
+def cosine_similarity(a, b):
+    """Calculate cosine similarity between two vectors."""
+    return np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b))
+
+def retrieve_rag_chunks(collection_name, query, top_k=5):
+    """
+    Retrieve top K most semantically similar chunks from the specified
+    subcollection under knowledge_chunks/root document in Firestore.
+    """
+    root_ref = db.collection("knowledge_chunks").document("root")
+    chunks_ref = root_ref.collection(collection_name).stream()
+
+    query_emb = emd_model.encode([query])[0]
+
+    scored_chunks = []
+    for doc in chunks_ref:
+        chunk = doc.to_dict()
+        emb = chunk.get("embedding", None)
+        if emb is not None:
+            # Convert embedding list to numpy array
+            emb_np = np.array(emb)
+            sim = cosine_similarity(query_emb, emb_np)
+            scored_chunks.append((sim, chunk))
+
+    # Sort chunks by descending similarity
+    scored_chunks.sort(key=lambda x: x[0], reverse=True)
+
+    # Return only the content field of top_k documents
+    top_contents = [chunk["content"] for _, chunk in scored_chunks[:top_k]]
+
+    return top_contents
+
+def rag_tree_grants_tool(query: str) -> str:
+    chunks = retrieve_rag_chunks("tree_grants", query)
+    if not chunks:
+        return "No relevant tree grants data found."
+    return "\n\n".join(chunks)
+
+def rag_tree_info_tool(query: str) -> str:
+    chunks = retrieve_rag_chunks("tree_info", query)
+    if not chunks:
+        return "No relevant tree info data found."
+    return "\n\n".join(chunks)
+
 #Can wrap the entire long process into this tool. so LLM orchestrator can handle. 
 # def gis_solution_tool(query: str) -> str:
 #     """
@@ -1262,7 +1309,18 @@ tools = [
     Tool(name="ClimateLookUp", func=get_climate_info, description="Returns precipitation, temperature, vegetation health (NDVI), flood risk, and sea level rise estimates for forestry planning."),
     Tool(name="CheckTreeHealth", func=check_tree_health, description="Assess how healthy the trees are using the canopy cover and soil."),
     Tool(name="SoilSuitabilityCheck",func=check_soil_suitability,description="Analyzes soil moisture, elevation, and land cover to evaluate suitability for native tree species planting."), 
-    Tool(name="TreeBenefitAssessment", func=assess_tree_benefit, description="Estimates carbon capture potential and cooling benefits based on NDVI, precipitation, and land cover data.")
+    Tool(name="TreeBenefitAssessment", func=assess_tree_benefit, description="Estimates carbon capture potential and cooling benefits based on NDVI, precipitation, and land cover data."),
+    Tool(
+        name="RAGTreeGrants",
+        func=rag_tree_grants_tool,
+        description="Retrieves recent tree grant and licensing information based on the users query."
+    ),
+
+    Tool(
+        name="RAGTreeInfo",
+        func=rag_tree_info_tool,
+        description="Retrieves additional forestry and tree information from based on UK forestry records and rules."
+    )
     # gis_batch_tool
 ]
 
