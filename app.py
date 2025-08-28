@@ -985,8 +985,8 @@ def long_running_task(user_task: str, task_name: str, data_locations: list):
 
         # Generate assembly code
         assembly_LLM_response = solution.get_LLM_assembly_response(review=False)
-        solution.assembly_LLM_response = assembly_LLM_response
-        solution.save_solution()
+        # solution.assembly_LLM_response = assembly_LLM_response
+        # solution.save_solution()
         
         # Run the generated code
         #gemini-1.5-flash-002
