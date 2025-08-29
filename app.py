@@ -39,6 +39,7 @@ from langchain.agents.agent_types import AgentType
 from langchain.prompts import PromptTemplate
 from langchain.output_parsers import JsonOutputParser
 from langchain_core.language_models import LLM
+from langchain_google_genai import ChatGoogleGenerativeAI
 from google.cloud import firestore 
 from shapely.ops import unary_union
 from sentence_transformers import SentenceTransformer
@@ -86,7 +87,7 @@ earth_credentials= ee.ServiceAccountCredentials(SERVICE_ACCOUNT, key_path)
 ee.Initialize(earth_credentials, project='disco-parsec-444415-c4')
 db = firestore.Client(project="disco-parsec-444415-c4", credentials=credentials)
 parser = JsonOutputParser()
-# rag_llm = ChatGoogleGenerativeAI(model="gemini-pro", temperature=0)
+rag_llm = ChatGoogleGenerativeAI(model="gemini-2.0-flash-001", temperature=0)
 emd_model = SentenceTransformer('all-MiniLM-L6-v2')
 # --------------------- GIS CODE AGENT WRAPPER ---------------------
 
@@ -1291,7 +1292,7 @@ def rag_tree_grants_tool(query: str) -> str:
         context=context_text,
         format_instructions=parser.get_format_instructions()
     )
-    response = llm.invoke(prompt)
+    response = rag_llm.invoke(prompt)
     parsed = parser.parse(response.content)
     return json.dumps(parsed)
 
@@ -1305,7 +1306,7 @@ def rag_tree_info_tool(query: str) -> str:
         context=context_text,
         format_instructions=parser.get_format_instructions()
     )
-    response = llm.invoke(prompt)
+    response = rag_llm.invoke(prompt)
     parsed = parser.parse(response.content)
     return json.dumps(parsed)
 
