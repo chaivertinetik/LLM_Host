@@ -44,7 +44,9 @@ pydantic
 black
 autopep8
 langchain
+langchain-google-genai
 langchain-community
 earthengine-api
 sentence-transformers
 google-cloud-firestore
+
