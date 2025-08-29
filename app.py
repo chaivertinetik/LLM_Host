@@ -37,7 +37,7 @@ from pydantic import BaseModel
 from langchain.agents import initialize_agent, Tool
 from langchain.agents.agent_types import AgentType
 from langchain.prompts import PromptTemplate
-from langchain.output_parsers import JsonOutputParser
+from langchain_core.output_parsers import JsonOutputParser
 from langchain_core.language_models import LLM
 from langchain_google_genai import ChatGoogleGenerativeAI
 from google.cloud import firestore 
