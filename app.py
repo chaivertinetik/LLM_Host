@@ -36,6 +36,8 @@ from typing import Dict
 from pydantic import BaseModel
 from langchain.agents import initialize_agent, Tool
 from langchain.agents.agent_types import AgentType
+from langchain.prompts import PromptTemplate
+from langchain.output_parsers import JsonOutputParser
 from langchain_core.language_models import LLM
 from google.cloud import firestore 
 from shapely.ops import unary_union
@@ -83,7 +85,8 @@ with open(key_path, 'w') as f:
 earth_credentials= ee.ServiceAccountCredentials(SERVICE_ACCOUNT, key_path)
 ee.Initialize(earth_credentials, project='disco-parsec-444415-c4')
 db = firestore.Client(project="disco-parsec-444415-c4", credentials=credentials)
-
+parser = JsonOutputParser()
+# rag_llm = ChatGoogleGenerativeAI(model="gemini-pro", temperature=0)
 emd_model = SentenceTransformer('all-MiniLM-L6-v2')
 # --------------------- GIS CODE AGENT WRAPPER ---------------------
 
@@ -1266,17 +1269,47 @@ def retrieve_rag_chunks(collection_name, query, top_k=5):
 
     return top_contents
 
+prompt_template = PromptTemplate(
+    input_variables=["query", "context", "format_instructions"],
+    template=(
+        "Use the following forestry data extracted from documents:\n"
+        "{context}\n\n"
+        "Answer the query with geospatial reasoning:\n"
+        "{query}\n\n"
+        "{format_instructions}\n"
+        "Return only valid JSON."
+    )
+)
+
 def rag_tree_grants_tool(query: str) -> str:
     chunks = retrieve_rag_chunks("tree_grants", query)
     if not chunks:
-        return "No relevant tree grants data found."
-    return "\n\n".join(chunks)
+        return json.dumps({"result": [], "message": "No relevant tree grants data found."})
+    context_text = "\n".join(chunks)
+    prompt = prompt_template.format(
+        query=query,
+        context=context_text,
+        format_instructions=parser.get_format_instructions()
+    )
+    response = llm.invoke(prompt)
+    parsed = parser.parse(response.content)
+    return json.dumps(parsed)
 
 def rag_tree_info_tool(query: str) -> str:
     chunks = retrieve_rag_chunks("tree_info", query)
     if not chunks:
-        return "No relevant tree info data found."
-    return "\n\n".join(chunks)
+        return json.dumps({"result": [], "message": "No relevant tree info data found."})
+    context_text = "\n".join(chunks)
+    prompt = prompt_template.format(
+        query=query,
+        context=context_text,
+        format_instructions=parser.get_format_instructions()
+    )
+    response = llm.invoke(prompt)
+    parsed = parser.parse(response.content)
+    return json.dumps(parsed)
+
+
 
 #Can wrap the entire long process into this tool. so LLM orchestrator can handle. 
 # def gis_solution_tool(query: str) -> str:
