@@ -59,7 +59,8 @@ graph_requirement = [
                         'Operation nodes need to connect via output data nodes, DO NOT connect the operation node directly.',
                         'The node attributes include: 1) node_type (data or operation), 2) data_path (data node only, set to "" if not given ), and description. E.g., {‘name’: “County boundary”, “data_type”: “data”, “data_path”: “D:\Test\county.shp”,  “description”: “County boundary for the study area”}.',
                         'If the user asks about the trees lost in a storm you need to compare the tree ids that survived before and after the storm from the two respective data sources',
-                        'To calculate volume of wood use "Height" * "Shape__Area"',
+                        #'To calculate volume of wood use "Height" * "Shape__Area"',
+                        'To calculate the volume of wood fit a Fit a regression species model using this allometric equation: log(DBH) = β0 + β1·log(height) + β2·log(crown area). Then use DBH to find basal area, Basal area = (π/4) × (DBH)^2 and volume = form factor (default:0.42) × basal area × tree height', 
                         'The connection between a node and an operation node is an edge.', 
                         'Add all nodes and edges, including node attributes to a NetworkX instance, DO NOT change the attribute names.',
                         'DO NOT generate code to implement the steps.',
@@ -144,7 +145,7 @@ operation_requirement = [
                         "Geopandas.GeoSeries.intersects(other, align=True) returns a Series of dtype('bool') with value True for each aligned geometry that intersects other. other:GeoSeries or geometric object. ",
                         "If using GeoPandas for spatial joining, the arguements are: geopandas.sjoin(left_df, right_df, how='inner', predicate='intersects', lsuffix='left', rsuffix='right', **kwargs), how: the type of join, default ‘inner’, means use intersection of keys from both dfs while retain only left_df geometry column. If 'how' is 'left': use keys from left_df; retain only left_df geometry column, and similarly when 'how' is 'right'. ",
                         "Note geopandas.sjoin() returns all joined pairs, i.e., the return could be one-to-many. E.g., the intersection result of a polygon with two points inside it contains two rows; in each row, the polygon attributes are the same. If you need of extract the polygons intersecting with the points, please remember to remove the duplicated rows in the results.",
-
+                        "For oak use the formula: log(DBH_cm) = 2.20733 + 0.97484 * log(Height) + 0.0681 * (Shape_Area) and for ash: log(DBH) = -1.0 + 0.7 * log(Height) + 0.5 * log(Shape_Area) as the default if nothing is provided.",
                         "DO NOT use 'if __name__ == '__main__:' statement because this program needs to be executed by exec().",
                         "Use the Python built-in functions or attribute. If you do not remember, DO NOT make up fake ones, just use alternative methods.",
                         "Pandas library has no attribute or method 'StringIO', so 'pd.compat.StringIO' is wrong, you need to use 'io.StringIO' instead.",
