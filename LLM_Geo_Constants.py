@@ -60,7 +60,7 @@ graph_requirement = [
                         'The node attributes include: 1) node_type (data or operation), 2) data_path (data node only, set to "" if not given ), and description. E.g., {‘name’: “County boundary”, “data_type”: “data”, “data_path”: “D:\Test\county.shp”,  “description”: “County boundary for the study area”}.',
                         'If the user asks about the trees lost in a storm you need to compare the tree ids that survived before and after the storm from the two respective data sources',
                         #'To calculate volume of wood use "Height" * "Shape__Area"',
-                        'To calculate the volume of wood fit a Fit a regression species model using this allometric equation: log(DBH) = β0 + β1·log(height) + β2·log(crown area). Then use DBH to find basal area, Basal area = (π/4) × (DBH)^2 and volume = form factor (default:0.42) × basal area × tree height', 
+                        'To calculate the volume of wood fit a Fit a regression species model using this allometric equation: log(DBH) = β0 + β1·log(height) + β2·log(crown area). Then use DBH to find basal area, Basal area = (π/4) × (DBH)^2 and volume = form factor (default:0.42) × basal area × tree height and display unit (cubic metre)', 
                         'The connection between a node and an operation node is an edge.', 
                         'Add all nodes and edges, including node attributes to a NetworkX instance, DO NOT change the attribute names.',
                         'DO NOT generate code to implement the steps.',
@@ -363,4 +363,5 @@ sampling_data_requirement = [
  
                         #
                         ]
+
 
