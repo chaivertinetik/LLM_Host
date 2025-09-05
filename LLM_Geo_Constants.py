@@ -145,7 +145,7 @@ operation_requirement = [
                         "Geopandas.GeoSeries.intersects(other, align=True) returns a Series of dtype('bool') with value True for each aligned geometry that intersects other. other:GeoSeries or geometric object. ",
                         "If using GeoPandas for spatial joining, the arguements are: geopandas.sjoin(left_df, right_df, how='inner', predicate='intersects', lsuffix='left', rsuffix='right', **kwargs), how: the type of join, default ‘inner’, means use intersection of keys from both dfs while retain only left_df geometry column. If 'how' is 'left': use keys from left_df; retain only left_df geometry column, and similarly when 'how' is 'right'. ",
                         "Note geopandas.sjoin() returns all joined pairs, i.e., the return could be one-to-many. E.g., the intersection result of a polygon with two points inside it contains two rows; in each row, the polygon attributes are the same. If you need of extract the polygons intersecting with the points, please remember to remove the duplicated rows in the results.",
-                        "For oak use the formula: log(DBH_cm) = 2.20733 + 0.97484 * log(Height) + 0.0681 * (Shape_Area) and for ash: log(DBH) = -1.0 + 0.7 * log(Height) + 0.5 * log(Shape_Area) as the default if nothing is provided.",
+                        "For oak use the formula: log(DBH_cm) = 2.20733 + 0.97484 * log(Height) + 0.0681 * (Shape_Area) and for ash: log(DBH) = -1.0 + 0.7 * log(Height) + 0.5 * log(Shape_Area) and for spruce: log(DBH) = -1.5 + 0.8 * log(Height) + 0.6 * log(Shape_Area) and for japanese larch: log(DBH) = -1.2 + 0.7 * log(Height) + 0.5 * log(Shape_Area) and for lodgepole pine: log(DBH) = -1.0 + 0.75 * log(Height) + 0.55 * log(Shape_Area) as the default if nothing is provided.",
                         "DO NOT use 'if __name__ == '__main__:' statement because this program needs to be executed by exec().",
                         "Use the Python built-in functions or attribute. If you do not remember, DO NOT make up fake ones, just use alternative methods.",
                         "Pandas library has no attribute or method 'StringIO', so 'pd.compat.StringIO' is wrong, you need to use 'io.StringIO' instead.",
@@ -363,5 +363,6 @@ sampling_data_requirement = [
  
                         #
                         ]
+
 
 
