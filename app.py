@@ -31,7 +31,10 @@ import autopep8
 import numpy as np
 import collections.abc
 import pandas as pd
+from google.cloud import firestore 
+from vertexai.language_models import TextGenerationModel
 
+    
 # Initialize FastAPI app
 app = FastAPI()
 
@@ -43,6 +46,14 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+google_creds = os.environ.get("GOOGLE_CREDENTIALS")
+if not google_creds:
+    raise EnvironmentError("GOOGLE_CREDENTIALS env var is missing")
+
+credentials_data = json.loads(google_creds)
+credentials = service_account.Credentials.from_service_account_info(credentials_data)
+
+db = firestore.Client(project="disco-parsec-444415-c4", credentials=credentials)
 
 # Global dictionary to track job statuses
 # job_status: Dict[str, Dict[str, str]] = {}
@@ -56,6 +67,22 @@ class RequestData(BaseModel):
     task: str = "No task provided."
     task_name: str = "default_task"
 
+def save_history(session_id: str, history: list):
+    # Load existing history
+    doc = db.collection("chat_histories").document(session_id).get()
+    existing_history = doc.to_dict().get("history", []) if doc.exists else []
+
+    # Append new history entries
+    combined_history = existing_history + history
+
+    # Save combined history back
+    db.collection("chat_histories").document(session_id).set({"history": combined_history})
+
+def load_history(session_id:str, max_turns=5):
+        doc= db.collection("chat_histories").document(session_id).get()
+        history= doc.to_dict().get("history", []) if doc.exists else []
+        return history[ -2* max_turns:]
+    
 async def trigger_cleanup(task_name):
     project_name = task_name
     tree_crowns_url, delete_url = get_project_urls(project_name)
@@ -598,10 +625,15 @@ def long_running_task(user_task: str, task_name: str, data_locations: list):
 async def process_request(request_data: RequestData):
     user_task = request_data.task.strip().lower()
     task_name = request_data.task_name
+    session_id = request_data.task_name
     if re.search(r"\b(clear|reset|cleanup|clean|wipe)\b", user_task):
         return await trigger_cleanup(task_name)
        
+    history = load_history(session_id, max_turns=10)
     if not is_geospatial_task(user_task):
+        history.append({'role': 'user', 'content': user_task})
+        history.append({'role': 'assistant', 'content': "Not programmed to do that."})
+        save_history(session_id, history)
         return {
             "status": "completed",
             "message": "I haven't been programmed to do that"
@@ -637,6 +669,10 @@ async def process_request(request_data: RequestData):
         # background_tasks.add_task(long_running_task, job_id, user_task, task_name, data_locations)
         result = long_running_task(user_task, task_name, data_locations)
         message = result.get("message") if isinstance(result, dict) else str(result)
+        
+        history.append({'role': 'user', 'content': user_task})
+        history.append({'role': 'assistant', 'content': "Not programmed to do that."})
+        save_history(session_id, history)
         return {
             "status": "completed",
             "message": message,
