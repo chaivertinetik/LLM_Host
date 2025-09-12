@@ -671,7 +671,7 @@ async def process_request(request_data: RequestData):
         message = result.get("message") if isinstance(result, dict) else str(result)
         
         history.append({'role': 'user', 'content': user_task})
-        history.append({'role': 'assistant', 'content': "Not programmed to do that."})
+        history.append({'role': 'assistant', 'content': message})
         save_history(session_id, history)
         return {
             "status": "completed",
