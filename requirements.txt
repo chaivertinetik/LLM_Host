@@ -42,3 +42,4 @@ uvicorn
 pydantic
 black
 autopep8
+google-cloud-firestore
