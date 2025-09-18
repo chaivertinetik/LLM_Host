@@ -108,7 +108,7 @@ llm = GeminiLLM(model=model)
 
 
 # Global dictionary to track job statuses
-# job_status: Dict[str, Dict[str, str]] = {}
+job_status: Dict[str, Dict[str, str]] = {}
 
 # Load credentials from environment variable or file
 # def get_credentials():
@@ -183,8 +183,9 @@ async def trigger_cleanup(task_name: str):
 
         cleaned_any = False
         for target_url in [u for u in urls if u]:
-            query_url = f"{target_url}/0/query"
-            delete_url = f"{target_url}/0/deleteFeatures"
+            layer = _sanitise_layer_url(target_url)   # -> .../FeatureServer/<id>
+            query_url  = f"{layer}/query"
+            delete_url = f"{layer}/deleteFeatures"
 
             params = {"where": "1=1", "returnIdsOnly": "true", "f": "json"}
             r = requests.get(query_url, params=params)
@@ -203,9 +204,12 @@ async def trigger_cleanup(task_name: str):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Cleanup failed: {str(e)}")
       
+class ClearRequest(BaseModel):
+    task_name: str
+
 @app.post("/clear")
-async def clear_state():
-    return await trigger_cleanup(task_name)
+async def clear_state(req: ClearRequest):
+    return await trigger_cleanup(req.task_name)
        
 def shapely_to_arcgis_geometry(geom, wkid: int):
     gt = geom.geom_type
@@ -649,8 +653,9 @@ def post_features_to_layer(gdf, target_url,project_name, batch_size=800):
 
 
 def delete_all_features(target_url):
-    query_url = f"{target_url}/0/query"
-    delete_url = f"{target_url}/0/deleteFeatures"
+    layer = _sanitise_layer_url(target_url)   # -> .../FeatureServer/<id>
+    query_url  = f"{layer}/query"
+    delete_url = f"{layer}/deleteFeatures"
 
     # Step 1: Get all existing OBJECTIDs
     params = {
@@ -1474,6 +1479,291 @@ tools = [
     # gis_batch_tool
 ]
 
+#----------------------------Data Location logic-------------
+import json as _json
+from urllib.parse import quote as _q
+import re
+import requests
+import geopandas as gpd
+import pandas as pd
+from shapely.geometry import shape, Polygon, MultiPolygon, GeometryCollection
+from shapely.ops import unary_union
+
+# --- URL utilities ------------------------------------------------------------
+
+def _sanitise_layer_url(url: str) -> str:
+    """
+    Normalise any ArcGIS service URL to a concrete layer URL:
+      accepts .../FeatureServer, .../FeatureServer/0, .../FeatureServer/0/query
+      and .../MapServer, .../MapServer/3, .../MapServer/3/query
+    Returns canonical '.../(FeatureServer|MapServer)/<layerId>'.
+    """
+    if not isinstance(url, str) or not url.strip():
+        raise ValueError("URL must be a non-empty string")
+
+    u = url.strip().rstrip("/")
+    u = re.sub(r"/query$", "", u, flags=re.IGNORECASE)
+
+    m = re.search(r"(.*?/(?:FeatureServer|MapServer))(?:/(\d+))?$", u, flags=re.IGNORECASE)
+    if not m:
+        raise ValueError(f"Not a valid ArcGIS service URL: {url}")
+
+    base, layer = m.groups()
+    layer = layer or "0"
+    return f"{base}/{layer}"
+
+def _get_layer_max_record_count(layer_url: str, timeout: int = 10) -> int:
+    try:
+        r = requests.get(f"{layer_url}?f=json", timeout=timeout)
+        r.raise_for_status()
+        meta = r.json()
+        mrc = meta.get("maxRecordCount")
+        if isinstance(mrc, int) and mrc > 0:
+            return mrc
+    except Exception:
+        pass
+    return 1000
+
+# --- Geometry helpers ---------------------------------------------------------
+
+def _gdf_from_layer_all(layer_url: str, out_wkid: int = 4326, timeout: int = 15) -> gpd.GeoDataFrame:
+    """
+    Pull *all* features from a layer as GeoJSON (handles pagination).
+    Returns an empty GDF if there are no features.
+    """
+    page_size = _get_layer_max_record_count(layer_url, timeout=timeout)
+    features = []
+    offset = 0
+    while True:
+        params = {
+            "where": "1=1",
+            "outFields": "*",
+            "f": "geojson",
+            "outSR": out_wkid,
+            "resultOffset": offset,
+            "resultRecordCount": page_size,
+        }
+        r = requests.get(f"{layer_url}/query", params=params, timeout=timeout)
+        r.raise_for_status()
+        payload = r.json()
+        fc = payload.get("features", [])
+        if not isinstance(fc, list):
+            err = payload.get("error", {})
+            msg = err.get("message") or "Unexpected response structure from service"
+            raise RuntimeError(f"ArcGIS error: {msg}")
+        features.extend(fc)
+        if len(fc) < page_size:
+            break
+        offset += page_size
+
+    if not features:
+        return gpd.GeoDataFrame(geometry=[], crs=f"EPSG:{out_wkid}")
+
+    gdf = gpd.GeoDataFrame.from_features(features, crs=f"EPSG:{out_wkid}")
+    return gdf
+
+def _rings_from_shapely(geom) -> list[list[list[float]]]:
+    """
+    Convert Polygon/MultiPolygon into Esri 'rings' (list of linear rings).
+    Includes holes where present. Coordinates assumed in desired CRS already.
+    """
+    if isinstance(geom, Polygon):
+        exterior = list(map(list, geom.exterior.coords)) if geom.exterior else []
+        holes = [list(map(list, r.coords)) for r in geom.interiors] if geom.interiors else []
+        return [exterior] + holes
+
+    if isinstance(geom, MultiPolygon):
+        rings = []
+        for poly in geom.geoms:
+            rings.extend(_rings_from_shapely(poly))
+        return rings
+
+    raise ValueError(f"Unsupported geometry type for rings: {geom.geom_type}")
+
+def fetch_crs(base_url, timeout=10, default_wkid=4326):
+    """
+    Your existing helper in the previous message can be reused.
+    Kept here for completeness—drop this if you already defined it elsewhere.
+    """
+    try:
+        response = requests.get(f"{base_url}?f=json", timeout=timeout)
+        response.raise_for_status()
+        metadata = response.json()
+        spatial_ref = metadata.get("spatialReference")
+        if spatial_ref and "wkid" in spatial_ref:
+            return spatial_ref["wkid"]
+        tile_info = metadata.get("tileInfo")
+        if tile_info:
+            tile_spatial_ref = tile_info.get("spatialReference")
+            if tile_spatial_ref and "wkid" in tile_spatial_ref:
+                return tile_spatial_ref["wkid"]
+        layers = metadata.get("layers")
+        if layers:
+            for layer in layers:
+                sr = layer.get("extent", {}).get("spatialReference") or layer.get("spatialReference")
+                if sr and "wkid" in sr:
+                    return sr["wkid"]
+        return default_wkid
+    except Exception:
+        return default_wkid
+
+# --- AOI selection: CHAT_INPUT first, fallback to ORTHOMOSAIC extent -----------
+
+def get_project_aoi_geometry(project_name: str):
+    """
+    Build an AOI geometry for querying:
+      - If CHAT_INPUT has polygons: union them and return Esri polygon JSON.
+      - Else: use ORTHOMOSAIC service extent and return Esri envelope JSON.
+
+    Returns a dict:
+      {
+        "geometry": <Esri JSON geometry>,
+        "geometryType": "esriGeometryPolygon" | "esriGeometryEnvelope",
+        "inSR": <wkid>
+      }
+    """
+    attrs = get_project_urls(project_name)
+
+    chat_input_url = (attrs.get("CHAT_INPUT") or "").strip()
+    ortho_url = (attrs.get("ORTHOMOSAIC") or "").strip()
+
+    # 1) Try CHAT_INPUT polygons (FeatureServer layer)
+    if chat_input_url:
+        try:
+            layer_url = _sanitise_layer_url(chat_input_url)
+            wkid = fetch_crs(layer_url) or 4326
+            gdf = _gdf_from_layer_all(layer_url, out_wkid=wkid)
+
+            # Keep only polygonal geometries
+            if not gdf.empty:
+                polys = [geom for geom in gdf.geometry if geom and geom.geom_type in ("Polygon", "MultiPolygon")]
+                if polys:
+                    u = unary_union(polys)
+                    # Handle GeometryCollection by extracting polygonal parts
+                    if isinstance(u, GeometryCollection):
+                        parts = [g for g in u.geoms if g.geom_type in ("Polygon", "MultiPolygon")]
+                        u = unary_union(parts) if parts else None
+
+                    if u and not u.is_empty:
+                        # Ensure polygon or multipolygon
+                        if u.geom_type == "Polygon":
+                            rings = _rings_from_shapely(u)
+                        elif u.geom_type == "MultiPolygon":
+                            rings = _rings_from_shapely(u)
+                        else:
+                            raise ValueError(f"Unexpected union type: {u.geom_type}")
+
+                        return {
+                            "geometry": {
+                                "rings": rings,
+                                "spatialReference": {"wkid": wkid}
+                            },
+                            "geometryType": "esriGeometryPolygon",
+                            "inSR": wkid
+                        }
+        except Exception as e:
+            print(f"CHAT_INPUT AOI fallback due to: {e}")
+
+    # 2) Fallback: ORTHOMOSAIC extent (ImageServer)
+    if not ortho_url:
+        raise ValueError("Both CHAT_INPUT and ORTHOMOSAIC are missing for this project.")
+
+    try:
+        base = ortho_url.rstrip("/")
+        r = requests.get(f"{base}?f=json", timeout=15)
+        r.raise_for_status()
+        meta = r.json()
+
+        # Extent could be at 'extent' or 'fullExtent' depending on service type
+        extent = meta.get("extent") or meta.get("fullExtent")
+        if not extent:
+            raise RuntimeError("ORTHOMOSAIC service does not expose an extent.")
+
+        sr = extent.get("spatialReference") or meta.get("spatialReference") or {}
+        wkid = sr.get("wkid") or fetch_crs(base) or 4326
+
+        env = {
+            "xmin": extent["xmin"],
+            "ymin": extent["ymin"],
+            "xmax": extent["xmax"],
+            "ymax": extent["ymax"],
+            "spatialReference": {"wkid": wkid}
+        }
+
+        return {
+            "geometry": env,
+            "geometryType": "esriGeometryEnvelope",
+            "inSR": wkid
+        }
+    except Exception as e:
+        # fall back to a harmless empty envelope in EPSG:4326
+        return {
+            "geometry": {"xmin": 0, "ymin": 0, "xmax": 0, "ymax": 0, "spatialReference": {"wkid": 4326}},
+            "geometryType": "esriGeometryEnvelope",
+            "inSR": 4326
+        }
+        
+def _build_spatial_query_url(layer_url: str, aoi: dict, where: str = "1=1", out_fields: str = "*") -> str:
+    """
+    Returns a fully-formed ArcGIS /query URL that uses the project AOI.
+    - layer_url: .../FeatureServer[/<id>] OR .../MapServer[/<id>] (any form is fine)
+    - aoi: result of get_project_aoi_geometry(project_name)
+    """
+    lyr = _sanitise_layer_url(layer_url)
+    out_wkid = fetch_crs(lyr) or 4326
+    geom = _q(_json.dumps(aoi["geometry"], separators=(",", ":")))
+    return (
+        f"{lyr}/query"
+        f"?where={_q(where)}"
+        f"&geometry={geom}"
+        f"&geometryType={_q(aoi['geometryType'])}"
+        f"&spatialRel=esriSpatialRelIntersects"
+        f"&inSR={aoi['inSR']}"
+        f"&outFields={_q(out_fields)}"
+        f"&outSR={out_wkid}"
+        f"&f=geojson"
+    )
+
+def make_project_data_locations(project_name: str, include_seasons: bool, attrs: dict) -> list[str]:
+    """
+    Builds your data_locations array using the project AOI for spatial filtering.
+    - include_seasons: True for TT_GCW1_Summer/Winter branch; False otherwise
+    - attrs: result from get_project_urls(project_name)
+    """
+    aoi = get_project_aoi_geometry(project_name)
+
+    # Core project layers
+    tree_crowns_url = get_attr(attrs, "TREE_CROWNS")
+
+    # National context layers (static)
+    os_roads = "https://services.arcgis.com/qHLhLQrcvEnxjtPr/arcgis/rest/services/OS_OpenRoads/FeatureServer/1"
+    os_buildings = "https://services.arcgis.com/qHLhLQrcvEnxjtPr/arcgis/rest/services/OS_OpenMap_Local_Buildings/FeatureServer/1"
+    os_green = "https://services.arcgis.com/qHLhLQrcvEnxjtPr/arcgis/rest/services/OS_Open_Greenspace/FeatureServer/1"
+
+    data_locations = [
+        f"Tree crown (AOI): {_build_spatial_query_url(tree_crowns_url, aoi, out_fields='*')}.",
+        f"Roads (AOI): {_build_spatial_query_url(os_roads, aoi, out_fields='*')}.",
+        f"Buildings (AOI): {_build_spatial_query_url(os_buildings, aoi, out_fields='*')}.",
+        f"Green spaces (AOI): {_build_spatial_query_url(os_green, aoi, out_fields='*')}.",
+    ]
+
+    if include_seasons:
+        attrs_summer = get_project_urls("TT_GCW1_Summer")
+        attrs_winter = get_project_urls("TT_GCW1_Winter")
+        tree_crown_summer = get_attr(attrs_summer, "TREE_CROWNS")
+        tree_crown_winter = get_attr(attrs_winter, "TREE_CROWNS")
+
+        data_locations.insert(
+            1,  # put seasonal layers right after the main crowns
+            f"Before storm crowns (AOI): {_build_spatial_query_url(tree_crown_summer, aoi, out_fields='*')}."
+        )
+        data_locations.insert(
+            2,
+            f"After storm crowns (AOI): {_build_spatial_query_url(tree_crown_winter, aoi, out_fields='*')}."
+        )
+
+    return data_locations
+
 
 
 
@@ -1521,36 +1811,9 @@ async def process_request(request_data: RequestData):
             tree_crowns_url = get_attr(attrs, "TREE_CROWNS")
             roi_url = get_attr(attrs, "CHAT_INPUT")
             if task_name in ["TT_GCW1_Summer", "TT_GCW1_Winter"]:
-                attrs_summer = get_project_urls("TT_GCW1_Summer")
-                attrs_winter = get_project_urls("TT_GCW1_Winter")
-                tree_crown_summer = get_attr(attrs_summer, "TREE_CROWNS")
-                tree_crown_winter = get_attr(attrs_winter, "TREE_CROWNS")
-            
-                # Fetch CRS for each relevant URL
-                # crs_current = fetch_crs(tree_crowns_url)
-                # crs_summer = fetch_crs(tree_crown_summer)
-                # crs_winter = fetch_crs(tree_crown_winter)
-                # (CRS: EPSG:{crs_current})
-                # (CRS: EPSG:{crs_summer})
-                #( CRS: EPSG:{crs_winter})
-                data_locations = [
-                    f"Tree crown geoJSON shape file: {tree_crowns_url}/0/query?where=1%3D1&outFields=*&f=geojson.",
-                    "Road crown geoJSON: https://services.arcgis.com/qHLhLQrcvEnxjtPr/arcgis/rest/services/OS_OpenRoads/FeatureServer/1/query?where=1=1&f=geojson.",
-                    "Building crown geoJSON: https://services.arcgis.com/qHLhLQrcvEnxjtPr/arcgis/rest/services/OS_OpenMap_Local_Buildings/FeatureServer/1/query?where=1=1&f=geojson.",
-                    "Green spaces crown geoJSON: https://services.arcgis.com/qHLhLQrcvEnxjtPr/arcgis/rest/services/OS_Open_Greenspace/FeatureServer/1/query?where=1=1&f=geojson.",
-                    f"Before storm tree crown geoJSON: {tree_crown_summer}/0/query?where=1%3D1&outFields=*&f=geojson.",
-                    f"After storm tree crown geoJSON: {tree_crown_winter}/0/query?where=1%3D1&outFields=*&f=geojson."
-                ]
+                data_locations = make_project_data_locations(task_name, include_seasons=True, attrs=attrs)
             else:
-                # Fetch CRS for the single URL
-                # crs_current = fetch_crs(tree_crowns_url)
-                # (CRS: EPSG:{crs_current})
-                data_locations = [
-                    f"Tree crown geoJSON shape file: {tree_crowns_url}/0/query?where=1%3D1&outFields=*&f=geojson.",
-                    "Road crown geoJSON: https://services.arcgis.com/qHLhLQrcvEnxjtPr/arcgis/rest/services/OS_OpenRoads/FeatureServer/1/query?where=1=1&f=geojson.",
-                    "Building crown geoJSON: https://services.arcgis.com/qHLhLQrcvEnxjtPr/arcgis/rest/services/OS_OpenMap_Local_Buildings/FeatureServer/1/query?where=1=1&f=geojson.",
-                    "Green spaces crown geoJSON: https://services.arcgis.com/qHLhLQrcvEnxjtPr/arcgis/rest/services/OS_Open_Greenspace/FeatureServer/1/query?where=1=1&f=geojson.",
-                ]
+                data_locations = make_project_data_locations(task_name, include_seasons=False, attrs=attrs)
             # background_tasks.add_task(long_running_task, job_id, user_task, task_name, data_locations)
             result = long_running_task(user_task, task_name, data_locations)
             message = result.get("message") if isinstance(result, dict) else str(result)
@@ -1590,36 +1853,9 @@ async def process_request(request_data: RequestData):
             tree_crowns_url = get_attr(attrs, "TREE_CROWNS")
             roi_url = get_attr(attrs, "CHAT_INPUT")
             if task_name in ["TT_GCW1_Summer", "TT_GCW1_Winter"]:
-                attrs_summer = get_project_urls("TT_GCW1_Summer")
-                attrs_winter = get_project_urls("TT_GCW1_Winter")
-                tree_crown_summer = get_attr(attrs_summer, "TREE_CROWNS")
-                tree_crown_winter = get_attr(attrs_winter, "TREE_CROWNS")
-                
-                # Fetch CRS for each relevant URL
-                # crs_current = fetch_crs(tree_crowns_url)
-                # crs_summer = fetch_crs(tree_crown_summer)
-                # crs_winter = fetch_crs(tree_crown_winter)
-                # (CRS: EPSG:{crs_current})
-                # (CRS: EPSG:{crs_summer})
-                #( CRS: EPSG:{crs_winter})
-                data_locations = [
-                    f"Tree crown geoJSON shape file: {tree_crowns_url}/0/query?where=1%3D1&outFields=*&f=geojson.",
-                    f"Before storm tree crown geoJSON: {tree_crown_summer}/0/query?where=1%3D1&outFields=*&f=geojson.",
-                    f"After storm tree crown geoJSON: {tree_crown_winter}/0/query?where=1%3D1&outFields=*&f=geojson.",
-                    "Road crown geoJSON: https://services.arcgis.com/qHLhLQrcvEnxjtPr/arcgis/rest/services/OS_OpenRoads/FeatureServer/1/query?where=1=1&f=geojson.",
-                    "Building crown geoJSON: https://services.arcgis.com/qHLhLQrcvEnxjtPr/arcgis/rest/services/OS_OpenMap_Local_Buildings/FeatureServer/1/query?where=1=1&f=geojson.",
-                    "Green spaces crown geoJSON: https://services.arcgis.com/qHLhLQrcvEnxjtPr/arcgis/rest/services/OS_Open_Greenspace/FeatureServer/1/query?where=1=1&f=geojson."
-                ]
+                data_locations = make_project_data_locations(task_name, include_seasons=True, attrs=attrs)
             else:
-                # Fetch CRS for the single URL
-                # crs_current = fetch_crs(tree_crowns_url)
-                # (CRS: EPSG:{crs_current})
-                data_locations = [
-                    f"Tree crown geoJSON shape file: {tree_crowns_url}/0/query?where=1%3D1&outFields=*&f=geojson.",
-                    "Road crown geoJSON: https://services.arcgis.com/qHLhLQrcvEnxjtPr/arcgis/rest/services/OS_OpenRoads/FeatureServer/1/query?where=1=1&f=geojson.",
-                    "Building crown geoJSON: https://services.arcgis.com/qHLhLQrcvEnxjtPr/arcgis/rest/services/OS_OpenMap_Local_Buildings/FeatureServer/1/query?where=1=1&f=geojson.",
-                    "Green spaces crown geoJSON: https://services.arcgis.com/qHLhLQrcvEnxjtPr/arcgis/rest/services/OS_Open_Greenspace/FeatureServer/1/query?where=1=1&f=geojson."
-                ]
+                data_locations = make_project_data_locations(task_name, include_seasons=False, attrs=attrs)
             # background_tasks.add_task(long_running_task, job_id, user_task, task_name, data_locations)
             result = long_running_task(user_task, task_name, data_locations)
             message = result.get("message") if isinstance(result, dict) else str(result)
