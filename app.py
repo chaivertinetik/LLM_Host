@@ -347,15 +347,131 @@ def fetch_crs(base_url, timeout=10, default_wkid=4326):
     except:
         return default_wkid
 
-def extract_geojson(url):
+def _sanitise_layer_url(url: str) -> str:
+    """
+    Normalise any ArcGIS service URL to a concrete layer URL:
+      - Accepts .../FeatureServer, .../FeatureServer/0, .../FeatureServer/0/query
+      - Accepts .../MapServer, .../MapServer/3, .../MapServer/3/query
+    Returns the canonical layer URL ending with /<layerId> (no /query).
+    """
+    if not isinstance(url, str) or not url.strip():
+        raise ValueError("URL must be a non-empty string")
+
+    u = url.strip().rstrip("/")
+
+    # Strip trailing /query if present
+    u = re.sub(r"/query$", "", u, flags=re.IGNORECASE)
+
+    # Match MapServer or FeatureServer, with optional layer id
+    m = re.search(r"(.*?/(?:FeatureServer|MapServer))(?:/(\d+))?$", u, flags=re.IGNORECASE)
+    if not m:
+        raise ValueError(f"Not a valid ArcGIS service URL: {url}")
+
+    base, layer = m.groups()
+    if layer is None:
+        layer = "0"  # default to layer 0 if not provided
+
+    return f"{base}/{layer}"
+
+def _get_layer_max_record_count(layer_url: str, timeout: int = 10) -> int:
+    """
+    Ask the layer for its JSON and read maxRecordCount; fall back to 1000 if absent.
+    """
     try:
-        r = requests.get(f"{url}/0/query?where=1%3D1&outFields=*&f=geojson", timeout=10)
+        r = requests.get(f"{layer_url}?f=json", timeout=timeout)
         r.raise_for_status()
-        gj = r.json()
-        gdf = gpd.GeoDataFrame.from_features(gj["features"])
-        if gdf.crs is None:
-            gdf.set_crs(epsg=4326, inplace=True)
+        meta = r.json()
+        # ArcGIS sometimes names it maxRecordCount; default sensibly if missing.
+        mrc = meta.get("maxRecordCount")
+        if isinstance(mrc, int) and mrc > 0:
+            return mrc
+    except Exception:
+        pass
+    return 1000
+
+def extract_geojson(url: str, where: str = "1=1", out_fields: str = "*", timeout: int = 15) -> gpd.GeoDataFrame | None:
+    """
+    Sanitised extractor that:
+      - normalises the URL,
+      - detects CRS (via your fetch_crs),
+      - paginates beyond maxRecordCount,
+      - returns a GeoDataFrame with a proper CRS,
+      - handles ArcGIS error envelopes gracefully.
+
+    Returns None on hard failure; empty GeoDataFrame on no features.
+    """
+    try:
+        layer_url = _sanitise_layer_url(url)
+        wkid = fetch_crs(layer_url, timeout=timeout)  # uses your existing helper
+        page_size = _get_layer_max_record_count(layer_url, timeout=timeout)
+
+        features = []
+        offset = 0
+
+        while True:
+            params = {
+                "where": where,
+                "outFields": out_fields,
+                "f": "geojson",
+                # GeoJSON outSR is supported by ArcGIS; align with detected CRS
+                "outSR": wkid,
+                # Pagination params
+                "resultOffset": offset,
+                "resultRecordCount": page_size,
+            }
+
+            resp = requests.get(f"{layer_url}/query", params=params, timeout=timeout)
+            # HTTP-level errors
+            resp.raise_for_status()
+
+            # ArcGIS may still return an error JSON with 200 status in non-geojson mode,
+            # but in geojson mode it's usually a standard FeatureCollection. We still guard:
+            try:
+                payload = resp.json()
+            except Exception as je:
+                raise RuntimeError(f"Non-JSON response from service: {je}") from je
+
+            # Some servers ignore outSR= when f=geojson; that's fine—GeoPandas will carry geometry in lon/lat if given.
+            fc_features = payload.get("features", [])
+            if not isinstance(fc_features, list):
+                # If the service emitted an error envelope, surface it
+                err = payload.get("error", {})
+                msg = err.get("message") or "Unexpected response structure from service"
+                raise RuntimeError(f"ArcGIS error: {msg}")
+
+            features.extend(fc_features)
+
+            # Stop if fewer than page_size returned (last page)
+            if len(fc_features) < page_size:
+                break
+
+            offset += page_size
+
+        if not features:
+            # Return a valid empty GDF with CRS set (helps caller logic)
+            try:
+                return gpd.GeoDataFrame.from_features([], crs=f"EPSG:{wkid}")
+            except Exception:
+                return gpd.GeoDataFrame()
+
+        # Build GeoDataFrame; set CRS if possible
+        gdf = gpd.GeoDataFrame.from_features(features)
+        try:
+            # Only set if not already set or if wkid looks valid
+            if wkid and (gdf.crs is None):
+                gdf.set_crs(epsg=wkid, inplace=True)
+        except Exception:
+            # If CRS assignment fails, still return data
+            pass
+
         return gdf
+
+    except requests.HTTPError as he:
+        print(f"HTTP error fetching GeoJSON: {he}")
+        return None
+    except requests.Timeout:
+        print("GeoJSON fetch error: request timed out")
+        return None
     except Exception as e:
         print(f"GeoJSON fetch error: {e}")
         return None
