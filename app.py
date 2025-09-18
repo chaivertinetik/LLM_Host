@@ -1741,10 +1741,10 @@ def make_project_data_locations(project_name: str, include_seasons: bool, attrs:
     os_green = "https://services.arcgis.com/qHLhLQrcvEnxjtPr/arcgis/rest/services/OS_Open_Greenspace/FeatureServer/1"
 
     data_locations = [
-        f"Tree crown (AOI): {_build_spatial_query_url(tree_crowns_url, aoi, out_fields='*')}.",
-        f"Roads (AOI): {_build_spatial_query_url(os_roads, aoi, out_fields='*')}.",
-        f"Buildings (AOI): {_build_spatial_query_url(os_buildings, aoi, out_fields='*')}.",
-        f"Green spaces (AOI): {_build_spatial_query_url(os_green, aoi, out_fields='*')}.",
+        f"Tree crown geoJSON shape file : {_build_spatial_query_url(tree_crowns_url, aoi, out_fields='*')}.",
+        f"Roads geoJSON shape file: {_build_spatial_query_url(os_roads, aoi, out_fields='*')}.",
+        f"Buildings geoJSON shape file: {_build_spatial_query_url(os_buildings, aoi, out_fields='*')}.",
+        f"Green spaces geoJSON shape file: {_build_spatial_query_url(os_green, aoi, out_fields='*')}.",
     ]
 
     if include_seasons:
@@ -1755,11 +1755,11 @@ def make_project_data_locations(project_name: str, include_seasons: bool, attrs:
 
         data_locations.insert(
             1,  # put seasonal layers right after the main crowns
-            f"Before storm crowns (AOI): {_build_spatial_query_url(tree_crown_summer, aoi, out_fields='*')}."
+            f"Before storm tree crown geoJSON: {_build_spatial_query_url(tree_crown_summer, aoi, out_fields='*')}."
         )
         data_locations.insert(
             2,
-            f"After storm crowns (AOI): {_build_spatial_query_url(tree_crown_winter, aoi, out_fields='*')}."
+            f"After storm tree crown geoJSON: {_build_spatial_query_url(tree_crown_winter, aoi, out_fields='*')}."
         )
 
     return data_locations
