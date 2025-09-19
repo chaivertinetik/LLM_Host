@@ -515,7 +515,13 @@ def sanitise_add_url(target_url: str) -> str:
 
     return f"{base}/{layer}/addFeatures"
 
-def post_features_to_layer(gdf, target_url,project_name, batch_size=800):
+def post_features_to_layer(gdf, target_url, project_name, batch_size=800):
+    """
+    Push features exactly as provided (no ROI clipping, no feature dropping).
+    - Reprojects to target layer CRS
+    - Attempts polygon validity fix via buffer(0) but never drops features
+    - If geometry serialization fails, sends geometry=None (attributes still posted)
+    """
     add_url = sanitise_add_url(target_url)
     headers = {"Content-Type": "application/x-www-form-urlencoded"}
 
@@ -523,117 +529,71 @@ def post_features_to_layer(gdf, target_url,project_name, batch_size=800):
         print("Nothing to push: input is None/empty.")
         return
 
-    # 0) What SR does the target layer use?
-    layer_wkid = fetch_crs(target_url, default_wkid=3857)  # your AGOL services use 3857
+    # 0) Target layer CRS
+    layer_wkid = fetch_crs(target_url, default_wkid=3857)
     print(f"Target layer WKID: {layer_wkid}")
 
     # 1) Working copy in known CRS
     gdf_work = gdf.copy()
     try:
-        # If input lacks CRS, assume it came from GeoJSON (4326)
         if gdf_work.crs is None:
+            # Assume GeoJSON default (EPSG:4326) if unknown
             gdf_work.set_crs(epsg=4326, inplace=True, allow_override=True)
-        # Reproject to the TARGET layer CRS (e.g., 3857)
         if gdf_work.crs.to_epsg() != layer_wkid:
             gdf_work = gdf_work.to_crs(epsg=layer_wkid)
     except Exception as e:
         print(f"CRS handling on input GDF failed: {e}")
         return
 
-    # 2) Fix invalid geometries ONLY for polygons
+    # 2) Try to fix invalid polygon geometries (do NOT remove anything)
     try:
         if not gdf_work.empty:
             poly_mask = gdf_work.geom_type.isin(["Polygon", "MultiPolygon"])
             gdf_work.loc[poly_mask, "geometry"] = gdf_work.loc[poly_mask, "geometry"].buffer(0)
     except Exception as e:
-        print(f"Failed to fix polygon validity with buffer(0): {e}")
+        print(f"Polygon validity fix (buffer(0)) failed (continuing): {e}")
 
-    # 3) ROI: get in 4326 then project to layer_wkid
-    roi_gdf = get_roi_gdf(project_name)  # 4326 (see function above)
-    if roi_gdf is not None and not roi_gdf.empty:
-        try:
-            if roi_gdf.crs is None:
-                roi_gdf.set_crs(epsg=4326, inplace=True, allow_override=True)
-            if roi_gdf.crs.to_epsg() != layer_wkid:
-                roi_gdf = roi_gdf.to_crs(epsg=layer_wkid)
-        except Exception as e:
-            print(f"ROI CRS handling failed (continuing without ROI): {e}")
-            roi_gdf = gpd.GeoDataFrame(geometry=[], crs=f"EPSG:{layer_wkid}")
+    # 3) NO ROI FETCH / NO CLIPPING — removed by request
 
-    # 4) Clip to polygonal ROI (still in layer_wkid) if present
-    clipped = False
-    pre_clip_count = len(gdf_work)
-    if roi_gdf is not None and not roi_gdf.empty:
-        try:
-            roi_poly = roi_gdf[roi_gdf.geom_type.isin(["Polygon", "MultiPolygon"])].copy()
-        except Exception:
-            roi_poly = roi_gdf.copy()
-
-        if not roi_poly.empty:
-            try:
-                # Clean ROI polys
-                roi_poly["geometry"] = roi_poly.geometry.buffer(0)
-            except Exception as e:
-                print(f"ROI buffer(0) failed: {e}")
-
-            # Dissolve to reduce sliver artifacts
-            try:
-                u = unary_union([g for g in roi_poly.geometry.values if g and not g.is_empty])
-                roi_poly = gpd.GeoDataFrame(geometry=[u], crs=roi_poly.crs)
-            except Exception as e:
-                print(f"ROI dissolve failed (continuing): {e}")
-
-            # Clip
-            try:
-                gdf_work = gpd.overlay(gdf_work, roi_poly, how="intersection")
-                clipped = True
-            except Exception as e:
-                print(f"overlay() failed, trying sjoin: {e}")
-                try:
-                    joined = gdf_work.sjoin(roi_poly[["geometry"]], how="inner", predicate="intersects")
-                    for col in ("index_right", "index_left"):
-                        if col in joined.columns:
-                            joined = joined.drop(columns=[col], errors="ignore")
-                    keep_cols = [c for c in gdf_work.columns if c in joined.columns] + ["geometry"]
-                    keep_cols = list(dict.fromkeys(keep_cols))
-                    gdf_work = joined[keep_cols]
-                    clipped = True
-                except Exception as e2:
-                    print(f"sjoin() failed; proceeding WITHOUT clip. Error: {e2}")
-                    clipped = False
-        else:
-            print("ROI has no polygonal parts; skipping clip.")
-    else:
-        print("No ROI found; skipping clip.")
-
-    post_clip_count = len(gdf_work)
-    print(f"Clip result -> pre={pre_clip_count}, post={post_clip_count}, clipped={clipped}")
-
-    if gdf_work.empty:
-        print("Nothing to push after ROI clip (result empty).")
-        return
-
-    # 5) Build features and push in batches
-    total_pushed = 0
-    # build attribute column list (don’t send OBJECTID/geometry)
+    # 4) Build features and push in batches (do not drop rows)
     drop_cols = {"geometry", "OBJECTID"}
     attr_cols = [c for c in gdf_work.columns if c not in drop_cols]
 
+    total_pushed = 0
     for start in range(0, len(gdf_work), batch_size):
         batch = gdf_work.iloc[start:start + batch_size]
+
         features = []
         for _, row in batch.iterrows():
+            arcgis_geom = None
             try:
+                # Best-effort geometry serialization
                 arcgis_geom = shapely_to_arcgis_geometry(row.geometry, wkid=layer_wkid)
-                attributes = {k: _json_default(row[k]) for k in attr_cols if k in batch.columns}
-                features.append({"geometry": arcgis_geom, "attributes": attributes})
             except Exception as e:
-                print(f"Skipping row due to geometry error: {e}")
+                # Keep the feature; let server respond per-feature instead of us removing it
+                print(f"Geometry serialization failed for a row (sending geometry=None): {e}")
+
+            try:
+                attributes = {k: _json_default(row[k]) for k in attr_cols if k in batch.columns}
+            except Exception as e:
+                # Absolute fallback: stringify problematic values so we never drop the feature
+                print(f"Attribute serialization issue (fallback to string): {e}")
+                attributes = {}
+                for k in attr_cols:
+                    try:
+                        attributes[k] = _json_default(row[k])
+                    except Exception:
+                        attributes[k] = str(row.get(k, ""))
+
+            features.append({"geometry": arcgis_geom, "attributes": attributes})
 
         if not features:
+            # Shouldn't happen, since we never drop features — but guard anyway
+            print("Empty feature batch constructed; continuing.")
             continue
 
         payload = {"features": json.dumps(features, default=_json_default), "f": "json"}
+
         try:
             resp = requests.post(add_url, data=payload, headers=headers, timeout=60)
         except Exception as e:
@@ -641,15 +601,24 @@ def post_features_to_layer(gdf, target_url,project_name, batch_size=800):
             continue
 
         if resp.status_code == 200:
-            total_pushed += len(features)
             try:
-                print(f"Pushed {len(features)} feature(s) to {target_url}: {resp.json()}")
+                result = resp.json()
             except Exception:
-                print(f"Pushed {len(features)} feature(s) to {target_url}: (non-JSON response)")
+                result = None
+
+            # Count successes if the server returns per-feature results
+            if isinstance(result, dict) and "addResults" in result and isinstance(result["addResults"], list):
+                succ = sum(1 for r in result["addResults"] if r.get("success"))
+                total_pushed += succ
+                print(f"Pushed batch: {succ}/{len(features)} succeeded.")
+            else:
+                # If we can't inspect per-feature results, assume all posted
+                total_pushed += len(features)
+                print(f"Pushed {len(features)} feature(s) (response not parseable for per-feature results).")
         else:
             print(f"Failed to add features (HTTP {resp.status_code}): {resp.text}")
 
-    print(f"Done. Total features pushed: {total_pushed}")
+    print(f"Done. Total features attempted: {len(gdf_work)}; successful (reported): {total_pushed}")
 
 
 def delete_all_features(target_url):
