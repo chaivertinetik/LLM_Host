@@ -499,21 +499,16 @@ def get_roi_gdf(project_name: str) -> gpd.GeoDataFrame:
 def sanitise_add_url(target_url: str) -> str:
     """
     Ensure the ArcGIS FeatureServer URL ends with /<layerId>/addFeatures.
-    If no layerId is present, defaults to layer 0.
     """
-    # Remove trailing slashes
-    target_url = target_url.rstrip("/")
+    # Remove trailing slashes and 'addFeatures' if they already exist
+    target_url = target_url.rstrip("/").removesuffix("/addFeatures")
 
-    # Regex to detect if URL ends with /FeatureServer or /FeatureServer/<layerId>
-    match = re.search(r"(.*?/FeatureServer)(?:/(\d+))?$", target_url)
-    if not match:
-        raise ValueError(f"Invalid FeatureServer URL: {target_url}")
+    # If the URL ends with 'FeatureServer', add '/0' for the default layer.
+    if target_url.endswith("/FeatureServer"):
+        return f"{target_url}/0/addFeatures"
 
-    base, layer = match.groups()
-    if layer is None:
-        layer = "0"  # default to layer 0 if not provided
-
-    return f"{base}/{layer}/addFeatures"
+    # Otherwise, assume the layer ID is already present and append 'addFeatures'
+    return f"{target_url}/addFeatures"
 
 
 def post_features_to_layer(gdf, target_url,project_name, batch_size=800):
@@ -584,6 +579,7 @@ def post_features_to_layer(gdf, target_url,project_name, batch_size=800):
                 arcgis_geom = shapely_to_arcgis_geometry(row.geometry, wkid=layer_wkid)
                 attributes = {k: _json_default(row[k]) for k in attr_cols if k in batch.columns}
                 features.append({"geometry": arcgis_geom, "attributes": attributes})
+                print({"geometry": arcgis_geom, "attributes": attributes})
             except Exception as e:
                 print(f"Skipping row due to geometry error: {e}")
 
