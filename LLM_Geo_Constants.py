@@ -150,7 +150,7 @@ operation_requirement = [
                         "Use the Python built-in functions or attribute. If you do not remember, DO NOT make up fake ones, just use alternative methods.",
                         "Pandas library has no attribute or method 'StringIO', so 'pd.compat.StringIO' is wrong, you need to use 'io.StringIO' instead.",
                         "Before using Pandas or GeoPandas columns for further processing (e.g. join or calculation), drop recoreds with NaN cells in those columns, e.g., df.dropna(subset=['XX', 'YY']).",
-                        "To the access the headers under 'OS Open Greenspace' use the 'function' column header, to access 'OS OpenMap Local Important Buildings' use the 'BUILDGTHEM'",
+                        "To the access the headers like 'Bowling Green', 'Religious Grounds' etc under 'Greenspace Site' use the 'function_' column header, to access 'OS OpenMap Local Important Buildings' use the 'BUILDGTHEM'",
                         "When read FIPS or GEOID columns from CSV files, read those columns as str or int, never as float.",
                         "FIPS or GEOID columns may be str type with leading zeros (digits: state: 2, county: 5, tract: 11, block group: 12), or integer type without leading zeros. Thus, when joining they, you can convert the integer column to str type with leading zeros to ensure the success."
                         
@@ -364,6 +364,7 @@ sampling_data_requirement = [
  
                         #
                         ]
+
 
 
 
