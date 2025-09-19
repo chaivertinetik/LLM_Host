@@ -511,146 +511,92 @@ def sanitise_add_url(target_url: str) -> str:
     return f"{target_url}/addFeatures"
 
 
-def post_features_to_layer(gdf, target_url, project_name, batch_size=800):
+def post_features_to_layer(gdf, target_url,project_name, batch_size=800):
     """
-    Push features exactly as provided (no ROI clipping, no feature dropping).
-    - Reprojects to the target layer CRS
-    - Attempts polygon validity fix via buffer(0) but never drops features
-    - If geometry serialization yields non-finite coords or fails, sends geometry=None
-      so the service can decide per-feature without us removing anything
+    Legacy-simple poster (no ROI, no clipping, no reprojection).
+    - Uses only a small whitelist of attributes (Health, Tree_ID, Species)
+    - Converts geometries to ArcGIS JSON and posts in batches
+    - Guards against non-finite coords by sending geometry=None instead of dropping rows
     """
-    # ---- small helpers (local to keep this function self-contained) ----
     import math
 
     def _is_finite_number(x):
         return isinstance(x, (int, float)) and math.isfinite(x)
 
     def _has_only_finite_coords(value):
-        """Recursively check all numeric coordinates in a nested structure are finite."""
         if isinstance(value, dict):
-            # Point dict
             if "x" in value and "y" in value:
                 return _is_finite_number(value["x"]) and _is_finite_number(value["y"])
-            # Recurse all dict values
             return all(_has_only_finite_coords(v) for v in value.values())
         elif isinstance(value, (list, tuple)):
             return all(_has_only_finite_coords(v) for v in value)
         else:
-            # Non-numeric scalars are fine
             if isinstance(value, (int, float)):
                 return math.isfinite(value)
             return True
 
     def sanitize_arcgis_geometry(arcgis_geom):
-        """Return same geometry if all coords are finite; otherwise None."""
         if not arcgis_geom:
             return None
         return arcgis_geom if _has_only_finite_coords(arcgis_geom) else None
 
-    # -------------------------------------------------------------------
     add_url = sanitise_add_url(target_url)
     headers = {"Content-Type": "application/x-www-form-urlencoded"}
+    allowed_fields = {"Health", "Tree_ID", "Species"}
 
     if gdf is None or gdf.empty:
         print("Nothing to push: input is None/empty.")
         return
 
-    # 0) What SR does the target layer use?
-    layer_wkid = fetch_crs(target_url, default_wkid=3857)  # your AGOL services typically use 3857
+    # Detect target layer WKID (pass through to geometry builder if your helper supports it)
+    layer_wkid = fetch_crs(target_url, default_wkid=3857)
     print(f"Target layer WKID: {layer_wkid}")
 
-    # 1) Working copy in known CRS
-    gdf_work = gdf.copy()
-    try:
-        # If input lacks CRS, assume GeoJSON default (EPSG:4326)
-        if gdf_work.crs is None:
-            gdf_work.set_crs(epsg=4326, inplace=True, allow_override=True)
-        # Reproject to the TARGET layer CRS (e.g., 3857)
-        if gdf_work.crs.to_epsg() != layer_wkid:
-            gdf_work = gdf_work.to_crs(epsg=layer_wkid)
-    except Exception as e:
-        print(f"CRS handling on input GDF failed: {e}")
-        return
-
-    # 2) Try to fix invalid polygon geometries (do NOT remove anything)
-    try:
-        if not gdf_work.empty:
-            poly_mask = gdf_work.geom_type.isin(["Polygon", "MultiPolygon"])
-            gdf_work.loc[poly_mask, "geometry"] = gdf_work.loc[poly_mask, "geometry"].buffer(0)
-    except Exception as e:
-        print(f"Polygon validity fix (buffer(0)) failed (continuing): {e}")
-
-    # 3) NO ROI FETCH / NO CLIPPING — intentionally omitted
-
-    if gdf_work.empty:
-        print("Nothing to push (result empty).")
-        return
-
-    # 4) Build features and push in batches (do not drop rows)
-    total_pushed = 0
-    drop_cols = {"geometry", "OBJECTID"}
-    attr_cols = [c for c in gdf_work.columns if c not in drop_cols]
-
-    for start in range(0, len(gdf_work), batch_size):
-        batch = gdf_work.iloc[start:start + batch_size]
+    # Batch post
+    for start in range(0, len(gdf), batch_size):
+        batch_gdf = gdf.iloc[start:start + batch_size]
         features = []
 
-        for _, row in batch.iterrows():
-            # Geometry: best effort -> sanitize -> allow None
+        for _, row in batch_gdf.iterrows():
             try:
-                arcgis_geom = shapely_to_arcgis_geometry(row.geometry, wkid=layer_wkid)
+                # Support either signature: with wkid (preferred) or without
+                try:
+                    arcgis_geom = shapely_to_arcgis_geometry(row.geometry, wkid=layer_wkid)
+                except TypeError:
+                    arcgis_geom = shapely_to_arcgis_geometry(row.geometry)
+
                 arcgis_geom = sanitize_arcgis_geometry(arcgis_geom)
                 if arcgis_geom is None:
-                    print("Non-finite or invalid coordinates detected; sending geometry=None for one row.")
-            except Exception as e:
-                print(f"Geometry serialization failed (sending geometry=None): {e}")
-                arcgis_geom = None
+                    print("Non-finite/invalid coords; sending geometry=None for one row.")
 
-            # Attributes: robust JSON conversion; fallback to str per-field on failure
-            try:
-                attributes = {k: _json_default(row[k]) for k in attr_cols if k in batch.columns}
-            except Exception as e:
-                print(f"Attribute serialization issue (fallback to string): {e}")
-                attributes = {}
-                for k in attr_cols:
-                    try:
-                        attributes[k] = _json_default(row[k])
-                    except Exception:
-                        attributes[k] = str(row.get(k, ""))
+                attributes = {k: row.get(k, None) for k in allowed_fields if k in batch_gdf.columns}
 
-            features.append({"geometry": arcgis_geom, "attributes": attributes})
+                features.append({
+                    "geometry": arcgis_geom,
+                    "attributes": attributes
+                })
+            except Exception as e:
+                # Keep parity with legacy behavior: skip the row on hard geometry error
+                print(f"Skipping row due to geometry error: {e}")
 
         if not features:
-            print("Empty feature batch constructed; continuing.")
             continue
 
-        payload = {"features": json.dumps(features, default=_json_default), "f": "json"}
+        payload = {
+            "features": json.dumps(features, default=_json_default),
+            "f": "json"
+        }
 
         try:
-            resp = requests.post(add_url, data=payload, headers=headers, timeout=60)
+            response = requests.post(add_url, data=payload, headers=headers, timeout=60)
         except Exception as e:
             print(f"POST to {add_url} failed: {e}")
             continue
 
-        if resp.status_code == 200:
-            try:
-                result = resp.json()
-            except Exception:
-                result = None
-
-            # Count successes if the server returns per-feature results
-            if isinstance(result, dict) and "addResults" in result and isinstance(result["addResults"], list):
-                succ = sum(1 for r in result["addResults"] if r.get("success"))
-                total_pushed += succ
-                print(f"Pushed batch: {succ}/{len(features)} succeeded.")
-            else:
-                # If we can't inspect per-feature results, assume all posted
-                total_pushed += len(features)
-                print(f"Pushed {len(features)} feature(s) (response not parseable for per-feature results).")
+        if response.status_code == 200:
+            print("Features added successfully:", response.json())
         else:
-            print(f"Failed to add features (HTTP {resp.status_code}): {resp.text}")
-
-    print(f"Done. Total features attempted: {len(gdf_work)}; successful (reported): {total_pushed}")
+            print("Failed to add features:", response.text)
 
 
 def delete_all_features(target_url):
