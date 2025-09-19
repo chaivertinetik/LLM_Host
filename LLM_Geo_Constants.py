@@ -73,7 +73,7 @@ graph_requirement = [
                         'Keep the graph concise, DO NOT use too many operation nodes.',
                         'Ensure the code has **consistent 4-space indentation**, with no unexpected or extra indents. Avoid the use of tabs, as this can lead to indentation errors.',
                         'All lines should be properly aligned according to Python’s syntax rules.',
-                        'Specifically, the first four lines should not have any unintended indentation. Use Python ast.parse to verify that the code does not have any "IndentationError" or "SyntaxError" before returning it. Ensure that all code blocks, especially those with comments or function calls, are properly aligned and contain no extraneous spaces or tabs.',
+                        'Specifically, the first four lines should not have any unintended indentation. Ensure that all code blocks, especially those with comments or function calls, are properly aligned and contain no extraneous spaces or tabs.',
                         'The purpose of running the LLM generated code is to obtain a geodataframe of trees that will be displayed using our own inbuilt function, or to return a textual response to the user, not generate a spatial plot or anything else, especially dont truncate or mess with the generated geodataframe.'
                         # 'Keep the graph concise, DO NOT over-split task into too many small steps, especially for simple problems. For example, data loading and data transformation/preprocessing should be in one operation node.',
 
@@ -362,6 +362,7 @@ sampling_data_requirement = [
  
                         #
                         ]
+
 
 
 
