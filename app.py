@@ -645,6 +645,7 @@ def filter(gdf_or_fids, project_name):
     gdf_direct = to_gdf(gdf_or_fids)
     if gdf_direct is not None and not gdf_direct.empty:
         print("Operating in GDF mode (direct push, no masking).")
+        print(f"Direct GDF CRS: {gdf_direct.crs}")
 
         # Split by geometry type
         groups = {
@@ -669,8 +670,8 @@ def filter(gdf_or_fids, project_name):
                 raise ValueError(f"Matching CHAT_OUTPUT URL missing in Project Index for {kind}.")
 
             delete_all_features(chat_output_url)
+            print(f"Pushing {len(sub)} {kind} feature(s) in CRS {sub.crs} → {chat_output_url}")
             post_features_to_layer(sub, chat_output_url, project_name)
-            print(f"Pushed {len(sub)} {kind} feature(s) to {chat_output_url}")
         return
 
     # --- Case 2: FIDs provided (masking required) ---
@@ -682,6 +683,7 @@ def filter(gdf_or_fids, project_name):
         print("Source crowns are empty or unavailable.")
         return
 
+    print(f"Fetched crowns CRS: {gdf.crs}")
     print("Columns in GDF:", gdf.columns.tolist())
     print("Geometry types in GDF:", gdf.geom_type.unique())
 
@@ -717,8 +719,8 @@ def filter(gdf_or_fids, project_name):
         if not chat_output_url:
             raise ValueError(f"Matching CHAT_OUTPUT URL missing for {kind}.")
         delete_all_features(chat_output_url)
+        print(f"Pushing {len(sub)} {kind} feature(s) in CRS {sub.crs} → {chat_output_url}")
         post_features_to_layer(sub, chat_output_url, project_name)
-        print(f"Pushed {len(sub)} {kind} feature(s) to {chat_output_url}")
 
 
 
@@ -1655,21 +1657,34 @@ def _build_spatial_query_url(layer_url: str, aoi: dict, where: str = "1=1", out_
     Returns a fully-formed ArcGIS /query URL that uses the project AOI.
     - layer_url: .../FeatureServer[/<id>] OR .../MapServer[/<id>] (any form is fine)
     - aoi: result of get_project_aoi_geometry(project_name)
+    Notes:
+      - f=geojson requires outSR=4326. We therefore force outSR to 4326.
     """
     lyr = _sanitise_layer_url(layer_url)
+    print(lyr)
+
+    # Force WGS84 when requesting GeoJSON
     out_wkid = fetch_crs(lyr) or 4326
+    print(f"crs is {out_wkid}")
+
+    # inSR comes from AOI; fall back to 4326 if missing
+    in_sr = aoi.get("inSR", 4326)
+
+    # Geometry must be JSON-encoded; keep it compact
     geom = _q(_json.dumps(aoi["geometry"], separators=(",", ":")))
+
     return (
         f"{lyr}/query"
         f"?where={_q(where)}"
         f"&geometry={geom}"
         f"&geometryType={_q(aoi['geometryType'])}"
         f"&spatialRel=esriSpatialRelIntersects"
-        f"&inSR={aoi['inSR']}"
+        f"&inSR={in_sr}"
         f"&outFields={_q(out_fields)}"
-        f"&outSR=4326"
+        f"&outSR={out_wkid}"
         f"&f=geojson"
     )
+
 
 def make_project_data_locations(project_name: str, include_seasons: bool, attrs: dict) -> list[str]:
     """
