@@ -120,6 +120,7 @@ operation_requirement = [
                         'Ensure all comments and descriptions use # and are single line.',
                         "You need to receive the data from the functions, DO NOT load in the function if other functions have loaded the data and returned it in advance.",
                         # "Note module 'pandas' has no attribute or method of 'StringIO'",
+                        "Never use geopandas.concat or GeoDataFrame.concat to merge to dataframes. To concatenate GeoDataFrames, always use pd.concat([gdf1, gdf2]) from the pandas library and ensure pandas is imported as import pandas as pd.",
                         "Use the latest Python modules and methods.",
                         "When doing spatial analysis, convert the involved spatial layers into the same map projection, if they are not in the same projection.",
                         # "DO NOT reproject or set spatial data(e.g., GeoPandas Dataframe) if only one layer involved.",
@@ -362,6 +363,7 @@ sampling_data_requirement = [
  
                         #
                         ]
+
 
 
 
