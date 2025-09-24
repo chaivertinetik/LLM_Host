@@ -1667,7 +1667,7 @@ def _build_spatial_query_url(layer_url: str, aoi: dict, where: str = "1=1", out_
         f"&spatialRel=esriSpatialRelIntersects"
         f"&inSR={aoi['inSR']}"
         f"&outFields={_q(out_fields)}"
-        f"&outSR={out_wkid}"
+        f"&outSR=4326"
         f"&f=geojson"
     )
 
