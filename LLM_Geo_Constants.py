@@ -118,6 +118,7 @@ operation_requirement = [
                         'If using GeoPandas to load a zipped ESRI shapefile from a URL, the correct method is "gpd.read_file(URL)". DO NOT download and unzip the file.',
                         # "Generate descriptions for input and output arguments.",
                         'Ensure all comments and descriptions use # and are single line.',
+                        "When accessing green spaces data and you want specific categories like 'Bowling Green', 'Religious Grounds' use the 'function_' column header and when accessing the building data and you need categories like 'Education', 'Emergency Service', and 'Religious Buildings' use the 'BUILDGTHEM' column header.",
                         "You need to receive the data from the functions, DO NOT load in the function if other functions have loaded the data and returned it in advance.",
                         # "Note module 'pandas' has no attribute or method of 'StringIO'",
                         "Use the latest Python modules and methods.",
@@ -150,7 +151,6 @@ operation_requirement = [
                         "Use the Python built-in functions or attribute. If you do not remember, DO NOT make up fake ones, just use alternative methods.",
                         "Pandas library has no attribute or method 'StringIO', so 'pd.compat.StringIO' is wrong, you need to use 'io.StringIO' instead.",
                         "Before using Pandas or GeoPandas columns for further processing (e.g. join or calculation), drop recoreds with NaN cells in those columns, e.g., df.dropna(subset=['XX', 'YY']).",
-                        "To the access the headers like 'Bowling Green', 'Religious Grounds' etc under 'Greenspace Site' use the 'function_' column header, to access 'Education', 'Emergency Service' categories under 'OS OpenMap Local Important Buildings' use the 'BUILDGTHEM' column name.",
                         "When read FIPS or GEOID columns from CSV files, read those columns as str or int, never as float.",
                         "FIPS or GEOID columns may be str type with leading zeros (digits: state: 2, county: 5, tract: 11, block group: 12), or integer type without leading zeros. Thus, when joining they, you can convert the integer column to str type with leading zeros to ensure the success."
                         
@@ -364,6 +364,7 @@ sampling_data_requirement = [
  
                         #
                         ]
+
 
 
 
