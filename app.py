@@ -88,7 +88,9 @@ ee.Initialize(earth_credentials, project='disco-parsec-444415-c4')
 db = firestore.Client(project="disco-parsec-444415-c4", credentials=credentials)
 parser = JsonOutputParser()
 rag_llm = ChatGoogleGenerativeAI(model="gemini-2.0-flash-001", temperature=0)
-emd_model = SentenceTransformer('all-MiniLM-L6-v2')
+hf_token = os.environ.get("HF_TOKEN")
+emd_model = SentenceTransformer('all-MiniLM-L6-v2', use_auth_token=hf_token)
+
 # --------------------- GIS CODE AGENT WRAPPER ---------------------
 
 class GeminiLLM(LLM):
