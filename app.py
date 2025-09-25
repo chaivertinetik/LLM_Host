@@ -603,6 +603,30 @@ def clean_indentation(code):
      # Join the cleaned lines back into a single string with proper indentation
     return '\n'.join(cleaned_lines)
 # job_id: str, 
+
+def try_llm_fix(code, error_message=None, max_attempts=2):
+    """Attempt to fix code using LLM given an error (and optionally the error message)."""
+    for attempt in range(max_attempts):
+        try:
+            # Always try to provide error context to the LLM
+            if error_message:
+                prompt = (
+                    f"The following Python code produced the error: \n"
+                    f"{error_message}\n"
+                    f"Please fix the code and output only the corrected Python code:\n{code}\n"
+                )
+            else:
+                prompt = f"Fix the following Python code and output only the corrected code:\n{code}\n"
+            response = model.generate_content(prompt)
+            fixed_code = helper.extract_code(response.text)
+            exec(fixed_code, globals())
+            return True
+        except Exception as e:
+            error_message = str(e)
+            code = fixed_code  # Keep trying to improve the last version
+            continue
+    return False
+    
 def long_running_task(user_task: str, task_name: str, data_locations: list):
     try:
         # job_status[job_id] = {"status": "running", "message": "Task is in progress"}
@@ -682,28 +706,42 @@ def long_running_task(user_task: str, task_name: str, data_locations: list):
         # code_for_assembly = autopep8.fix_code(code_for_assembly)
         # code_for_assembly = black.format_str(code_for_assembly, mode=black.FileMode())
         exec_globals = {}
-        # Execute the code directly 
+        # Execute the code directly         
         try:
             exec(code_for_assembly, globals())
         except IndentationError as e:
-            print("Entered exception zone")
-            for attempt in range(10):
-                try:
-                    prompt = f"Fix Indentation in the following Python code:\n{code_for_assembly}\n"
-                    response = model.generate_content(prompt)
-                    break
-                except ResourceExhausted: 
-                    if attempt<10:
-                        time.sleep(10)
-                    else:
-                        raise
-            code_for_assembly = helper.extract_code(response.text)
-            exec(code_for_assembly, globals())
+            print("Caught IndentationError, sending to LLM...")
+            success = try_llm_fix(code_for_assembly, error_message=str(e))
+            if not success:
+                return {"status": "completed",
+                        "message": "Please ensure the data you're prompting is in the database."}
         except Exception as e:
-            return {
-                "status": "completed",
-                "message": "The server seems to be down or what you're asking for isn't in the database."
-            }
+            print(f"Caught Exception: {e}")
+            success = try_llm_fix(code_for_assembly, error_message=str(e))
+            if not success:
+                return {"status": "completed",
+                        "message": f"Data is missing or more precise prompt info is needed."}
+        # try:
+        #     exec(code_for_assembly, globals())
+        # except IndentationError as e:
+        #     print("Entered exception zone")
+        #     for attempt in range(10):
+        #         try:
+        #             prompt = f"Fix Indentation in the following Python code:\n{code_for_assembly}\n"
+        #             response = model.generate_content(prompt)
+        #             break
+        #         except ResourceExhausted: 
+        #             if attempt<10:
+        #                 time.sleep(10)
+        #             else:
+        #                 raise
+        #     code_for_assembly = helper.extract_code(response.text)
+        #     exec(code_for_assembly, globals())
+        # except Exception as e:
+        #     return {
+        #         "status": "completed",
+        #         "message": "The server seems to be down or what you're asking for isn't in the database."
+        #     }
         result = globals().get('result', None)
         print("result type:", type(result))
         print("Final result:", result)
