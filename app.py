@@ -606,6 +606,7 @@ def clean_indentation(code):
 
 def try_llm_fix(code, error_message=None, max_attempts=2):
     """Attempt to fix code using LLM given an error (and optionally the error message)."""
+    fixed_code = code
     for attempt in range(max_attempts):
         try:
             # Always try to provide error context to the LLM
