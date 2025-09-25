@@ -122,7 +122,7 @@ operation_requirement = [
                         # "Note module 'pandas' has no attribute or method of 'StringIO'",
                         "Never use geopandas.concat or GeoDataFrame.concat to merge to dataframes. To concatenate GeoDataFrames, always use pd.concat([gdf1, gdf2]) from the pandas library and ensure pandas is imported as import pandas as pd.",
                         "Use the latest Python modules and methods.",
-                        "If the user asks for tree health level (e.g. level 4 ash trees) look for the levels in the 'Health' column (only available for Ash trees), and if the user wants 'Healthy' and 'Unhealthy' trees also obtain from the 'Health' field, but because the Ash trees only have levels; level 1 is considered Healthy and the rest are Unhealthy.", 
+                        "If the user asks for tree health level (e.g. level 4 ash trees) look for the levels in the 'Health' column (only available for Ash trees), and if the user wants 'Healthy' and 'Unhealthy' Ash trees level 1 is 'Healthy' and the other levels are 'Unhealthy', and for the other species just look for the 'Healthy'/'Unhealthy' values.", 
                         "When doing spatial analysis, convert the involved spatial layers into the same map projection, if they are not in the same projection.",
                         # "DO NOT reproject or set spatial data(e.g., GeoPandas Dataframe) if only one layer involved.",
                         "Map projection conversion is only conducted for spatial data layers such as GeoDataFrame. DataFrame loaded from a CSV file does not have map projection information.",
@@ -364,6 +364,7 @@ sampling_data_requirement = [
  
                         #
                         ]
+
 
 
 
