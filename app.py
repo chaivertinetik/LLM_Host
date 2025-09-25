@@ -204,18 +204,28 @@ def wants_map_output(prompt: str) -> bool:
     return wants_map_output_genai(prompt)
 
 def shapely_to_arcgis_geometry(geom):
+    """
+    Convert Shapely Polygon/MultiPolygon to ArcGIS JSON geometry (rings) in EPSG:4326 space.
+    NOTE: Caller must ensure geometry already in EPSG:4326.
+    """
+    if geom.is_empty:
+        raise ValueError("Empty geometry cannot be posted")
+
     if geom.geom_type == "Polygon":
-        return {
-            "rings": mapping(geom)["coordinates"],
-            "spatialReference": {"wkid": 4326}
-        }
-    elif geom.geom_type == "MultiPolygon":
-        return {
-            "rings": [ring for polygon in mapping(geom)["coordinates"] for ring in polygon],
-            "spatialReference": {"wkid": 4326}
-        }
-    else:
-        raise ValueError(f"Unsupported geometry type: {geom.geom_type}")
+        coords = mapping(geom)["coordinates"]  # (exterior, holes...)
+        return {"rings": list(coords), "spatialReference": {"wkid": 4326}}
+
+    if geom.geom_type == "MultiPolygon":
+        # Flatten to rings list
+        mcoords = mapping(geom)["coordinates"]  # list of (exterior, holes...)
+        rings = []
+        for poly in mcoords:
+            for ring in poly:
+                rings.append(ring)
+        return {"rings": rings, "spatialReference": {"wkid": 4326}}
+
+    raise ValueError(f"Unsupported geometry type for posting: {geom.geom_type}")
+
 
 
 def get_project_urls(project_name):
@@ -468,39 +478,33 @@ def post_features_to_layer(gdf, target_url, batch_size=800):
     add_url = sanitise_add_url(target_url)
     headers = {"Content-Type": "application/x-www-form-urlencoded"}
 
-    allowed_fields = {"Health", "Tree_ID", "Species"}
-    # uncomment this for the batch implementation
-    # for start in range(0, len(gdf), batch_size):
-    #     batch_gdf=gdf.iloc[start:start+batch_size]
-    #     features=[]
-    # features = []
-    # for _, row in gdf.iterrows():
+    allowed_fields = {"Health", "Tree_ID", "Species"}  # adjust as needed
+
     for start in range(0, len(gdf), batch_size):
-        batch_gdf=gdf.iloc[start:start+batch_size]
-        features=[]
+        batch_gdf = gdf.iloc[start:start+batch_size]
+        features = []
         for _, row in batch_gdf.iterrows():
             try:
                 arcgis_geom = shapely_to_arcgis_geometry(row.geometry)
-                attributes = {k: v for k, v in row.items() if k in allowed_fields}
-                features.append({
-                    "geometry": arcgis_geom,
-                    "attributes": attributes
-                })
+                if isinstance(row, pd.Series):
+                    attributes = {k: row[k] for k in allowed_fields if k in row.index}
+                else:
+                    attributes = {}
+
+                features.append({"geometry": arcgis_geom, "attributes": attributes})
             except Exception as e:
                 print(f"Skipping row due to geometry error: {e}")
 
-        payload = {
-            "features": json.dumps(features),
-            "f": "json"
-        }
+        if not features:
+            continue
 
+        payload = {"features": json.dumps(features), "f": "json"}
         response = requests.post(add_url, data=payload, headers=headers)
         if response.status_code == 200:
-            # print(f"Batch {start//batch_size +1}: Features added successfully:", response.json())
             print("Features added successfully:", response.json())
         else:
-            # print(f"Batch  {start//batch_size + 1} : Failed to add features:", response.text) 
             print("Failed to add features:", response.text)
+
 
 def sanitise_delete_urls(target_url: str):
     target_url = target_url.rstrip("/")
@@ -538,57 +542,139 @@ def ensure_list(obj):
     else:
         pass
 
+
+#-------------Helpers-------------
+def to_gdf(obj, fallback_epsg: int | None = None) -> gpd.GeoDataFrame | None:
+    """
+    Normalize various inputs to a GeoDataFrame:
+      - GeoDataFrame: return as-is
+      - GeoSeries: wrap to GDF (preserve CRS if present)
+      - Shapely geometry (Polygon/MultiPolygon/etc.): wrap to single-row GDF (fallback CRS if given)
+      - List/tuple of Shapely geometries: wrap to GDF (fallback CRS if given)
+      - GeoJSON (FeatureCollection or single Feature or raw geometry dict)
+      - String (try JSON -> GeoJSON)
+    Returns None if cannot interpret as geospatial.
+    """
+    # Already a GDF
+    if isinstance(obj, gpd.GeoDataFrame):
+        return obj
+
+    # GeoSeries
+    if isinstance(obj, gpd.GeoSeries):
+        crs = obj.crs
+        return gpd.GeoDataFrame(geometry=obj, crs=crs)
+
+    # Shapely geometry
+    if isinstance(obj, BaseGeometry):
+        gdf = gpd.GeoDataFrame(geometry=[obj])
+        if fallback_epsg is not None:
+            gdf.set_crs(epsg=fallback_epsg, inplace=True)
+        return gdf
+
+    # List/tuple of geometries
+    if isinstance(obj, (list, tuple)) and obj and all(isinstance(g, BaseGeometry) for g in obj):
+        gdf = gpd.GeoDataFrame(geometry=list(obj))
+        if fallback_epsg is not None:
+            gdf.set_crs(epsg=fallback_epsg, inplace=True)
+        return gdf
+
+    # Dict-like: try GeoJSON
+    if isinstance(obj, dict):
+        try:
+            if "type" in obj:
+                t = obj["type"]
+                if t == "FeatureCollection":
+                    feats = obj.get("features", [])
+                    return gpd.GeoDataFrame.from_features(feats)
+                elif t == "Feature":
+                    return gpd.GeoDataFrame.from_features([obj])
+                else:
+                    # treat as raw geometry dict
+                    geom = shp_shape(obj)
+                    gdf = gpd.GeoDataFrame(geometry=[geom])
+                    if fallback_epsg is not None:
+                        gdf.set_crs(epsg=fallback_epsg, inplace=True)
+                    return gdf
+        except Exception:
+            pass
+
+    # String JSON -> try to parse as GeoJSON
+    if isinstance(obj, str):
+        try:
+            parsed = json.loads(obj)
+            return to_gdf(parsed, fallback_epsg=fallback_epsg)
+        except json.JSONDecodeError:
+            return None
+
+    return None
+
+
+def reproject_if_needed(gdf: gpd.GeoDataFrame, target_epsg: int) -> gpd.GeoDataFrame:
+    """
+    Reproject to EPSG:target_epsg if CRS is set and differs.
+    If no CRS: set to target (assume coords already in that CRS).
+    """
+    if gdf.crs is None:
+        gdf = gdf.set_crs(epsg=target_epsg)
+    elif gdf.crs.to_epsg() != target_epsg:
+        gdf = gdf.to_crs(epsg=target_epsg)
+    return gdf
+
 def filter(FIDS, project_name):
+    """
+    Normalizes FIDS to a GeoDataFrame (if possible) and posts to CHAT_OUTPUT.
+    If FIDS is a list of Tree_IDs, it fetches the crowns and filters by Tree_ID.
+    """
     print("Made it to the filter function")
-    # Always get URLs up front so they're in scope
+
     tree_crowns_url, chat_output_url = get_project_urls(project_name)
     if not tree_crowns_url or not chat_output_url:
         raise ValueError("Required URLs missing in Project Index.")
-    # CASE A: Already a GeoDataFrame → post as-is
-    if isinstance(FIDS, gpd.GeoDataFrame):
-        post_gdf = FIDS.copy()
-    else:
-        # If a GeoJSON string was passed, try to parse into a GDF
-        if isinstance(FIDS, str):
-            try:
-                parsed = json.loads(FIDS)
-                if "features" in parsed:
-                    post_gdf = gpd.GeoDataFrame.from_features(parsed["features"])
-                else:
-                    raise ValueError("Invalid GeoJSON: missing 'features'.")
-            except json.JSONDecodeError:
-                # Not GeoJSON → treat as IDs below
-                parsed = None
-                post_gdf = None
-        else:
-            parsed = None
-            post_gdf = None
-        # If we still don't have a GDF, assume we have ID(s)
-        if post_gdf is None:
-            ids = ensure_list(FIDS)
-            # Defensive: drop Nones if they slipped in
-            ids = [i for i in ids if i is not None]
-            if len(ids) == 0:
-                raise ValueError("No valid IDs provided to filter().")
-            # Fetch crowns and filter by Tree_ID
-            gdf = extract_geojson(tree_crowns_url)
-            if gdf is None or gdf.empty:
-                raise ValueError("Tree crowns layer returned no data.")
-            if "Tree_ID" not in gdf.columns:
-                raise ValueError("Column 'Tree_ID' not found in GeoDataFrame.")
-            # Make both sides comparable, tolerate strings/ints
-            gdf["Tree_ID"] = pd.to_numeric(gdf["Tree_ID"], errors="coerce")
-            ids_num = pd.to_numeric(pd.Series(ids), errors="coerce").dropna().astype(int).tolist()
-            if len(ids_num) == 0:
-                raise ValueError("No numeric IDs could be parsed from FIDS.")
-            post_gdf = gdf[gdf["Tree_ID"].isin(ids_num)].copy()
-    if post_gdf.empty:
+
+    # Try to interpret FIDS as geospatial first
+    # We'll assume any bare geometry coming from the LLM is already in 4326 unless we can detect otherwise.
+    post_gdf = to_gdf(FIDS, fallback_epsg=4326)
+
+    if post_gdf is None:
+        # Not a geospatial object -> maybe it's a list of IDs (or scalar)
+        ids = ensure_list(FIDS)
+        ids = [i for i in ids if i is not None]
+        if len(ids) == 0:
+            raise ValueError("No valid IDs or geometries provided to filter().")
+
+        # Fetch crowns and filter by Tree_ID
+        crowns_gdf = extract_geojson(tree_crowns_url)
+        if crowns_gdf is None or crowns_gdf.empty:
+            raise ValueError("Tree crowns layer returned no data.")
+        if "Tree_ID" not in crowns_gdf.columns:
+            raise ValueError("Column 'Tree_ID' not found in crowns layer.")
+
+        crowns_gdf["Tree_ID"] = pd.to_numeric(crowns_gdf["Tree_ID"], errors="coerce")
+        ids_num = pd.to_numeric(pd.Series(ids), errors="coerce").dropna().astype(int).tolist()
+        if len(ids_num) == 0:
+            raise ValueError("No numeric IDs could be parsed from FIDS.")
+
+        post_gdf = crowns_gdf[crowns_gdf["Tree_ID"].isin(ids_num)].copy()
+
+    # At this point we have a GDF of geometries to post
+    if post_gdf is None or post_gdf.empty:
         print("Filter produced an empty GeoDataFrame. Nothing to post.")
         delete_all_features(chat_output_url)  # optional: clear layer anyway
         return
+
+    # Ensure 4326 for ArcGIS rings
+    try:
+        post_gdf = reproject_if_needed(post_gdf, target_epsg=4326)
+    except Exception as ex:
+        print(f"Reprojection warning: {ex}. Continuing without reprojection.")
+        # If CRS unknown, force-set 4326 to satisfy downstream
+        if post_gdf.crs is None:
+            post_gdf = post_gdf.set_crs(epsg=4326)
+
     # Post workflow
     delete_all_features(chat_output_url)
     post_features_to_layer(post_gdf, chat_output_url)
+
 
        
 def clean_indentation(code):
