@@ -1009,6 +1009,31 @@ def want_gis_task(prompt: str) -> bool:
     # Fallback to GenAI classifier for ambiguous queries
     return wants_gis_task_genai(prompt)
 
+#-------- The debug agent ---------------
+
+def try_llm_fix(code, error_message=None, max_attempts=2):
+    fixed_code = code
+    exec_globals = {}
+    for attempt in range(max_attempts):
+        try:
+            if error_message:
+                prompt = (
+                    f"The following Python code produced the error: \n"
+                    f"{error_message}\n"
+                    f"Please fix the code and output only the corrected Python code:\n{fixed_code}\n"
+                )
+            else:
+                prompt = f"Fix the following Python code and output only the corrected code:\n{fixed_code}\n"
+            response = model.generate_content(prompt)
+            fixed_code = helper.extract_code(response.text)
+            exec(fixed_code, exec_globals)
+            return True, fixed_code
+        except Exception as e:
+            print(f"Error during LLM fix attempt {attempt + 1}: {e}")
+            error_message = str(e)
+    return False, error_message
+
+#---- The geospatial code llm pipeline -----------
 
 def long_running_task(user_task: str, task_name: str, data_locations: list):
     try:
@@ -1111,10 +1136,23 @@ def long_running_task(user_task: str, task_name: str, data_locations: list):
             code_for_assembly = helper.extract_code(response.text)
             exec(code_for_assembly, globals())
         except Exception as e:
-            return {
-                "status": "completed",
-                "message": "The server seems to be down or what you're asking for isn't in the database."
-            }
+            print(f"Caught Exception: {e}, attempting LLM fix...")
+            success, fixed_code_or_error = try_llm_fix(code_for_assembly, error_message=str(e))
+            if success:
+                try:
+                    exec(fixed_code_or_error, globals())
+                except Exception as e2:
+                    print(f"Execution after LLM fix failed: {e2}")
+                    return {
+                        "status": "completed",
+                        "message": f"Try being more specific with your prompt."
+                    }
+            else:
+                print(f"LLM fix failed: {fixed_code_or_error}")
+                return {
+                        "status": "completed",
+                        "message": "The server seems to be down or what you're asking for isn't in the database."
+                       }
         result = globals().get('result', None)
         print("result type:", type(result))
         print("Final result:", result)
