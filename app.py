@@ -1773,7 +1773,7 @@ def prompt_suggetions(task_name:str, user_prompt:str) -> list[str]:
     prompt_list = [
         "Show the tallest ash tree", 
         "Show the trees within a 30m range of the tallest ash tree",
-        "Show the trees within a 30m range of the shortest ash tree"
+        "Show the trees within a 30m range of the shortest ash tree",
         "Show the diseased ash trees", 
         "Show the unhealthy trees", 
         "Show all the trees approx 40m to green spaces", 
@@ -1793,12 +1793,12 @@ def prompt_suggetions(task_name:str, user_prompt:str) -> list[str]:
         for i in range (len(history) -1):
             if history[i].get('role') == 'user' and history[i+1].get('role') == 'assistant':
                 if "successfully" in history[i+1].get('content', '').lower(): 
-                    historic_prompts.append(history[i].get('content'))
+                    old_prompts.append(history[i].get('content'))
                     
-    combined_prompts = list(dict.fromkeys(prompt_list + old_prompts)
+    combined_prompts = list(dict.fromkeys(prompt_list + old_prompts))
     user_embd= emd_model.encode(user_prompt, convert_to_tensor = True) 
     prompt_embeddings = emd_model.encode(combined_prompts, convert_to_tensor = True) 
-    similarity_score = util.pytorch_cos_sim((user_embedding, prompt_embeddings)[0]
+    similarity_scores = util.pytorch_cos_sim((user_embd, prompt_embeddings)[0]
     top_results = torch.topk(similarity_scores, k=min(4, len(combined_prompts)))
     return [combined_prompts[idx] for idx in top_results.indices]
 
