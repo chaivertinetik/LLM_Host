@@ -1852,17 +1852,19 @@ async def process_request(request_data: RequestData):
         
         try:
             attrs = get_project_urls(task_name)
-            print("Error is zone 1")
+            print(attrs)
             tree_crowns_url = get_attr(attrs, "TREE_CROWNS")
-            print("Error is zone 2")
+            print(tree_crowns_url)
             roi_url = get_attr(attrs, "CHAT_INPUT")
-            print("Error is zone 3")
+            print(roi_url)
             if task_name in ["TT_GCW1_Summer", "TT_GCW1_Winter"]:
                 data_locations = make_project_data_locations(task_name, include_seasons=True, attrs=attrs)
             else:
                 data_locations = make_project_data_locations(task_name, include_seasons=False, attrs=attrs)
             # background_tasks.add_task(long_running_task, job_id, user_task, task_name, data_locations)
+            print("Entering task")
             result = long_running_task(user_task, task_name, data_locations)
+            print("Made it to after task")
             message = result.get("message") if isinstance(result, dict) else str(result)
             
             history.append({'role': 'assistant', 'content': user_task})
