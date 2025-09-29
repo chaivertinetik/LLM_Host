@@ -1798,7 +1798,7 @@ def prompt_suggetions(task_name:str, user_prompt:str) -> list[str]:
     combined_prompts = list(dict.fromkeys(prompt_list + old_prompts))
     user_embd= emd_model.encode(user_prompt, convert_to_tensor = True) 
     prompt_embeddings = emd_model.encode(combined_prompts, convert_to_tensor = True) 
-    similarity_scores = util.pytorch_cos_sim((user_embd, prompt_embeddings)[0]
+    similarity_scores = util.pytorch_cos_sim(user_embd, prompt_embeddings)[0]
     top_results = torch.topk(similarity_scores, k=min(4, len(combined_prompts)))
     return [combined_prompts[idx] for idx in top_results.indices]
 
