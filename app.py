@@ -1763,7 +1763,9 @@ def make_project_data_locations(project_name: str, include_seasons: bool, attrs:
             2,
             f"After storm tree crown geoJSON: {_build_spatial_query_url(tree_crown_winter, aoi, out_fields='*')}."
         )
-
+    print("Assigned data locations:")
+    for loc in data_locations:
+        print("  -", loc)
     return data_locations
 
 
