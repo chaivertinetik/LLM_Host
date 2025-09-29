@@ -1769,7 +1769,38 @@ def make_project_data_locations(project_name: str, include_seasons: bool, attrs:
     return data_locations
 
 
+def prompt_suggetions(task_name:str, user_prompt:str) -> list[str]: 
+    prompt_list = [
+        "Show the tallest ash tree", 
+        "Show the trees within a 30m range of the tallest ash tree",
+        "Show the trees within a 30m range of the shortest ash tree"
+        "Show the diseased ash trees", 
+        "Show the unhealthy trees", 
+        "Show all the trees approx 40m to green spaces", 
+        "Show all the trees approx 40m to religious buildings", 
+        "What is the average height of the oak trees suveryed in 2024", 
+        "Sumamarize the health status of trees by species", 
+        "What is the average height of the ash trees", 
+        "Find the tree with the largest shape area"
+    ]
+    chat_doc = db.collection("chat_histories").document(task_name).get()
+    old_prompts= []
+    
+    if chat_doc.exists: 
+        data = chat_doc.to_dict()
+        history = data.get("history", [])
 
+        for i in range (len(history) -1):
+            if history[i].get('role') == 'user' and history[i+1].get('role') == 'assistant':
+                if "successfully" in history[i+1].get('content', '').lower(): 
+                    historic_prompts.append(history[i].get('content'))
+                    
+    combined_prompts = list(dict.fromkeys(prompt_list + old_prompts)
+    user_embd= emd_model.encode(user_prompt, convert_to_tensor = True) 
+    prompt_embeddings = emd_model.encode(combined_prompts, convert_to_tensor = True) 
+    similarity_score = util.pytorch_cos_sim((user_embedding, prompt_embeddings)[0]
+    top_results = torch.topk(similarity_scores, k=min(4, len(combined_prompts)))
+    return [combined_prompts[idx] for idx in top_results.indices]
 
 # --------------------- Initialize agent with tools and LangChain LLM ---------------------
 
@@ -1854,25 +1885,21 @@ async def process_request(request_data: RequestData):
         
         try:
             attrs = get_project_urls(task_name)
-            print(attrs)
             tree_crowns_url = get_attr(attrs, "TREE_CROWNS")
-            print(tree_crowns_url)
             roi_url = get_attr(attrs, "CHAT_INPUT")
-            print(roi_url)
             if task_name in ["TT_GCW1_Summer", "TT_GCW1_Winter"]:
                 data_locations = make_project_data_locations(task_name, include_seasons=True, attrs=attrs)
             else:
                 data_locations = make_project_data_locations(task_name, include_seasons=False, attrs=attrs)
             # background_tasks.add_task(long_running_task, job_id, user_task, task_name, data_locations)
-            print("Entering task")
             result = long_running_task(user_task, task_name, data_locations)
-            print("Made it to after task")
             message = result.get("message") if isinstance(result, dict) else str(result)
             
             history.append({'role': 'assistant', 'content': user_task})
             history.append({'role': 'assistant', 'content': message})
             save_history(session_id, history)
-            
+            prompt_options = prompt_suggetions(task_name, message) 
+            print(prompt_options) 
             return { 
                 "status": "completed",
                 "message": message,
