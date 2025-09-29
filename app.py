@@ -1852,8 +1852,11 @@ async def process_request(request_data: RequestData):
         
         try:
             attrs = get_project_urls(task_name)
+            print("Error is zone 1")
             tree_crowns_url = get_attr(attrs, "TREE_CROWNS")
+            print("Error is zone 2")
             roi_url = get_attr(attrs, "CHAT_INPUT")
+            print("Error is zone 3")
             if task_name in ["TT_GCW1_Summer", "TT_GCW1_Winter"]:
                 data_locations = make_project_data_locations(task_name, include_seasons=True, attrs=attrs)
             else:
