@@ -8,7 +8,6 @@ import pandas as pd
 import numpy as np 
 import datetime 
 import json
-
 from geopandas import GeoDataFrame
 from shapely.geometry import shape, Polygon, MultiPolygon, GeometryCollection
 from shapely.ops import unary_union

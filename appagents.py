@@ -1,7 +1,6 @@
 from credentials import db, emd_model, parser, rag_llm
 import torch
 import vertexai
-import firebase_admin
 import json 
 import os
 import helper
@@ -12,15 +11,11 @@ import ee
 import numpy as np 
 from google.oauth2 import service_account
 from sentence_transformers import util
-from google.cloud import firestore 
-from firebase_admin import credentials
-from firebase_admin import firestore
 from langchain.agents import initialize_agent, Tool
 from langchain.agents.agent_types import AgentType
 from langchain.prompts import PromptTemplate
 from langchain_core.language_models import LLM
 from vertexai.generative_models import GenerativeModel
-from vertexai.language_models import TextGenerationModel
 from google.api_core.exceptions import ResourceExhausted
 
 from LLM_Heroku_Kernel import Solution

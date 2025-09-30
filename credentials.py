@@ -2,9 +2,6 @@ import os
 import json
 import vertexai
 import ee
-import geopandas as gpd
-import numpy as np
-import pandas as pd
 from google.oauth2 import service_account
 from google.cloud import firestore
 from langchain_core.output_parsers import JsonOutputParser
