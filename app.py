@@ -1829,6 +1829,8 @@ async def process_request(request_data: RequestData):
         history.append({'role': 'user', 'content': user_task})
         history.append({'role': 'assistant', 'content': "Not programmed to do that."})
         save_history(session_id, history)
+        prompt_options = prompt_suggetions(task_name, message) 
+        print(prompt_options)
         return {
             "status": "completed",
             "message": "I haven't been programmed to do that"
@@ -1868,6 +1870,8 @@ async def process_request(request_data: RequestData):
             history.append({'role': 'user', 'content': user_task})
             history.append({'role': 'assistant', 'content': combined_message})
             save_history(session_id, history)
+            prompt_options = prompt_suggetions(task_name, message) 
+            print(prompt_options)
             
             return {
                 "status": "completed",
@@ -1909,6 +1913,8 @@ async def process_request(request_data: RequestData):
                 }
             }
         except Exception as e:
+            save_history(session_id, history)
+            prompt_options = prompt_suggetions(task_name, message) 
             return {"status": "completed", "message": "Request not understood as a GIS task."}
 
     elif do_info: 
@@ -1916,6 +1922,9 @@ async def process_request(request_data: RequestData):
         history.append({'role': 'assistant', 'content': user_task})
         history.append({'role': 'assistant', 'content': response})
         save_history(session_id, history)
+        prompt_options = prompt_suggetions(task_name, message) 
+        print(prompt_options)
+        
         return {"status": "completed", "response": response}
     
     return {"status": "completed", "message": "Request not understood as a task requiring geospatial data."}
