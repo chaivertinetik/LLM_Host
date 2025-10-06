@@ -118,7 +118,7 @@ operation_requirement = [
                         'If using GeoPandas to load a zipped ESRI shapefile from a URL, the correct method is "gpd.read_file(URL)". DO NOT download and unzip the file.',
                         # "Generate descriptions for input and output arguments.",
                         'Ensure all comments and descriptions use # and are single line.',
-                        "When accessing green spaces data and you want specific categories like 'Bowling Green', 'Religious Grounds' use the 'function_' column header and when accessing the building data and you need categories like 'Education', 'Emergency Service', and 'Religious Buildings' use the 'BUILDGTHEM' column header.",
+                        "When accessing green spaces data and you want specific categories like 'Bowling Green', 'Religious Grounds' use the 'function_' column header and when accessing the building data and you need categories like 'Education', 'Emergency Service', and 'Religious Buildings' use the 'BUILDGTHEM' column header and for Streets/Roads use the 'name1' header for streets like Clumber Road East.",
                         "You need to receive the data from the functions, DO NOT load in the function if other functions have loaded the data and returned it in advance.",
                         # "Note module 'pandas' has no attribute or method of 'StringIO'",
                         "Use the latest Python modules and methods.",
@@ -365,6 +365,7 @@ sampling_data_requirement = [
  
                         #
                         ]
+
 
 
 
