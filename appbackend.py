@@ -280,7 +280,7 @@ def extract_geojson(url: str, where: str = "1=1", out_fields: str = "*", timeout
                 "where": where,
                 "outFields": out_fields,
                 "f": "geojson",
-                "outSR": wkid,
+                "outSR": 102100,
                 "resultOffset": offset,
                 "resultRecordCount": page_size,
             }
@@ -785,7 +785,7 @@ def _gdf_from_layer_all(layer_url: str, out_wkid: int = 4326, timeout: int = 15)
             "where": "1=1",
             "outFields": "*",
             "f": "geojson",
-            "outSR": out_wkid,
+            "outSR": 102100,
             "resultOffset": offset,
             "resultRecordCount": page_size,
         }
@@ -1010,7 +1010,7 @@ def _build_spatial_query_url(layer_url: str, aoi: dict, where: str = "1=1", out_
         f"&spatialRel=esriSpatialRelIntersects"
         f"&inSR={in_sr}"
         f"&outFields={_q(out_fields)}"
-        f"&outSR={out_wkid}"
+        f"&outSR=102100"
         f"&f=geojson"
     )
     logger.debug(f"Built spatial query URL (truncated): {query_url[:200]}...")
