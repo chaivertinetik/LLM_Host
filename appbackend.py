@@ -1,4 +1,4 @@
-#----------------------------Data Location logic-------------
+# ---------------------------- Data Location logic ----------------------------
 import json as _json
 from urllib.parse import quote as _q
 import re
@@ -14,16 +14,24 @@ from shapely.ops import unary_union
 from pydantic import BaseModel
 from fastapi import HTTPException
 from shapely.geometry import mapping
-import logging
 
-# Configure basic logging (optional, but good practice)
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
-logger = logging.getLogger(__name__)
+# --- simple print-based "logger" --------------------------------------------
+def _print_log(level, *args):
+    ts = datetime.datetime.now().strftime("%H:%M:%S")
+    print(f"[{ts}] {level.upper()}:", *args)
+
+class PrintLogger:
+    def info(self, *args): _print_log("info", *args)
+    def debug(self, *args): _print_log("debug", *args)
+    def warning(self, *args): _print_log("warn", *args)
+    def error(self, *args): _print_log("error", *args)
+
+logger = PrintLogger()
 
 class ClearRequest(BaseModel):
     task_name: str
 
-# --------------------- ARC GIS UPDATE---------------------
+# --------------------- ARC GIS UPDATE ---------------------
 
 def _json_default(obj):
     # numpy → python
@@ -66,10 +74,7 @@ async def trigger_cleanup(task_name: str):
         valid_urls = [u for u in urls if u]
         if not valid_urls:
             logger.info("No valid CHAT_OUTPUT URLs found for cleanup.")
-            return {
-                "status": "success",
-                "message": "Nothing to delete."
-            }
+            return {"status": "success", "message": "Nothing to delete."}
 
         for target_url in valid_urls:
             logger.info(f"Attempting cleanup for URL: {target_url}")
@@ -111,17 +116,13 @@ async def trigger_cleanup(task_name: str):
             except requests.RequestException as req_e:
                 logger.error(f"Network/HTTP Error during cleanup of {target_url}: {req_e}")
             except Exception as e:
-                logger.error(f"Error during cleanup of {target_url}: {e}", exc_info=True)
+                logger.error(f"Error during cleanup of {target_url}: {e}")
                 
         logger.info(f"Cleanup finished for task {task_name}.")
-        return {
-            "status": "success",
-            "message": "Cleanup completed." if cleaned_any else "Nothing to delete."
-        }
+        return {"status": "success", "message": "Cleanup completed." if cleaned_any else "Nothing to delete."}
     except Exception as e:
-        logger.error(f"Top-level cleanup failure for {task_name}: {e}", exc_info=True)
+        logger.error(f"Top-level cleanup failure for {task_name}: {e}")
         raise HTTPException(status_code=500, detail=f"Cleanup failed: {str(e)}")
-        
 
 def shapely_to_arcgis_geometry(geom, wkid: int):
     logger.debug(f"Converting geometry type {geom.geom_type} to ArcGIS JSON with WKID {wkid}")
@@ -146,7 +147,6 @@ def shapely_to_arcgis_geometry(geom, wkid: int):
 
     logger.error(f"Unsupported geometry type encountered: {gt}")
     raise ValueError(f"Unsupported geometry type: {gt}")
-
 
 def get_project_urls(project_name):
     logger.info(f"Fetching project URLs for '{project_name}'.")
@@ -199,7 +199,7 @@ def get_project_urls(project_name):
     except ValueError:
         raise
     except Exception as e:
-        logger.error(f"Unexpected error in get_project_urls for '{project_name}': {e}", exc_info=True)
+        logger.error(f"Unexpected error in get_project_urls for '{project_name}': {e}")
         raise ValueError(f"Unexpected error fetching project data: {e}")
 
 def _sanitise_layer_url(url: str) -> str:
@@ -326,7 +326,7 @@ def extract_geojson(url: str, where: str = "1=1", out_fields: str = "*", timeout
         logger.error(f"GeoJSON fetch error: request timed out for URL {url}")
         return None
     except Exception as e:
-        logger.error(f"GeoJSON fetch error for URL {url}: {e}", exc_info=True)
+        logger.error(f"GeoJSON fetch error for URL {url}: {e}")
         return None
 
 def get_roi_gdf(project_name: str) -> gpd.GeoDataFrame:
@@ -348,16 +348,18 @@ def get_roi_gdf(project_name: str) -> gpd.GeoDataFrame:
         logger.info(f"Successfully fetched ROI GDF with {len(gdf)} features, CRS: {gdf.crs}")
         return gdf
     except Exception as e:
-        logger.error(f"get_roi_gdf error for {project_name}: {e}", exc_info=True)
+        logger.error(f"get_roi_gdf error for {project_name}: {e}")
         return gpd.GeoDataFrame(geometry=[], crs="EPSG:4326")
-
 
 def sanitise_add_url(target_url: str) -> str:
     """
     Ensure the ArcGIS FeatureServer URL ends with /<layerId>/addFeatures.
+    Compatible with Python 3.8+ (no str.removesuffix).
     """
     logger.debug(f"Sanitising add URL: {target_url}")
-    target_url = target_url.rstrip("/").removesuffix("/addFeatures")
+    target_url = target_url.rstrip("/")
+    if target_url.endswith("/addFeatures"):
+        target_url = target_url[: -len("/addFeatures")]
 
     if target_url.endswith("/FeatureServer"):
         result = f"{target_url}/0/addFeatures"
@@ -373,7 +375,7 @@ def _ensure_crs(gdf: gpd.GeoDataFrame, epsg: int) -> gpd.GeoDataFrame:
     if gdf is None or gdf.empty:
         return gdf
     if not gdf.crs:
-        # Our downloads are normalized to WGS84; if missing, assume 4326.
+        # Downloads are normalized to WGS84; if missing, assume 4326.
         gdf = gdf.set_crs(epsg=4326)
     if gdf.crs.to_epsg() != epsg:
         gdf = gdf.to_crs(epsg=epsg)
@@ -446,7 +448,7 @@ def post_features_to_layer(gdf, target_url, project_name, batch_size=800):
                 })
                 
             except Exception as e:
-                logger.error(f"Skipping row {index} due to geometry error: {e}", exc_info=True)
+                logger.error(f"Skipping row {index} due to geometry error: {e}")
 
         if not features:
             logger.warning(f"Batch {start//batch_size + 1} yielded no valid features. Skipping POST.")
@@ -475,14 +477,13 @@ def post_features_to_layer(gdf, target_url, project_name, batch_size=800):
         except requests.RequestException as e:
             logger.error(f"POST to {add_url} for batch {start//batch_size + 1} failed: {e}")
         except Exception as e:
-            logger.error(f"Unexpected error during POST for batch {start//batch_size + 1}: {e}", exc_info=True)
-
+            logger.error(f"Unexpected error during POST for batch {start//batch_size + 1}: {e}")
 
 def delete_all_features(target_url):
     logger.info(f"Attempting to delete all features from {target_url}")
     try:
         layer = _sanitise_layer_url(target_url)    # -> .../FeatureServer/<id>
-        query_url  = f"{layer}/query"
+        query_url  = f"{layer}/query"}
         delete_url = f"{layer}/deleteFeatures"
         logger.debug(f"Layer URL for delete: {layer}")
 
@@ -525,8 +526,7 @@ def delete_all_features(target_url):
     except requests.RequestException as e:
         logger.error(f"Network/HTTP Error during delete_all_features for {target_url}: {e}")
     except Exception as e:
-        logger.error(f"Unexpected error in delete_all_features for {target_url}: {e}", exc_info=True)
-
+        logger.error(f"Unexpected error in delete_all_features for {target_url}: {e}")
 
 def filter(gdf_or_fids, project_name):
     logger.info(f"Starting filter function for project: {project_name}")
@@ -639,7 +639,7 @@ def filter(gdf_or_fids, project_name):
             post_features_to_layer(sub, chat_output_url, project_name)
 
     except Exception as e:
-        logger.error(f"Top-level error in filter function: {e}", exc_info=True)
+        logger.error(f"Top-level error in filter function: {e}")
         raise
 
 # --- Helpers ---------------------------------------------------------------
@@ -699,8 +699,8 @@ def to_gdf(maybe_gdf):
 def normalize_ids(series, ids):
     logger.debug(f"Normalizing IDs: Series type {series.dtype}, IDs count {len(ensure_list(ids))}")
     try:
-        # Try int match first
-        s_int = series.astype("int64", errors="raise")
+        # Try int match first (pd.to_numeric works with errors="raise")
+        s_int = pd.to_numeric(series, errors="raise").astype("int64")
         ids_int = [int(x) for x in ensure_list(ids)]
         mask = s_int.isin(ids_int)
         logger.debug("Successful integer ID match.")
@@ -950,7 +950,7 @@ def get_project_aoi_geometry(project_name: str):
             "inSR": wkid
         }
     except Exception as e:
-        logger.error(f"Error determining AOI from ORTHOMOSAIC: {e}. Falling back to empty envelope.", exc_info=True)
+        logger.error(f"Error determining AOI from ORTHOMOSAIC: {e}. Falling back to empty envelope.")
         return {
             "geometry": {"xmin": 0, "ymin": 0, "xmax": 0, "ymax": 0, "spatialReference": {"wkid": 4326}},
             "geometryType": "esriGeometryEnvelope",
