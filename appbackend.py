@@ -483,7 +483,7 @@ def delete_all_features(target_url):
     logger.info(f"Attempting to delete all features from {target_url}")
     try:
         layer = _sanitise_layer_url(target_url)    # -> .../FeatureServer/<id>
-        query_url  = f"{layer}/query"}
+        query_url  = f"{layer}/query"
         delete_url = f"{layer}/deleteFeatures"
         logger.debug(f"Layer URL for delete: {layer}")
 
