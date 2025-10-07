@@ -26,7 +26,6 @@ class ClearRequest(BaseModel):
 # --------------------- ARC GIS UPDATE---------------------
 
 def _json_default(obj):
-    # ... (existing function content) ...
     # numpy → python
     if isinstance(obj, (np.integer,)):
         return int(obj)
@@ -89,7 +88,6 @@ async def trigger_cleanup(task_name: str):
                 
                 if "error" in response_json:
                     logger.error(f"ArcGIS Error during query for IDs at {query_url}: {response_json['error']}")
-                    # Continue to next URL, don't raise
                     continue
 
                 if not ids:
@@ -110,7 +108,6 @@ async def trigger_cleanup(task_name: str):
                 else:
                     logger.error(f"ArcGIS Error during delete features at {delete_url}: {delete_response_json}")
 
-
             except requests.RequestException as req_e:
                 logger.error(f"Network/HTTP Error during cleanup of {target_url}: {req_e}")
             except Exception as e:
@@ -127,7 +124,6 @@ async def trigger_cleanup(task_name: str):
         
 
 def shapely_to_arcgis_geometry(geom, wkid: int):
-    # ... (existing function content) ...
     logger.debug(f"Converting geometry type {geom.geom_type} to ArcGIS JSON with WKID {wkid}")
     gt = geom.geom_type
     coords = mapping(geom)["coordinates"]
@@ -156,7 +152,6 @@ def get_project_urls(project_name):
     logger.info(f"Fetching project URLs for '{project_name}'.")
     query_url = "https://services-eu1.arcgis.com/8uHkpVrXUjYCyrO4/arcgis/rest/services/Project_index/FeatureServer/0/query"
     
-    # List of all fields you want from the service
     fields = [
         "PROJECT_NAME",
         "ORTHOMOSAIC",
@@ -195,7 +190,6 @@ def get_project_urls(project_name):
             logger.warning(f"No project found with the name '{project_name}'.")
             raise ValueError(f"No project found with the name '{project_name}'.")
 
-        # Return as a dictionary of all requested attributes
         attributes = data["features"][0]["attributes"]
         logger.info(f"Successfully fetched attributes for '{project_name}'.")
         return attributes
@@ -203,27 +197,20 @@ def get_project_urls(project_name):
         logger.error(f"Network/HTTP Error fetching project index for '{project_name}': {e}")
         raise ValueError(f"Network error fetching project index: {e}")
     except ValueError:
-        # Re-raise the ValueError about no project found
         raise
     except Exception as e:
         logger.error(f"Unexpected error in get_project_urls for '{project_name}': {e}", exc_info=True)
         raise ValueError(f"Unexpected error fetching project data: {e}")
 
-# ... (fetch_crs function is below) ...
-
 def _sanitise_layer_url(url: str) -> str:
-    # ... (existing function content) ...
     logger.debug(f"Sanitising URL: {url}")
     if not isinstance(url, str) or not url.strip():
         logger.error("URL provided for sanitisation is empty or not a string.")
         raise ValueError("URL must be a non-empty string")
 
     u = url.strip().rstrip("/")
-
-    # Strip trailing /query if present
     u = re.sub(r"/query$", "", u, flags=re.IGNORECASE)
 
-    # Match MapServer or FeatureServer, with optional layer id
     m = re.search(r"(.*?/(?:FeatureServer|MapServer))(?:/(\d+))?$", u, flags=re.IGNORECASE)
     if not m:
         logger.error(f"URL does not appear to be a valid ArcGIS service: {url}")
@@ -231,16 +218,13 @@ def _sanitise_layer_url(url: str) -> str:
 
     base, layer = m.groups()
     if layer is None:
-        layer = "0"  # default to layer 0 if not provided
+        layer = "0"
 
     result = f"{base}/{layer}"
     logger.debug(f"Sanitised result: {result}")
     return result
 
 def _get_layer_max_record_count(layer_url: str, timeout: int = 10) -> int:
-    """
-    Ask the layer for its JSON and read maxRecordCount; fall back to 1000 if absent.
-    """
     logger.debug(f"Attempting to fetch maxRecordCount for {layer_url}")
     default_mrc = 1000
     try:
@@ -252,7 +236,6 @@ def _get_layer_max_record_count(layer_url: str, timeout: int = 10) -> int:
             logger.warning(f"ArcGIS Error getting metadata for MRC at {layer_url}: {meta['error']['message']}. Using default {default_mrc}.")
             return default_mrc
             
-        # ArcGIS sometimes names it maxRecordCount; default sensibly if missing.
         mrc = meta.get("maxRecordCount")
         if isinstance(mrc, int) and mrc > 0:
             logger.debug(f"Found maxRecordCount: {mrc}")
@@ -264,13 +247,22 @@ def _get_layer_max_record_count(layer_url: str, timeout: int = 10) -> int:
         logger.warning(f"Unexpected error getting MRC for {layer_url}: {e}. Using default {default_mrc}.")
     return default_mrc
 
+def _ensure_wgs84(gdf: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
+    """Normalize a GeoDataFrame to EPSG:4326 (WGS84)."""
+    if gdf is None or gdf.empty:
+        return gdf
+    if not gdf.crs:
+        gdf = gdf.set_crs(epsg=4326)
+    elif gdf.crs.to_epsg() != 4326:
+        gdf = gdf.to_crs(epsg=4326)
+    return gdf
+
 def extract_geojson(url: str, where: str = "1=1", out_fields: str = "*", timeout: int = 15) -> gpd.GeoDataFrame | None:
     logger.info(f"Starting GeoJSON extraction from {url} with WHERE: {where}")
     try:
         layer_url = _sanitise_layer_url(url)
-        wkid = fetch_crs(layer_url, timeout=timeout)
         page_size = _get_layer_max_record_count(layer_url, timeout=timeout)
-        logger.info(f"Layer: {layer_url}, Detected WKID: {wkid}, Page Size: {page_size}")
+        logger.info(f"Layer: {layer_url}, Page Size: {page_size}")
 
         features = []
         offset = 0
@@ -280,7 +272,7 @@ def extract_geojson(url: str, where: str = "1=1", out_fields: str = "*", timeout
                 "where": where,
                 "outFields": out_fields,
                 "f": "geojson",
-                "outSR": 102100,
+                "outSR": 4326,                 # force WGS84 for GeoJSON pulls
                 "resultOffset": offset,
                 "resultRecordCount": page_size,
             }
@@ -310,7 +302,6 @@ def extract_geojson(url: str, where: str = "1=1", out_fields: str = "*", timeout
             features.extend(fc_features)
             logger.debug(f"Fetched {len(fc_features)} features. Total collected: {len(features)}")
 
-            # Stop if fewer than page_size returned (last page)
             if len(fc_features) < page_size:
                 logger.debug(f"Last page reached. Breaking loop.")
                 break
@@ -318,29 +309,14 @@ def extract_geojson(url: str, where: str = "1=1", out_fields: str = "*", timeout
             offset += page_size
             logger.debug(f"Moving to next page, new offset: {offset}")
 
-
         if not features:
             logger.info("No features found. Returning empty GeoDataFrame.")
-            try:
-                # Return a valid empty GDF with CRS set
-                return gpd.GeoDataFrame.from_features([], crs=f"EPSG:{wkid}")
-            except Exception as crs_e:
-                logger.warning(f"Failed to set CRS {wkid} on empty GeoDataFrame: {crs_e}")
-                return gpd.GeoDataFrame()
+            return gpd.GeoDataFrame(geometry=[], crs="EPSG:4326")
 
-        # Build GeoDataFrame; set CRS if possible
+        # Build GeoDataFrame; normalize to WGS84
         gdf = gpd.GeoDataFrame.from_features(features)
         logger.info(f"Successfully created GeoDataFrame with {len(gdf)} features.")
-        
-        try:
-            # Only set if not already set or if wkid looks valid
-            if wkid and (gdf.crs is None or not gdf.crs):
-                gdf.set_crs(epsg=wkid, inplace=True)
-                logger.debug(f"Set CRS to EPSG:{wkid}")
-        except Exception as crs_e:
-            logger.warning(f"CRS assignment failed for WKID {wkid}: {crs_e}")
-            pass
-
+        gdf = _ensure_wgs84(gdf)
         return gdf
 
     except requests.HTTPError as he:
@@ -381,20 +357,27 @@ def sanitise_add_url(target_url: str) -> str:
     Ensure the ArcGIS FeatureServer URL ends with /<layerId>/addFeatures.
     """
     logger.debug(f"Sanitising add URL: {target_url}")
-    # Remove trailing slashes and 'addFeatures' if they already exist
     target_url = target_url.rstrip("/").removesuffix("/addFeatures")
 
-    # If the URL ends with 'FeatureServer', add '/0' for the default layer.
     if target_url.endswith("/FeatureServer"):
         result = f"{target_url}/0/addFeatures"
         logger.debug(f"Sanitised result (default layer 0): {result}")
         return result
 
-    # Otherwise, assume the layer ID is already present and append 'addFeatures'
     result = f"{target_url}/addFeatures"
     logger.debug(f"Sanitised result (appended addFeatures): {result}")
     return result
 
+def _ensure_crs(gdf: gpd.GeoDataFrame, epsg: int) -> gpd.GeoDataFrame:
+    """Ensure the GeoDataFrame is in the specified EPSG."""
+    if gdf is None or gdf.empty:
+        return gdf
+    if not gdf.crs:
+        # Our downloads are normalized to WGS84; if missing, assume 4326.
+        gdf = gdf.set_crs(epsg=4326)
+    if gdf.crs.to_epsg() != epsg:
+        gdf = gdf.to_crs(epsg=epsg)
+    return gdf
 
 def post_features_to_layer(gdf, target_url, project_name, batch_size=800):
     logger.info(f"Starting feature post to {target_url} for project {project_name} with batch size {batch_size}")
@@ -429,10 +412,14 @@ def post_features_to_layer(gdf, target_url, project_name, batch_size=800):
         logger.warning("Nothing to push: input GeoDataFrame is None/empty.")
         return
 
-    # Detect target layer WKID
-    layer_wkid = fetch_crs(target_url, default_wkid=3857)
+    # Detect target layer WKID (use sanitised layer URL for accurate metadata)
+    layer_url = _sanitise_layer_url(target_url)
+    layer_wkid = fetch_crs(layer_url, default_wkid=3857)
     logger.info(f"Target layer WKID detected: {layer_wkid}")
     logger.debug(f"Input GDF CRS: {gdf.crs}")
+
+    # Reproject entire GDF to layer CRS before batching (ensures coordinates match layer)
+    gdf = _ensure_crs(gdf, layer_wkid)
 
     # Batch post
     for start in range(0, len(gdf), batch_size):
@@ -444,10 +431,6 @@ def post_features_to_layer(gdf, target_url, project_name, batch_size=800):
         invalid_geom_count = 0
         for index, row in batch_gdf.iterrows():
             try:
-                # Reproject to target CRS if necessary (not explicitly done here, relies on caller/ArcGIS)
-                # The assumption here is that shapely_to_arcgis_geometry handles the transformation
-                # or that the gdf is already in the right CRS (best practice is to reproject explicitly).
-                
                 arcgis_geom = shapely_to_arcgis_geometry(row.geometry, wkid=layer_wkid)
                 arcgis_geom_sanitized = sanitize_arcgis_geometry(arcgis_geom)
                 
@@ -586,7 +569,6 @@ def filter(gdf_or_fids, project_name):
                 
                 if not chat_output_url:
                     logger.error(f"Matching CHAT_OUTPUT URL missing for {kind}.")
-                    # Continue to next geometry type if possible, or raise
                     raise ValueError(f"Matching CHAT_OUTPUT URL missing in Project Index for {kind}.")
 
                 logger.info(f"Processing {len(sub)} {kind} feature(s) for URL: {chat_output_url}")
@@ -658,7 +640,6 @@ def filter(gdf_or_fids, project_name):
 
     except Exception as e:
         logger.error(f"Top-level error in filter function: {e}", exc_info=True)
-        # Re-raise or handle as appropriate for API
         raise
 
 # --- Helpers ---------------------------------------------------------------
@@ -678,7 +659,6 @@ def get_attr(attrs: dict, key: str):
 def to_gdf(maybe_gdf):
     logger.debug(f"Attempting to convert type {type(maybe_gdf)} to GeoDataFrame.")
     try:
-        
         if isinstance(maybe_gdf, gpd.GeoDataFrame):
             logger.debug("Input is already a GeoDataFrame.")
             return maybe_gdf
@@ -696,8 +676,8 @@ def to_gdf(maybe_gdf):
             logger.debug("Input is a string, attempting JSON load.")
             s = maybe_gdf.strip()
             if not s:
-                 logger.debug("Input string is empty after stripping.")
-                 return None
+                logger.debug("Input string is empty after stripping.")
+                return None
             try:
                 gj = json.loads(s)
                 feats = gj.get("features")
@@ -735,7 +715,6 @@ def normalize_ids(series, ids):
 
 def geometry_target_key(geom_types: set):
     logger.debug(f"Mapping geometry types: {geom_types} to CHAT_OUTPUT key.")
-    # ... (existing function content) ...
     if geom_types & {"Point", "MultiPoint"}:
         return "CHAT_OUTPUT_POINT"
     if geom_types & {"LineString", "MultiLineString"}:
@@ -745,29 +724,21 @@ def geometry_target_key(geom_types: set):
     logger.error(f"Unsupported geometry types found: {geom_types}")
     raise ValueError(f"Unsupported geometry types found: {geom_types}")
 
-
 def ensure_list(obj):
-    # ... (existing function content) ...
     if obj is None:
         return []
     if isinstance(obj, (int, float, np.integer, np.floating)):
         return [obj]
     if isinstance(obj, (np.ndarray, pd.Series, list, tuple, set)):
         return list(obj)
-    # If it’s a string with commas, split; else wrap
     if isinstance(obj, str):
         s = obj.strip()
-        if s.startswith("[") or s.startswith("{"):  # likely JSON -> leave to to_gdf or json parsing
+        if s.startswith("[") or s.startswith("{"):
             return [s]
         if "," in s:
             return [x.strip() for x in s.split(",") if x.strip() != ""]
         return [s]
     return [obj]
-
-
-# --- URL utilities ------------------------------------------------------------
-
-# _sanitise_layer_url and _get_layer_max_record_count are already defined and logged above.
 
 # --- Geometry helpers ---------------------------------------------------------
 
@@ -775,8 +746,10 @@ def _gdf_from_layer_all(layer_url: str, out_wkid: int = 4326, timeout: int = 15)
     """
     Pulls *all* features from a layer as GeoJSON (handles pagination).
     Returns an empty GDF if there are no features.
+    NOTE: Uses the provided out_wkid for outSR; used by AOI builder to keep native CRS.
     """
     logger.info(f"Fetching all features from {layer_url} with target WKID {out_wkid}")
+    layer_url = _sanitise_layer_url(layer_url)
     page_size = _get_layer_max_record_count(layer_url, timeout=timeout)
     features = []
     offset = 0
@@ -785,7 +758,7 @@ def _gdf_from_layer_all(layer_url: str, out_wkid: int = 4326, timeout: int = 15)
             "where": "1=1",
             "outFields": "*",
             "f": "geojson",
-            "outSR": 102100,
+            "outSR": out_wkid,             # honor requested out_wkid here
             "resultOffset": offset,
             "resultRecordCount": page_size,
         }
@@ -832,7 +805,6 @@ def _gdf_from_layer_all(layer_url: str, out_wkid: int = 4326, timeout: int = 15)
 
 def _rings_from_shapely(geom) -> list[list[list[float]]]:
     logger.debug(f"Converting Shapely geometry type {geom.geom_type} to Esri 'rings'.")
-    # ... (existing function content) ...
     if isinstance(geom, Polygon):
         exterior = list(map(list, geom.exterior.coords)) if geom.exterior else []
         holes = [list(map(list, r.coords)) for r in geom.interiors] if geom.interiors else []
@@ -920,7 +892,6 @@ def get_project_aoi_geometry(project_name: str):
                         logger.debug(f"After GeometryCollection split, union result type: {u.geom_type if u else 'None'}")
                         
                     if u and not u.is_empty:
-                        # Ensure polygon or multipolygon
                         if u.geom_type in ("Polygon", "MultiPolygon"):
                             rings = _rings_from_shapely(u)
                             logger.info(f"AOI determined from CHAT_INPUT polygons (WKID: {wkid}).")
@@ -955,7 +926,6 @@ def get_project_aoi_geometry(project_name: str):
              logger.error(f"ArcGIS Error getting metadata from ORTHOMOSAIC: {meta['error']}")
              raise RuntimeError(f"ORTHOMOSAIC service error: {meta['error']['message']}")
 
-        # Extent could be at 'extent' or 'fullExtent' depending on service type
         extent = meta.get("extent") or meta.get("fullExtent")
         if not extent:
             logger.error("ORTHOMOSAIC service does not expose an extent.")
@@ -981,7 +951,6 @@ def get_project_aoi_geometry(project_name: str):
         }
     except Exception as e:
         logger.error(f"Error determining AOI from ORTHOMOSAIC: {e}. Falling back to empty envelope.", exc_info=True)
-        # fall back to a harmless empty envelope in EPSG:4326
         return {
             "geometry": {"xmin": 0, "ymin": 0, "xmax": 0, "ymax": 0, "spatialReference": {"wkid": 4326}},
             "geometryType": "esriGeometryEnvelope",
@@ -989,20 +958,14 @@ def get_project_aoi_geometry(project_name: str):
         }
         
 def _build_spatial_query_url(layer_url: str, aoi: dict, where: str = "1=1", out_fields: str = "*") -> str:
-    logger.debug(f"Building spatial query URL for {layer_url}")
     lyr = _sanitise_layer_url(layer_url)
-    
-    # Use the layer's native CRS for outSR (best practice for GeoJSON query)
-    # Note: ArcGIS sometimes forces outSR=4326 when f=geojson, but we send what we detect.
-    out_wkid = fetch_crs(lyr) or 4326
-    
     in_sr = aoi.get("inSR", 4326)
-    
-    # Geometry must be JSON-encoded; keep it compact
+    out_wkid = 4326  # force WGS84 for GeoJSON
+
     geom_json = _json.dumps(aoi["geometry"], separators=(",", ":"))
     geom = _q(geom_json)
 
-    query_url = (
+    return (
         f"{lyr}/query"
         f"?where={_q(where)}"
         f"&geometry={geom}"
@@ -1010,12 +973,9 @@ def _build_spatial_query_url(layer_url: str, aoi: dict, where: str = "1=1", out_
         f"&spatialRel=esriSpatialRelIntersects"
         f"&inSR={in_sr}"
         f"&outFields={_q(out_fields)}"
-        f"&outSR=102100"
+        f"&outSR={out_wkid}"
         f"&f=geojson"
     )
-    logger.debug(f"Built spatial query URL (truncated): {query_url[:200]}...")
-    return query_url
-
 
 def make_project_data_locations(project_name: str, include_seasons: bool, attrs: dict) -> list[str]:
     logger.info(f"Building data locations for project '{project_name}' (include_seasons={include_seasons}).")
@@ -1036,7 +996,7 @@ def make_project_data_locations(project_name: str, include_seasons: bool, attrs:
     
     if tree_crowns_url:
         data_locations.append(f"Tree crown geoJSON shape file : {_build_spatial_query_url(tree_crowns_url, aoi, out_fields='*')}.")
-    
+
     data_locations.extend([
         f"Roads geoJSON shape file: {_build_spatial_query_url(os_roads, aoi, out_fields='*')}.",
         f"Buildings geoJSON shape file: {_build_spatial_query_url(os_buildings, aoi, out_fields='*')}.",
@@ -1053,7 +1013,7 @@ def make_project_data_locations(project_name: str, include_seasons: bool, attrs:
             
             if tree_crown_summer:
                  data_locations.insert(
-                    1 if tree_crowns_url else 0, # put right after the main crowns (if present)
+                    1 if tree_crowns_url else 0,
                     f"Before storm tree crown geoJSON: {_build_spatial_query_url(tree_crown_summer, aoi, out_fields='*')}."
                 )
             else:
