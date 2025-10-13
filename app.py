@@ -144,7 +144,9 @@ def is_geospatial_task(prompt: str) -> bool:
         "- 'Show healthy trees' -> yes\n"
         "- 'List all trees with a crown size over 5m' -> yes\n"
         "- 'Show areas with high NDVI in a satellite image' -> yes\n"
-        "- 'What is the capital of France?' -> no"
+        "- 'What is the capital of France?' -> no\n"
+        "- 'Show level 1 trees' -> yes"
+        
     )
     
     full_prompt = f"{system_prompt}\n\nUser input: {prompt}\nAnswer:"
@@ -183,7 +185,9 @@ def wants_map_output_genai(prompt: str) -> bool:
         "- 'Which trees are missing?' -> yes\n"
         "- 'How much volume was lost?' -> no\n"
         "- 'What is the total number of trees?' -> no\n"
+        "- 'Show level 1 trees' -> yes\n"
         "- 'Summarize changes between surveys' -> no"
+        
     )
     full_prompt = f"{system_prompt}\n\nUser input: {prompt}\nAnswer:"
     response = model.generate_content(
