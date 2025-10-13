@@ -47,6 +47,7 @@ async def clear_state(req: ClearRequest):
   
 @app.post("/process")
 async def process_request(request_data: RequestData):
+    message = ""
     user_task = request_data.task.strip().lower()
     task_name = request_data.task_name
     session_id = request_data.task_name
