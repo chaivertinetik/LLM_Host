@@ -15,6 +15,21 @@ from pydantic import BaseModel
 from fastapi import HTTPException
 from shapely.geometry import mapping
 
+# --- networking: single session with retries ---------------------------------
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
+
+_session = requests.Session()
+_retry = Retry(
+    total=3,
+    backoff_factor=0.5,
+    status_forcelist=(429, 502, 503, 504),
+    allowed_methods=["GET", "POST"],
+    raise_on_status=False,
+)
+_session.mount("http://", HTTPAdapter(max_retries=_retry))
+_session.mount("https://", HTTPAdapter(max_retries=_retry))
+
 # --- simple print-based "logger" --------------------------------------------
 def _print_log(level, *args):
     ts = datetime.datetime.now().strftime("%H:%M:%S")
@@ -52,6 +67,14 @@ def _json_default(obj):
     # safest fallback
     return str(obj)
 
+def _looks_like_url(u: str) -> bool:
+    if not isinstance(u, str): return False
+    s = u.strip()
+    if not s.startswith("http"): return False
+    # reject common trailing punctuation that gets copy/pasted accidentally
+    if s.endswith((".", ",", ";", ":", ")", "]")): return False
+    return True
+
 async def trigger_cleanup(task_name: str):
     logger.info(f"Starting cleanup for task: {task_name}")
     try:
@@ -79,6 +102,10 @@ async def trigger_cleanup(task_name: str):
         for target_url in valid_urls:
             logger.info(f"Attempting cleanup for URL: {target_url}")
             try:
+                if not _looks_like_url(target_url):
+                    logger.error(f"Suspicious or malformed URL: {target_url}")
+                    continue
+
                 layer = _sanitise_layer_url(target_url)  # -> .../FeatureServer/<id>
                 query_url  = f"{layer}/query"
                 delete_url = f"{layer}/deleteFeatures"
@@ -86,8 +113,11 @@ async def trigger_cleanup(task_name: str):
 
                 # Step 1: Query for IDs
                 params = {"where": "1=1", "returnIdsOnly": "true", "f": "json"}
-                r = requests.get(query_url, params=params)
+                r = _session.get(query_url, params=params, timeout=20)
                 r.raise_for_status()
+                if "json" not in r.headers.get("Content-Type", ""):
+                    logger.error(f"Non-JSON content for ID query: {r.headers.get('Content-Type')} … {r.text[:200]}")
+                    continue
                 response_json = r.json()
                 ids = response_json.get("objectIds", [])
                 
@@ -103,8 +133,11 @@ async def trigger_cleanup(task_name: str):
 
                 # Step 2: Delete features
                 del_params = {"objectIds": ",".join(map(str, ids)), "f": "json"}
-                dr = requests.post(delete_url, data=del_params)
+                dr = _session.post(delete_url, data=del_params, timeout=60)
                 dr.raise_for_status()
+                if "json" not in dr.headers.get("Content-Type", ""):
+                    logger.error(f"Non-JSON content for delete: {dr.headers.get('Content-Type')} … {dr.text[:200]}")
+                    continue
                 delete_response_json = dr.json()
                 
                 if delete_response_json.get("deleteResults", [{}])[0].get("success", False):
@@ -178,8 +211,12 @@ def get_project_urls(project_name):
     logger.debug(f"Querying project index with WHERE clause: {params['where']}")
 
     try:
-        response = requests.get(query_url, params=params, timeout=10)
+        response = _session.get(query_url, params=params, timeout=20)
         response.raise_for_status()
+        if "json" not in response.headers.get("Content-Type", ""):
+            logger.error(f"Non-JSON response for project index: {response.headers.get('Content-Type')} … {response.text[:200]}")
+            raise ValueError("Non-JSON response from project index.")
+
         data = response.json()
 
         if "error" in data:
@@ -208,6 +245,9 @@ def _sanitise_layer_url(url: str) -> str:
         logger.error("URL provided for sanitisation is empty or not a string.")
         raise ValueError("URL must be a non-empty string")
 
+    if not _looks_like_url(url):
+        raise ValueError(f"Suspicious URL (trailing punctuation or malformed): {url}")
+
     u = url.strip().rstrip("/")
     u = re.sub(r"/query$", "", u, flags=re.IGNORECASE)
 
@@ -224,12 +264,15 @@ def _sanitise_layer_url(url: str) -> str:
     logger.debug(f"Sanitised result: {result}")
     return result
 
-def _get_layer_max_record_count(layer_url: str, timeout: int = 10) -> int:
+def _get_layer_max_record_count(layer_url: str, timeout: int = 20) -> int:
     logger.debug(f"Attempting to fetch maxRecordCount for {layer_url}")
     default_mrc = 1000
     try:
-        r = requests.get(f"{layer_url}?f=json", timeout=timeout)
+        r = _session.get(f"{layer_url}?f=json", timeout=timeout)
         r.raise_for_status()
+        if "json" not in r.headers.get("Content-Type", ""):
+            logger.warning(f"Non-JSON metadata for MRC: {r.headers.get('Content-Type')}. Using default {default_mrc}.")
+            return default_mrc
         meta = r.json()
         
         if "error" in meta:
@@ -257,11 +300,16 @@ def _ensure_wgs84(gdf: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
         gdf = gdf.to_crs(epsg=4326)
     return gdf
 
-def extract_geojson(url: str, where: str = "1=1", out_fields: str = "*", timeout: int = 15) -> gpd.GeoDataFrame | None:
+def extract_geojson(url: str, where: str = "1=1", out_fields: str = "*", timeout: int = 30) -> gpd.GeoDataFrame | None:
     logger.info(f"Starting GeoJSON extraction from {url} with WHERE: {where}")
     try:
+        if not _looks_like_url(url):
+            logger.error(f"Suspicious URL for extract_geojson: {url}")
+            return None
+
         layer_url = _sanitise_layer_url(url)
-        page_size = _get_layer_max_record_count(layer_url, timeout=timeout)
+        mrc = _get_layer_max_record_count(layer_url, timeout=timeout)
+        page_size = min(mrc if isinstance(mrc, int) and mrc > 0 else 1000, 500)  # cap at 500
         logger.info(f"Layer: {layer_url}, Page Size: {page_size}")
 
         features = []
@@ -278,32 +326,36 @@ def extract_geojson(url: str, where: str = "1=1", out_fields: str = "*", timeout
             }
             logger.debug(f"Querying with offset={offset}, count={page_size}")
 
-            resp = requests.get(f"{layer_url}/query", params=params, timeout=timeout)
+            resp = _session.get(f"{layer_url}/query", params=params, timeout=timeout)
             resp.raise_for_status()
+
+            ctype = resp.headers.get("Content-Type", "")
+            if "json" not in ctype:
+                logger.error(f"Non-JSON response from service ({ctype}). First 200 chars: {resp.text[:200]}")
+                return None
 
             try:
                 payload = resp.json()
             except Exception as je:
-                logger.error(f"Non-JSON response from service: {je}. Response text start: {resp.text[:100]}")
-                raise RuntimeError(f"Non-JSON response from service: {je}") from je
+                logger.error(f"JSON parse failure (likely truncated). Got {len(resp.content)} bytes. Error: {je}")
+                return None
 
-            fc_features = payload.get("features", [])
-            
             if "error" in payload:
                 err = payload.get("error", {})
                 msg = err.get("message") or "Unexpected error in ArcGIS response."
                 logger.error(f"ArcGIS error in GeoJSON query for {layer_url}: {msg}")
-                raise RuntimeError(f"ArcGIS error: {msg}")
+                return None
 
+            fc_features = payload.get("features", [])
             if not isinstance(fc_features, list):
-                logger.error(f"Unexpected response structure: 'features' is not a list. Payload keys: {payload.keys()}")
-                raise RuntimeError(f"Unexpected response structure from service")
+                logger.error(f"Unexpected response structure: 'features' is not a list. Payload keys: {list(payload.keys())}")
+                return None
 
             features.extend(fc_features)
             logger.debug(f"Fetched {len(fc_features)} features. Total collected: {len(features)}")
 
             if len(fc_features) < page_size:
-                logger.debug(f"Last page reached. Breaking loop.")
+                logger.debug("Last page reached. Breaking loop.")
                 break
 
             offset += page_size
@@ -463,8 +515,11 @@ def post_features_to_layer(gdf, target_url, project_name, batch_size=800):
         }
 
         try:
-            response = requests.post(add_url, data=payload, headers=headers, timeout=60)
+            response = _session.post(add_url, data=payload, headers=headers, timeout=90)
             response.raise_for_status()
+            if "json" not in response.headers.get("Content-Type", ""):
+                logger.error(f"Non-JSON addFeatures response: {response.headers.get('Content-Type')} … {response.text[:200]}")
+                continue
             response_json = response.json()
             
             if response_json.get("addResults") and all(r.get("success") for r in response_json["addResults"]):
@@ -482,6 +537,10 @@ def post_features_to_layer(gdf, target_url, project_name, batch_size=800):
 def delete_all_features(target_url):
     logger.info(f"Attempting to delete all features from {target_url}")
     try:
+        if not _looks_like_url(target_url):
+            logger.error(f"Suspicious URL for delete_all_features: {target_url}")
+            return
+
         layer = _sanitise_layer_url(target_url)    # -> .../FeatureServer/<id>
         query_url  = f"{layer}/query"
         delete_url = f"{layer}/deleteFeatures"
@@ -493,8 +552,11 @@ def delete_all_features(target_url):
             "returnIdsOnly": "true",
             "f": "json"
         }
-        response = requests.get(query_url, params=params, timeout=10)
+        response = _session.get(query_url, params=params, timeout=20)
         response.raise_for_status()
+        if "json" not in response.headers.get("Content-Type", ""):
+            logger.error(f"Non-JSON response for ID query: {response.headers.get('Content-Type')} … {response.text[:200]}")
+            return
         data = response.json()
 
         if "error" in data:
@@ -513,8 +575,11 @@ def delete_all_features(target_url):
             "objectIds": ",".join(map(str, object_ids)),
             "f": "json"
         }
-        delete_response = requests.post(delete_url, data=delete_params, timeout=30)
+        delete_response = _session.post(delete_url, data=delete_params, timeout=60)
         delete_response.raise_for_status()
+        if "json" not in delete_response.headers.get("Content-Type", ""):
+            logger.error(f"Non-JSON delete response: {delete_response.headers.get('Content-Type')} … {delete_response.text[:200]}")
+            return
         delete_data = delete_response.json()
         
         if "error" in delete_data:
@@ -742,7 +807,7 @@ def ensure_list(obj):
 
 # --- Geometry helpers ---------------------------------------------------------
 
-def _gdf_from_layer_all(layer_url: str, out_wkid: int = 4326, timeout: int = 15) -> gpd.GeoDataFrame:
+def _gdf_from_layer_all(layer_url: str, out_wkid: int = 4326, timeout: int = 30) -> gpd.GeoDataFrame:
     """
     Pulls *all* features from a layer as GeoJSON (handles pagination).
     Returns an empty GDF if there are no features.
@@ -750,7 +815,8 @@ def _gdf_from_layer_all(layer_url: str, out_wkid: int = 4326, timeout: int = 15)
     """
     logger.info(f"Fetching all features from {layer_url} with target WKID {out_wkid}")
     layer_url = _sanitise_layer_url(layer_url)
-    page_size = _get_layer_max_record_count(layer_url, timeout=timeout)
+    mrc = _get_layer_max_record_count(layer_url, timeout=timeout)
+    page_size = min(mrc if isinstance(mrc, int) and mrc > 0 else 1000, 500)  # cap
     features = []
     offset = 0
     while True:
@@ -765,8 +831,12 @@ def _gdf_from_layer_all(layer_url: str, out_wkid: int = 4326, timeout: int = 15)
         logger.debug(f"Querying all features with offset={offset}, count={page_size}")
         
         try:
-            r = requests.get(f"{layer_url}/query", params=params, timeout=timeout)
+            r = _session.get(f"{layer_url}/query", params=params, timeout=timeout)
             r.raise_for_status()
+            ctype = r.headers.get("Content-Type", "")
+            if "json" not in ctype:
+                logger.error(f"Non-JSON response fetching all features ({ctype}). First 200 chars: {r.text[:200]}")
+                raise RuntimeError("Non-JSON response when fetching all features.")
             payload = r.json()
         except requests.RequestException as e:
             logger.error(f"Network/HTTP error fetching all features from {layer_url}: {e}")
@@ -819,15 +889,20 @@ def _rings_from_shapely(geom) -> list[list[list[float]]]:
     logger.error(f"Unsupported geometry type for rings: {geom.geom_type}")
     raise ValueError(f"Unsupported geometry type for rings: {geom.geom_type}")
 
-def fetch_crs(base_url, timeout=10, default_wkid=4326):
+def fetch_crs(base_url, timeout=20, default_wkid=4326):
     """
     Fetches the Coordinate Reference System (CRS) WKID from an ArcGIS REST service endpoint.
     """
     logger.debug(f"Fetching CRS for base URL: {base_url}. Default WKID: {default_wkid}")
     try:
-        response = requests.get(f"{base_url}?f=json", timeout=timeout)
-        response.raise_for_status()
-        metadata = response.json()
+        r = _session.get(f"{base_url}?f=json", timeout=timeout)
+        r.raise_for_status()
+        ctype = r.headers.get("Content-Type", "")
+        if "json" not in ctype:
+            logger.warning(f"Non-JSON metadata for CRS: {ctype}. Returning default {default_wkid}.")
+            return default_wkid
+
+        metadata = r.json()
         
         if "error" in metadata:
             logger.warning(f"ArcGIS Error getting CRS metadata for {base_url}: {metadata['error']['message']}. Using default {default_wkid}.")
@@ -881,7 +956,7 @@ def get_project_aoi_geometry(project_name: str):
 
             # Keep only polygonal geometries
             if not gdf.empty:
-                polys = [geom for geom in gdf.geometry if geom and geom.geom_type in ("Polygon", "MultiPolygon")]
+                polys = [geom for geom in gdf.geometry if geom is not None and geom.geom_type in ("Polygon", "MultiPolygon")]
                 if polys:
                     u = unary_union(polys)
                     logger.debug(f"Union result type: {u.geom_type}")
@@ -918,8 +993,12 @@ def get_project_aoi_geometry(project_name: str):
     logger.info(f"Using ORTHOMOSAIC URL: {ortho_url}")
     try:
         base = ortho_url.rstrip("/")
-        r = requests.get(f"{base}?f=json", timeout=15)
+        r = _session.get(f"{base}?f=json", timeout=30)
         r.raise_for_status()
+        if "json" not in r.headers.get("Content-Type", ""):
+            logger.error(f"Non-JSON ORTHOMOSAIC metadata: {r.headers.get('Content-Type')} … {r.text[:200]}")
+            raise RuntimeError("Non-JSON ORTHOMOSAIC metadata")
+
         meta = r.json()
         
         if "error" in meta:
@@ -995,12 +1074,14 @@ def make_project_data_locations(project_name: str, include_seasons: bool, attrs:
     data_locations = []
     
     if tree_crowns_url:
-        data_locations.append(f"Tree crown geoJSON shape file : {_build_spatial_query_url(tree_crowns_url, aoi, out_fields='*')}.")
+        data_locations.append(
+            "Tree crown geoJSON shape file: " + _build_spatial_query_url(tree_crowns_url, aoi, out_fields='*')
+        )
 
     data_locations.extend([
-        f"Roads geoJSON shape file: {_build_spatial_query_url(os_roads, aoi, out_fields='*')}.",
-        f"Buildings geoJSON shape file: {_build_spatial_query_url(os_buildings, aoi, out_fields='*')}.",
-        f"Green spaces geoJSON shape file: {_build_spatial_query_url(os_green, aoi, out_fields='*')}.",
+        "Roads geoJSON shape file: " + _build_spatial_query_url(os_roads, aoi, out_fields='*'),
+        "Buildings geoJSON shape file: " + _build_spatial_query_url(os_buildings, aoi, out_fields='*'),
+        "Green spaces geoJSON shape file: " + _build_spatial_query_url(os_green, aoi, out_fields='*'),
     ])
 
     if include_seasons:
@@ -1014,7 +1095,7 @@ def make_project_data_locations(project_name: str, include_seasons: bool, attrs:
             if tree_crown_summer:
                  data_locations.insert(
                     1 if tree_crowns_url else 0,
-                    f"Before storm tree crown geoJSON: {_build_spatial_query_url(tree_crown_summer, aoi, out_fields='*')}."
+                    "Before storm tree crown geoJSON: " + _build_spatial_query_url(tree_crown_summer, aoi, out_fields='*')
                 )
             else:
                  logger.warning("TT_GCW1_Summer TREE_CROWNS URL missing.")
@@ -1022,7 +1103,7 @@ def make_project_data_locations(project_name: str, include_seasons: bool, attrs:
             if tree_crown_winter:
                 data_locations.insert(
                     2 if tree_crowns_url and tree_crown_summer else 1 if tree_crowns_url or tree_crown_summer else 0,
-                    f"After storm tree crown geoJSON: {_build_spatial_query_url(tree_crown_winter, aoi, out_fields='*')}."
+                    "After storm tree crown geoJSON: " + _build_spatial_query_url(tree_crown_winter, aoi, out_fields='*')
                 )
             else:
                  logger.warning("TT_GCW1_Winter TREE_CROWNS URL missing.")
