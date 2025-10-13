@@ -15,6 +15,9 @@ from pydantic import BaseModel
 from fastapi import HTTPException
 from shapely.geometry import mapping
 
+# NEW: local reprojection
+from pyproj import CRS, Transformer
+
 # --- networking: single session with retries ---------------------------------
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
@@ -805,6 +808,69 @@ def ensure_list(obj):
         return [s]
     return [obj]
 
+# ---------------- AOI reprojection (local, no REST-side reprojection) ---------
+
+def _transform_ring(ring, transformer: Transformer):
+    # ring: [[x,y], [x,y], ...]
+    return [list(transformer.transform(x, y)) for x, y in ring]
+
+def _reproject_aoi_to_wkid(aoi: dict, target_wkid: int) -> dict:
+    """
+    Given an AOI dict like:
+      {"geometry": { ... }, "geometryType": "...", "inSR": wkid}
+    return a new AOI dict with geometry coordinates transformed to target_wkid.
+    """
+    src_wkid = int(aoi.get("inSR", 4326))
+    tgt_wkid = int(target_wkid)
+    if src_wkid == tgt_wkid:
+        # Ensure spatialReference updated to target in geometry payload
+        out = json.loads(json.dumps(aoi))
+        geom = out.get("geometry", {})
+        # normalize spatialReference
+        if isinstance(geom, dict):
+            geom["spatialReference"] = {"wkid": tgt_wkid}
+        out["inSR"] = tgt_wkid
+        return out
+
+    transformer = Transformer.from_crs(CRS.from_epsg(src_wkid), CRS.from_epsg(tgt_wkid), always_xy=True)
+    gtype = aoi.get("geometryType")
+    geom = aoi.get("geometry", {})
+    if not gtype or not isinstance(geom, dict):
+        return aoi  # nothing to do
+
+    if gtype == "esriGeometryPolygon":
+        rings = geom.get("rings", [])
+        new_rings = [_transform_ring(r, transformer) for r in rings]
+        return {
+            "geometry": {"rings": new_rings, "spatialReference": {"wkid": tgt_wkid}},
+            "geometryType": gtype,
+            "inSR": tgt_wkid,
+        }
+
+    if gtype == "esriGeometryEnvelope":
+        # transform the 4 corners and rebuild bbox
+        xmin, ymin = geom.get("xmin", 0), geom.get("ymin", 0)
+        xmax, ymax = geom.get("xmax", 0), geom.get("ymax", 0)
+        corners = [(xmin, ymin), (xmin, ymax), (xmax, ymin), (xmax, ymax)]
+        tx = [transformer.transform(x, y) for x, y in corners]
+        xs, ys = zip(*tx)
+        out_env = {
+            "xmin": min(xs),
+            "ymin": min(ys),
+            "xmax": max(xs),
+            "ymax": max(ys),
+            "spatialReference": {"wkid": tgt_wkid},
+        }
+        return {
+            "geometry": out_env,
+            "geometryType": gtype,
+            "inSR": tgt_wkid,
+        }
+
+    # If something else, just set the SR to target (best effort)
+    geom["spatialReference"] = {"wkid": tgt_wkid}
+    return {"geometry": geom, "geometryType": gtype, "inSR": tgt_wkid}
+
 # --- Geometry helpers ---------------------------------------------------------
 
 def _gdf_from_layer_all(layer_url: str, out_wkid: int = 4326, timeout: int = 30) -> gpd.GeoDataFrame:
@@ -892,6 +958,7 @@ def _rings_from_shapely(geom) -> list[list[list[float]]]:
 def fetch_crs(base_url, timeout=20, default_wkid=4326):
     """
     Fetches the Coordinate Reference System (CRS) WKID from an ArcGIS REST service endpoint.
+    (Read-only metadata; we still do all AOI reprojection locally.)
     """
     logger.debug(f"Fetching CRS for base URL: {base_url}. Default WKID: {default_wkid}")
     try:
@@ -1037,28 +1104,47 @@ def get_project_aoi_geometry(project_name: str):
         }
         
 def _build_spatial_query_url(layer_url: str, aoi: dict, where: str = "1=1", out_fields: str = "*") -> str:
+    """
+    Build a query URL where the AOI geometry is FIRST transformed locally to the target layer's CRS.
+    We do NOT pass inSR/outSR; we send coordinates already in layer CRS so the service can consume directly.
+    """
     lyr = _sanitise_layer_url(layer_url)
-    in_sr = aoi.get("inSR", 4326)
-    out_wkid = 4326  # force WGS84 for GeoJSON
+    target_wkid = fetch_crs(lyr) or 4326  # read-only metadata
+    # local reprojection of AOI geometry to the layer's CRS
+    aoi_proj = _reproject_aoi_to_wkid(aoi, target_wkid)
 
-    geom_json = _json.dumps(aoi["geometry"], separators=(",", ":"))
+    geom_json = _json.dumps(aoi_proj["geometry"], separators=(",", ":"))
     geom = _q(geom_json)
+
+    geometry_type = aoi_proj.get("geometryType", "esriGeometryPolygon")
 
     return (
         f"{lyr}/query"
         f"?where={_q(where)}"
         f"&geometry={geom}"
-        f"&geometryType={_q(aoi['geometryType'])}"
+        f"&geometryType={_q(geometry_type)}"
         f"&spatialRel=esriSpatialRelIntersects"
-        f"&inSR={in_sr}"
         f"&outFields={_q(out_fields)}"
-        f"&outSR={out_wkid}"
         f"&f=geojson"
     )
+def get_aoi_in_layer_crs(project_name: str, layer_url: str) -> dict:
+    """
+    Returns AOI geometry dict reprojected locally (no REST reprojection)
+    to the WKID of the given layer_url.
+    """
+    aoi = get_project_aoi_geometry(project_name)
+    if not layer_url:
+        return aoi  # nothing to align to
+    lyr = _sanitise_layer_url(layer_url)
+    target_wkid = fetch_crs(lyr) or int(aoi.get("inSR", 4326))
+    return _reproject_aoi_to_wkid(aoi, target_wkid)
 
 def make_project_data_locations(project_name: str, include_seasons: bool, attrs: dict) -> list[str]:
     logger.info(f"Building data locations for project '{project_name}' (include_seasons={include_seasons}).")
-    aoi = get_project_aoi_geometry(project_name)
+    attrs = get_project_urls(project_name)
+    tree_crowns_url = get_attr(attrs, "TREE_CROWNS")
+    aoi = get_aoi_in_layer_crs(project_name, tree_crowns_url)  # <- AOI now in Tree Crowns CRS
+
     logger.debug(f"AOI geometry type: {aoi['geometryType']}, inSR: {aoi['inSR']}")
 
     # Core project layers
