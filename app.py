@@ -154,7 +154,7 @@ async def process_request(request_data: RequestData):
         history.append({'role': 'assistant', 'content': user_task})
         history.append({'role': 'assistant', 'content': response})
         save_history(session_id, history)
-        prompt_options = prompt_suggetions(task_name, message) 
+        prompt_options = prompt_suggetions(task_name, response) 
         print(prompt_options)
         
         return {"status": "completed", "response": response}
