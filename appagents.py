@@ -331,6 +331,7 @@ def try_llm_fix(code, error_message=None, max_attempts=2):
 #---- The geospatial code llm pipeline -----------
 
 def long_running_task(user_task: str, task_name: str, data_locations: list):
+    message = None
     try:
         # job_status[job_id] = {"status": "running", "message": "Task is in progress"}
         # Set up task and directories
