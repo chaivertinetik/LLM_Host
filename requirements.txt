@@ -17,6 +17,7 @@ pyvis==0.3.2
 # scipy==1.11.2
 scipy
 # seaborn==0.13.0
+pyproj
 seaborn
 #statsmodels==0.14.0
 #tqdm==4.66.1
@@ -50,5 +51,6 @@ langchain-community
 earthengine-api
 sentence-transformers
 google-cloud-firestore
+
 
 
