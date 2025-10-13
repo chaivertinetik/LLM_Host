@@ -152,12 +152,12 @@ async def process_request(request_data: RequestData):
     elif do_info: 
         response = agent.run(full_context)
         history.append({'role': 'assistant', 'content': user_task})
-        history.append({'role': 'assistant', 'content': response})
+        history.append({'role': 'assistant', 'content': response.get("response")})
         save_history(session_id, history)
-        prompt_options = prompt_suggetions(task_name, response) 
+        prompt_options = prompt_suggetions(task_name, response.get("response")) 
         print(prompt_options)
         
-        return {"status": "completed", "response": response}
+        return {"status": "completed", "response": response.get("response")}
     
     return {"status": "completed", "message": "Request not understood as a task requiring geospatial data."}
 
