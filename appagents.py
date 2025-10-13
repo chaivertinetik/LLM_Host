@@ -462,7 +462,7 @@ def long_running_task(user_task: str, task_name: str, data_locations: list):
                 filter(geojson,task_name)
             elif isinstance(result, list): 
                 filter(result,task_name)
-            message = f"Task '{task_name}' executed successfully."
+            message = f"The task has been executed successfully, and the results should be on your screen."
             if isinstance(result, str):
                 message = result
             return {
@@ -482,7 +482,7 @@ def long_running_task(user_task: str, task_name: str, data_locations: list):
         print(f"Error during execution: {e}")
         #job_status[job_id] = {"status": "failed", "message": str(e)}
         # return f"Error during execution: {str(e)}"
-        return f"Error during execution: The server seems to be down."
+        return f"Error during execution: The server seems to be down." 
 
 
 # === Simulated tools ===
