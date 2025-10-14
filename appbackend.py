@@ -597,8 +597,8 @@ def delete_all_features(target_url):
         logger.error(f"Unexpected error in delete_all_features for {target_url}: {e}")
 
 def filter(gdf_or_fids, project_name):
-    logger.info(f"Starting filter function for project: {project_name}")
-
+    print(f"Starting filter function for project: {project_name}")
+    
     try:
         attrs = get_project_urls(project_name)
         tree_crowns_url = get_attr(attrs, "TREE_CROWNS")
