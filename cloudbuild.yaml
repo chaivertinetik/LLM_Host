@@ -1,16 +1,21 @@
 steps:
-- name: 'gcr.io/cloud-builders/docker'
+- name: gcr.io/cloud-builders/docker
+  env:
+    - DOCKER_BUILDKIT=1
+    - BUILDKIT_PROGRESS=plain
   args: ['build', '-t', 'gcr.io/disco-parsec-444415-c4/llmgeo', '.']
-- name: 'gcr.io/cloud-builders/docker'
+
+- name: gcr.io/cloud-builders/docker
   args: ['push', 'gcr.io/disco-parsec-444415-c4/llmgeo']
-- name: 'gcr.io/cloud-builders/gcloud'
+
+- name: gcr.io/cloud-builders/gcloud
   args:
     [
-      'run', 'deploy', 'llmgeo',
-      '--image', 'gcr.io/disco-parsec-444415-c4/llmgeo',
-      '--platform', 'managed',
-      '--region', 'us-central1',
-      '--project', 'disco-parsec-444415-c4'
+      'run','deploy','llmgeo',
+      '--image','gcr.io/disco-parsec-444415-c4/llmgeo',
+      '--platform','managed',
+      '--region','us-central1',
+      '--project','disco-parsec-444415-c4'
     ]
 images:
 - 'gcr.io/disco-parsec-444415-c4/llmgeo'
