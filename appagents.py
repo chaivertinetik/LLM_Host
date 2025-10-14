@@ -464,6 +464,7 @@ def long_running_task(user_task: str, task_name: str, data_locations: list):
                 filter(result,task_name)
             else:
                 try:
+                    print(result)
                     filter(result,task_name)
                 except:
                     pass
