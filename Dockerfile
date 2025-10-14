@@ -16,9 +16,8 @@ WORKDIR /app
 COPY requirements.txt .
 
 # BuildKit cache for pip wheels (works because buildx uses BuildKit)
-RUN --mount=type=cache,target=/root/.cache/pip \
-    pip install --upgrade pip && \
-    pip install -r requirements.txt
+RUN pip install --upgrade pip && pip install -r requirements.txt
+
 
 # App code
 COPY . .
