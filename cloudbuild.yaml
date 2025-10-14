@@ -1,26 +1,21 @@
 steps:
 - name: gcr.io/cloud-builders/docker
-  entrypoint: bash
-  args:
-    - -c
-    - |
-      set -euo pipefail
-      docker buildx create --use --name mybuilder
-      docker buildx build \
-        --progress=plain \
-        --cache-from=type=registry,ref=gcr.io/disco-parsec-444415-c4/llmgeo:buildcache \
-        --cache-to=type=registry,ref=gcr.io/disco-parsec-444415-c4/llmgeo:buildcache,mode=max \
-        -t gcr.io/disco-parsec-444415-c4/llmgeo \
-        --push \
-        .
+  env:
+    - DOCKER_BUILDKIT=1
+    - BUILDKIT_PROGRESS=plain
+  args: ['build', '-t', 'gcr.io/disco-parsec-444415-c4/llmgeo', '.']
+
+- name: gcr.io/cloud-builders/docker
+  args: ['push', 'gcr.io/disco-parsec-444415-c4/llmgeo']
+
 - name: gcr.io/cloud-builders/gcloud
-  args:
-    [
-      'run','deploy','llmgeo',
-      '--image','gcr.io/disco-parsec-444415-c4/llmgeo',
-      '--platform','managed',
-      '--region','us-central1',
-      '--project','disco-parsec-444415-c4'
-    ]
+  args: [
+    'run','deploy','llmgeo',
+    '--image','gcr.io/disco-parsec-444415-c4/llmgeo',
+    '--platform','managed',
+    '--region','us-central1',
+    '--project','disco-parsec-444415-c4'
+  ]
+
 images:
 - 'gcr.io/disco-parsec-444415-c4/llmgeo'
