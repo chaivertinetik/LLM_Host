@@ -457,17 +457,30 @@ def long_running_task(user_task: str, task_name: str, data_locations: list):
             
             print("Execution completed.")
             if hasattr(result, "to_json") and "GeoDataFrame" in str(type(result)):
+                print(str(type(result)))
+                try:
+                    # Print first 2 records safely
+                    print(result.head(2))
+                except Exception as e:
+                    print(f"Error printing GeoDataFrame preview: {e}")
+            
                 geojson = result.to_json()
-                #need to update this to go to the write place in arcgis if its a geodf
-                filter(geojson,task_name)
-            elif isinstance(result, list): 
-                filter(result,task_name)
+                # need to update this to go to the write place in arcgis if it's a GeoDataFrame
+                filter(geojson, task_name)
+            
+            elif isinstance(result, list):
+                # Print first 2 records if list has multiple items
+                preview = result[:2] if len(result) > 2 else result
+                print("Preview of list result:", preview)
+                filter(result, task_name)
+            
             else:
                 try:
                     print(result)
-                    filter(result,task_name)
-                except:
-                    pass
+                    filter(result, task_name)
+                except Exception as e:
+                    print(f"Error handling result: {e}")
+
             message = f"The task has been executed successfully, and the results should be on your screen."
             if isinstance(result, str):
                 message = result
