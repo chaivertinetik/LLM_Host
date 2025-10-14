@@ -17,7 +17,7 @@ from langchain.prompts import PromptTemplate
 from langchain_core.language_models import LLM
 from vertexai.generative_models import GenerativeModel
 from google.api_core.exceptions import ResourceExhausted
-from appbackend import *
+from appbackend import filter as push_to_map
 from LLM_Heroku_Kernel import Solution
 
 
@@ -466,18 +466,18 @@ def long_running_task(user_task: str, task_name: str, data_locations: list):
             
                 geojson = result.to_json()
                 # need to update this to go to the write place in arcgis if it's a GeoDataFrame
-                filter(geojson, task_name)
+                push_to_map(geojson, task_name)
             
             elif isinstance(result, list):
                 # Print first 2 records if list has multiple items
                 preview = result[:2] if len(result) > 2 else result
                 print("Preview of list result:", preview)
-                filter(result, task_name)
+                push_to_map(result, task_name)
             
             else:
                 try:
                     print(result)
-                    filter(result, task_name)
+                    push_to_map(result, task_name)
                 except Exception as e:
                     print(f"Error handling result: {e}")
 
