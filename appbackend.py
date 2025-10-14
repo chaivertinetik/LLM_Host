@@ -14,6 +14,8 @@ from shapely.ops import unary_union
 from pydantic import BaseModel
 from fastapi import HTTPException
 from shapely.geometry import mapping
+import requests
+from shapely.ops import transform as _shp_transform
 
 # NEW: local reprojection
 from pyproj import CRS, Transformer
@@ -596,6 +598,92 @@ def delete_all_features(target_url):
     except Exception as e:
         logger.error(f"Unexpected error in delete_all_features for {target_url}: {e}")
 
+
+# --- CRS helpers --------------------------------------------------------------
+
+def _wkid_to_epsg(wkid: int | None) -> int | None:
+    """Map common ESRI wkids to EPSG codes."""
+    if wkid is None:
+        return None
+    # Web Mercator family
+    if wkid in (102100, 102113, 3857):
+        return 3857
+    # WGS84
+    if wkid == 4326:
+        return 4326
+    # OSGB36 / British National Grid
+    if wkid in (27700,):
+        return 27700
+    # Many services already publish EPSG-aligned wkids; fall back to as-is
+    return wkid
+
+def _get_layer_epsg(layer_url: str) -> int:
+    """Fetch target layer EPSG from ArcGIS REST."""
+    try:
+        url = layer_url.rstrip("/") + "?f=json"
+        resp = requests.get(url, timeout=10)
+        resp.raise_for_status()
+        js = resp.json()
+        sr = None
+        # Try extent.spatialReference first, then top-level spatialReference
+        if isinstance(js, dict):
+            sr = (
+                (js.get("extent") or {}).get("spatialReference")
+                or js.get("sourceSpatialReference")
+                or js.get("spatialReference")
+            )
+        wkid = None
+        if isinstance(sr, dict):
+            wkid = sr.get("latestWkid") or sr.get("wkid")
+        epsg = _wkid_to_epsg(wkid)
+        if not epsg:
+            logger.warning(f"Could not determine EPSG for {layer_url}; defaulting to EPSG:4326.")
+            return 4326
+        return int(epsg)
+    except Exception as e:
+        logger.warning(f"Failed to read layer CRS for {layer_url}: {e}. Defaulting to EPSG:4326.")
+        return 4326
+
+def _drop_zm(geom):
+    """Return 2D geometry (strip Z/M) for any Shapely geometry."""
+    if geom is None:
+        return None
+    try:
+        # shapely 1.x/2.x compatible transform to 2D
+        return _shp_transform(lambda x, y, *args: (x, y), geom)
+    except Exception:
+        return geom
+
+def _reproject_for_layer(gdf, target_layer_url):
+    """Ensure GDF is 2D and in the same EPSG as the target layer."""
+    if gdf is None or gdf.empty:
+        return gdf
+    target_epsg = _get_layer_epsg(target_layer_url)
+
+    # If CRS is missing, assume WGS84 (most common when coming from GeoJSON)
+    if gdf.crs is None:
+        logger.warning("Input GDF has no CRS; assuming EPSG:4326 before reprojection.")
+        gdf = gdf.set_crs(epsg=4326, allow_override=True)
+
+    # Reproject if needed
+    try:
+        current_epsg = gdf.crs.to_epsg() if gdf.crs is not None else None
+    except Exception:
+        current_epsg = None
+
+    if current_epsg != target_epsg:
+        logger.info(f"Reprojecting {len(gdf)} feature(s): {current_epsg} → {target_epsg} for {target_layer_url}")
+        gdf = gdf.to_crs(epsg=target_epsg)
+
+    # Drop Z/M to avoid issues on 2D layers
+    if getattr(gdf.geometry.values[0], "has_z", False):
+        logger.info("Stripping Z/M from geometries for compatibility with target layer.")
+    gdf = gdf.copy()
+    gdf.geometry = gdf.geometry.apply(_drop_zm)
+    return gdf
+
+# --- Main filter() with CRS normalisation ------------------------------------
+
 def filter(gdf_or_fids, project_name):
     print(f"Starting filter function for project: {project_name}")
     
@@ -614,8 +702,8 @@ def filter(gdf_or_fids, project_name):
 
             # Split by geometry type
             groups = {
-                "point": gdf_direct[gdf_direct.geom_type.isin(["Point", "MultiPoint"])],
-                "line": gdf_direct[gdf_direct.geom_type.isin(["LineString", "MultiLineString"])],
+                "point":   gdf_direct[gdf_direct.geom_type.isin(["Point", "MultiPoint"])],
+                "line":    gdf_direct[gdf_direct.geom_type.isin(["LineString", "MultiLineString"])],
                 "polygon": gdf_direct[gdf_direct.geom_type.isin(["Polygon", "MultiPolygon"])],
             }
             
@@ -633,15 +721,18 @@ def filter(gdf_or_fids, project_name):
                     try:
                         chat_output_url = get_attr(attrs, "CHAT_OUTPUT_POLYGON")
                     except:
-                        chat_output_url = get_attr(attrs, "CHAT_OUTPUT") # Fallback to legacy
+                        chat_output_url = get_attr(attrs, "CHAT_OUTPUT")  # Fallback to legacy
                 
                 if not chat_output_url:
                     logger.error(f"Matching CHAT_OUTPUT URL missing for {kind}.")
                     raise ValueError(f"Matching CHAT_OUTPUT URL missing in Project Index for {kind}.")
 
-                logger.info(f"Processing {len(sub)} {kind} feature(s) for URL: {chat_output_url}")
+                # >>> Ensure CRS matches target layer
+                sub_fixed = _reproject_for_layer(sub, chat_output_url)
+
+                logger.info(f"Processing {len(sub_fixed)} {kind} feature(s) for URL: {chat_output_url}")
                 delete_all_features(chat_output_url)
-                post_features_to_layer(sub, chat_output_url, project_name)
+                post_features_to_layer(sub_fixed, chat_output_url, project_name)
             return
 
         # --- Case 2: FIDs provided (masking required) ---
@@ -682,11 +773,13 @@ def filter(gdf_or_fids, project_name):
         logger.info(f"Found {len(gdf_to_push)} matching features to push.")
 
         # Split & push
-        for kind, sub in {
-            "point": gdf_to_push[gdf_to_push.geom_type.isin(["Point", "MultiPoint"])],
-            "line": gdf_to_push[gdf_to_push.geom_type.isin(["LineString", "MultiLineString"])],
+        split = {
+            "point":   gdf_to_push[gdf_to_push.geom_type.isin(["Point", "MultiPoint"])],
+            "line":    gdf_to_push[gdf_to_push.geom_type.isin(["LineString", "MultiLineString"])],
             "polygon": gdf_to_push[gdf_to_push.geom_type.isin(["Polygon", "MultiPolygon"])],
-        }.items():
+        }
+
+        for kind, sub in split.items():
             if sub.empty:
                 logger.debug(f"Skipping empty {kind} group from filtered GDF.")
                 continue
@@ -697,18 +790,21 @@ def filter(gdf_or_fids, project_name):
                 else get_attr(attrs, "CHAT_OUTPUT_LINE") if kind == "line"
                 else get_attr(attrs, "CHAT_OUTPUT_POLYGON")
             )
-            
             if not chat_output_url:
                 logger.error(f"Matching CHAT_OUTPUT URL missing for {kind}.")
                 raise ValueError(f"Matching CHAT_OUTPUT URL missing for {kind}.")
-                
-            logger.info(f"Processing {len(sub)} {kind} feature(s) from FIDs for URL: {chat_output_url}")
+
+            # >>> Ensure CRS matches target layer
+            sub_fixed = _reproject_for_layer(sub, chat_output_url)
+
+            logger.info(f"Processing {len(sub_fixed)} {kind} feature(s) from FIDs for URL: {chat_output_url}")
             delete_all_features(chat_output_url)
-            post_features_to_layer(sub, chat_output_url, project_name)
+            post_features_to_layer(sub_fixed, chat_output_url, project_name)
 
     except Exception as e:
         logger.error(f"Top-level error in filter function: {e}")
         raise
+
 
 # --- Helpers ---------------------------------------------------------------
 
