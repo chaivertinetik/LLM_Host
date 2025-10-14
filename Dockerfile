@@ -1,26 +1,12 @@
-# Use an official Python image
-FROM python:3.10
+# syntax=docker/dockerfile:1.6
+FROM python:3.10-slim
 
-# Set the working directory
 WORKDIR /app
-
-# Copy all project files
-# COPY . .
 COPY requirements.txt .
 
-# Install dependencies
-RUN pip install --no-cache-dir -r requirements.txt
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install -r requirements.txt
 
 COPY . .
-# Expose Cloud Run port (optional but doesn't hurt)
 EXPOSE 8080
-
-# Start FastAPI server with Uvicorn
-# CMD ["sh", "-c", "uvicorn llmagent:app --host 0.0.0.0 --port ${PORT:-8080}"]
 CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8080"]
-
-
-
-
-
-
