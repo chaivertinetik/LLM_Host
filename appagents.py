@@ -17,7 +17,7 @@ from langchain.prompts import PromptTemplate
 from langchain_core.language_models import LLM
 from vertexai.generative_models import GenerativeModel
 from google.api_core.exceptions import ResourceExhausted
-
+import * from appbackend
 from LLM_Heroku_Kernel import Solution
 
 
