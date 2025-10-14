@@ -462,6 +462,11 @@ def long_running_task(user_task: str, task_name: str, data_locations: list):
                 filter(geojson,task_name)
             elif isinstance(result, list): 
                 filter(result,task_name)
+            else:
+                try:
+                    filter(result,task_name)
+                except:
+                    pass
             message = f"The task has been executed successfully, and the results should be on your screen."
             if isinstance(result, str):
                 message = result
