@@ -90,7 +90,7 @@ graph_requirement = [
 operation_role = r'''A professional Geo-information scientist and programmer good at Python. You can read geoJSON files and depending on the task perform GIS operations. You have worked on Geographic information science more than 20 years, and know every detail and pitfall when processing spatial data and coding. You know well how to design and implement a function that meet the interface between other functions. Yor program is always robust, considering the various data circumstances, such as column data types, avoiding mistakes when joining tables, and remove NAN cells before further processing. You have an good feeling of overview, meaning the functions in your program is coherent, and they connect to each other well, such as function names, parameters types, and the calling orders. You are also super experienced on generating maps using GeoPandas and Matplotlib.
 '''
 
-operation_task_prefix = r'The geoJSON file has the following properties like: "Health" (either "Healthy" or "Unhealthy"), "Health_Level" ("1","2","3","4"), "Tree_ID", "Species" ("Ash", "Field Maple", "Oak"), "SURVEY_DATE" (format: Wed, 11 Sep 2024 00:00:00 GMT), "Height", "Shape__Area", "Shape__Length"  and the final goal is to return a GeoDataFrame containing the relevant data or a text summary based on what the user wants. You need to generate a Python function to do: '
+operation_task_prefix = r'The geoJSON file has the following properties like: "Health" (either "Healthy" or "Unhealthy"), "Health_Level" ("1","2","3","4"), "Tree_ID", "Species" ("Ash", "Field Maple", "Oak"), "SURVEY_DATE" (format: Wed, 11 Sep 2024 00:00:00 GMT), "Height", "Shape__Area", "Shape__Length"  and the final goal is to return a GeoDataFrame containing the relevant data or a text summary based on what the user wants. You need to generate a Python function to do: In any request that specifies a numeric distance (e.g., "10m"), parse the number as metres, reproject the involved layers to a suitable local projected CRS with metre units (in Great Britain use EPSG:27700 unless data context dictates otherwise), perform the distance/buffer operation there, then reproject results back to the source CRS for output.'
 
 #For the demo case
 # operation_reply_exmaple = """
@@ -112,54 +112,65 @@ return gpd.read_file(shp_path)
 ```
 """
 
-operation_requirement = [                         
-                        'DO NOT change the given variable names and paths.',
-                        'Put your reply into a Python code block(enclosed by ```python and ```), NO explanation or conversation outside the code block.',
-                        'If using GeoPandas to load a zipped ESRI shapefile from a URL, the correct method is "gpd.read_file(URL)". DO NOT download and unzip the file.',
-                        # "Generate descriptions for input and output arguments.",
-                        'Ensure all comments and descriptions use # and are single line.',
-                        "When accessing green spaces data and you want specific categories like 'Bowling Green', 'Religious Grounds' use the 'function_' column header and when accessing the building data and you need categories like 'Education', 'Emergency Service', and 'Religious Buildings' use the 'BUILDGTHEM' column header and for Streets/Roads use the 'name1' header for streets like Clumber Road East.",
-                        "You need to receive the data from the functions, DO NOT load in the function if other functions have loaded the data and returned it in advance.",
-                        # "Note module 'pandas' has no attribute or method of 'StringIO'",
-                        "Use the latest Python modules and methods.",
-                        "The 'Health' of the tree indicates if they are healthy or unhealthy, and if the user asks for the specific Health_Level (data available for Ash trees) the numbers (1,2,3,4) indicate the finer level of how healthy the trees are. Also note level 1 trees are categorized as Healthy and 2,3,4 are Unhealthy.", 
-                        "When doing spatial analysis, convert the involved spatial layers into the same map projection, if they are not in the same projection.",
-                        # "DO NOT reproject or set spatial data(e.g., GeoPandas Dataframe) if only one layer involved.",
-                        "Map projection conversion is only conducted for spatial data layers such as GeoDataFrame. DataFrame loaded from a CSV file does not have map projection information.",
-                        "If join DataFrame and GeoDataFrame, using common columns, DO NOT convert DataFrame to GeoDataFrame.",
-                        "If the user asks about the trees lost in a storm you need to compare the tree ids that survived before and after the storm from the two respective data sources",
-                        "When working with GeoPandas, never assume a row (Series) has a .crs attribute. Always get the CRS from the parent GeoDataFrame (gdf.crs).",
-                        "When reprojecting geometries in GeoPandas, only use .to_crs() on a GeoSeries or GeoDataFrame object, never on a single geometry (like a Polygon or Point). If you have a single geometry, first wrap it in a GeoSeries.",
-                        "Before performing any distance-based spatial operations, reproject all geometries to a projected CRS with metric units (e.g., EPSG:27700 or the appropriate UTM zone), if they are not already. To find features within a specified distance from a target feature, compute pairwise distances using: gdf['distance_to_target'] = gdf.geometry.distance(target_geom) Then filter using: within_range = gdf[(gdf['distance_to_target'] <= max_distance) & (gdf.index != target_idx)]Replace max_distance with the desired threshold (e.g., 30). Avoid using geographic (lat/lon) coordinates or geodesic methods unless specifically required.",
-                        "Always preserve the source layer's native CRS for all I/O and results.",
-                        "If the layer's CRS is projected (units in metres/feet), compute distances/areas directly in that CRS.",
-                        "If the layer's CRS is geographic (degrees, e.g., EPSG:4326), temporarily reproject to an appropriate local metric CRS ONLY for the numeric distance/area step, then reproject results back to the original CRS before output. Do not silently change the data CRS.",
-                        "Never force British National Grid or WGS84 unless the input layer is already using them.",
-                        "Always calculate distances between geometries in GeoPandas using .distance() after projecting the geometries to a projected CRS with metric units (e.g., EPSG:27700 or UTM).",
-                        "All spatial joins, overlays, and cross-layer operations must use layers that share the exact same CRS. Reproject one or both layers using .to_crs() as needed before performing the operation.",
-                        "Check the CRS of every GeoDataFrame before performing any spatial operation. If the CRS is geographic (e.g., EPSG:4326), reproject it to a metric-based CRS (e.g., EPSG:27700 or UTM). Never perform buffer, distance, or area calculations in a geographic CRS, as this will produce incorrect or empty results.",
-                        "If a GeoDataFrame or GeoSeries is missing CRS information, set it only if you know the true CRS from data context using .set_crs(). Never use .to_crs() on data with undefined CRS. Use .to_crs() only to convert between known coordinate systems.",
-                        "When constructing a GeoSeries or GeoDataFrame from individual or raw geometries, always assign the CRS from the source or parent GeoDataFrame to avoid errors from undefined or inconsistent spatial references.",
-                        # "When joining tables, convert the involved columns to string type without leading zeros. ",
-                        # "When doing spatial joins, remove the duplicates in the results. Or please think about whether it needs to be removed.",
-                        # "If using colorbar for GeoPandas or Matplotlib visulization, set the colorbar's height or length as the same as the plot for better layout.",
-                        "Graphs or maps need to show the unit, legend, or colorbar.",
-                        "Keep the needed table columns for the further steps.",
-                        "Remember the variable, column, and file names used in ancestor functions when using them, such as joining tables or calculating.",                        
-                        # "When crawl the webpage context to ChatGPT, using Beautifulsoup to crawl the text only, not all the HTML file.",
-                        "If using GeoPandas for spatial analysis, when doing overlay analysis, carefully think about use Geopandas.GeoSeries.intersects() or geopandas.sjoin(). ",
-                        "Geopandas.GeoSeries.intersects(other, align=True) returns a Series of dtype('bool') with value True for each aligned geometry that intersects other. other:GeoSeries or geometric object. ",
-                        "If using GeoPandas for spatial joining, the arguements are: geopandas.sjoin(left_df, right_df, how='inner', predicate='intersects', lsuffix='left', rsuffix='right', **kwargs), how: the type of join, default ‘inner’, means use intersection of keys from both dfs while retain only left_df geometry column. If 'how' is 'left': use keys from left_df; retain only left_df geometry column, and similarly when 'how' is 'right'. ",
-                        "Note geopandas.sjoin() returns all joined pairs, i.e., the return could be one-to-many. E.g., the intersection result of a polygon with two points inside it contains two rows; in each row, the polygon attributes are the same. If you need of extract the polygons intersecting with the points, please remember to remove the duplicated rows in the results.",
-                        "For oak use the formula: log(DBH_cm) = 2.20733 + 0.97484 * log(Height) + 0.0681 * (Shape_Area) and for ash: log(DBH) = -1.0 + 0.7 * log(Height) + 0.5 * log(Shape_Area) and for spruce: log(DBH) = -1.5 + 0.8 * log(Height) + 0.6 * log(Shape_Area) and for japanese larch: log(DBH) = -1.2 + 0.7 * log(Height) + 0.5 * log(Shape_Area) and for lodgepole pine: log(DBH) = -1.0 + 0.75 * log(Height) + 0.55 * log(Shape_Area) as the default if nothing is provided.",
-                        "DO NOT use 'if __name__ == '__main__:' statement because this program needs to be executed by exec().",
-                        "Use the Python built-in functions or attribute. If you do not remember, DO NOT make up fake ones, just use alternative methods.",
-                        "Pandas library has no attribute or method 'StringIO', so 'pd.compat.StringIO' is wrong, you need to use 'io.StringIO' instead.",
-                        "Before using Pandas or GeoPandas columns for further processing (e.g. join or calculation), drop recoreds with NaN cells in those columns, e.g., df.dropna(subset=['XX', 'YY']).",
-                        "When read FIPS or GEOID columns from CSV files, read those columns as str or int, never as float.",
-                        "FIPS or GEOID columns may be str type with leading zeros (digits: state: 2, county: 5, tract: 11, block group: 12), or integer type without leading zeros. Thus, when joining they, you can convert the integer column to str type with leading zeros to ensure the success."
-                        
-                        ]
+operation_requirement = [
+    "DO NOT change the given variable names and paths.",
+    "Put your reply into a Python code block(enclosed by ```python and ```), NO explanation or conversation outside the code block.",
+    "If using GeoPandas to load a zipped ESRI shapefile from a URL, the correct method is \"gpd.read_file(URL)\". DO NOT download and unzip the file.",
+    # "Generate descriptions for input and output arguments.",
+    "Ensure all comments and descriptions use # and are single line.",
+    "When accessing green spaces data and you want specific categories like 'Bowling Green', 'Religious Grounds' use the 'function_' column header and when accessing the building data and you need categories like 'Education', 'Emergency Service', and 'Religious Buildings' use the 'BUILDGTHEM' column header and for Streets/Roads use the 'name1' header for streets like Clumber Road East.",
+    "You need to receive the data from the functions, DO NOT load in the function if other functions have loaded the data and returned it in advance.",
+    # "Note module 'pandas' has no attribute or method of 'StringIO'",
+    "Use the latest Python modules and methods.",
+    "The 'Health' of the tree indicates if they are healthy or unhealthy, and if the user asks for the specific Health_Level (data available for Ash trees) the numbers (1,2,3,4) indicate the finer level of how healthy the trees are. Also note level 1 trees are categorized as Healthy and 2,3,4 are Unhealthy.",
+    "When doing spatial analysis, convert the involved spatial layers into the same map projection, if they are not in the same projection.",
+    # "DO NOT reproject or set spatial data(e.g., GeoPandas Dataframe) if only one layer involved.",
+    "Map projection conversion is only conducted for spatial data layers such as GeoDataFrame. DataFrame loaded from a CSV file does not have map projection information.",
+    "If join DataFrame and GeoDataFrame, using common columns, DO NOT convert DataFrame to GeoDataFrame.",
+    "If the user asks about the trees lost in a storm you need to compare the tree ids that survived before and after the storm from the two respective data sources",
+    "When working with GeoPandas, never assume a row (Series) has a .crs attribute. Always get the CRS from the parent GeoDataFrame (gdf.crs).",
+    "When reprojecting geometries in GeoPandas, only use .to_crs() on a GeoSeries or GeoDataFrame object, never on a single geometry (like a Polygon or Point). If you have a single geometry, first wrap it in a GeoSeries.",
+    "Before performing any distance-based spatial operations, reproject all geometries to a projected CRS with metric units (e.g., EPSG:27700 or the appropriate UTM zone), if they are not already. To find features within a specified distance from a target feature, compute pairwise distances using: gdf['distance_to_target'] = gdf.geometry.distance(target_geom) Then filter using: within_range = gdf[(gdf['distance_to_target'] <= max_distance) & (gdf.index != target_idx)] Replace max_distance with the desired threshold (e.g., 30). Avoid using geographic (lat/lon) coordinates or geodesic methods unless specifically required.",
+    "Always preserve the source layer's native CRS for all I/O and results.",
+    "If the layer's CRS is projected (units in metres/feet), compute distances/areas directly in that CRS.",
+    "If the layer's CRS is geographic (degrees, e.g., EPSG:4326), temporarily reproject to an appropriate local metric CRS ONLY for the numeric distance/area step, then reproject results back to the original CRS before output. Do not silently change the data CRS.",
+    "Never force British National Grid or WGS84 unless the input layer is already using them.",
+    "Always calculate distances between geometries in GeoPandas using .distance() after projecting the geometries to a projected CRS with metric units (e.g., EPSG:27700 or UTM).",
+    "All spatial joins, overlays, and cross-layer operations must use layers that share the exact same CRS. Reproject one or both layers using .to_crs() as needed before performing the operation.",
+    "Check the CRS of every GeoDataFrame before performing any spatial operation. If the CRS is geographic (e.g., EPSG:4326), reproject it to a metric-based CRS (e.g., EPSG:27700 or UTM). Never perform buffer, distance, or area calculations in a geographic CRS, as this will produce incorrect or empty results.",
+    "If a GeoDataFrame or GeoSeries is missing CRS information, set it only if you know the true CRS from data context using .set_crs(). Never use .to_crs() on data with undefined CRS. Use .to_crs() only to convert between known coordinate systems.",
+    "When constructing a GeoSeries or GeoDataFrame from individual or raw geometries, always assign the CRS from the source or parent GeoDataFrame to avoid errors from undefined or inconsistent spatial references.",
+    # "When joining tables, convert the involved columns to string type without leading zeros. ",
+    # "When doing spatial joins, remove the duplicates in the results. Or please think about whether it needs to be removed.",
+    # "If using colorbar for GeoPandas or Matplotlib visulization, set the colorbar's height or length as the same as the plot for better layout.",
+    "Graphs or maps need to show the unit, legend, or colorbar.",
+    "Keep the needed table columns for the further steps.",
+    "Remember the variable, column, and file names used in ancestor functions when using them, such as joining tables or calculating.",
+    # "When crawl the webpage context to ChatGPT, using Beautifulsoup to crawl the text only, not all the HTML file.",
+    "If using GeoPandas for spatial analysis, when doing overlay analysis, carefully think about use Geopandas.GeoSeries.intersects() or geopandas.sjoin().",
+    "Geopandas.GeoSeries.intersects(other, align=True) returns a Series of dtype('bool') with value True for each aligned geometry that intersects other. other:GeoSeries or geometric object.",
+    "If using GeoPandas for spatial joining, the arguements are: geopandas.sjoin(left_df, right_df, how='inner', predicate='intersects', lsuffix='left', rsuffix='right', **kwargs), how: the type of join, default ‘inner’, means use intersection of keys from both dfs while retain only left_df geometry column. If 'how' is 'left': use keys from left_df; retain only left_df geometry column, and similarly when 'how' is 'right'.",
+    "Note geopandas.sjoin() returns all joined pairs, i.e., the return could be one-to-many. E.g., the intersection result of a polygon with two points inside it contains two rows; in each row, the polygon attributes are the same. If you need to extract the polygons intersecting with the points, please remember to remove the duplicated rows in the results.",
+    "For oak use the formula: log(DBH_cm) = 2.20733 + 0.97484 * log(Height) + 0.0681 * (Shape_Area) and for ash: log(DBH) = -1.0 + 0.7 * log(Height) + 0.5 * log(Shape_Area) and for spruce: log(DBH) = -1.5 + 0.8 * log(Height) + 0.6 * log(Shape_Area) and for japanese larch: log(DBH) = -1.2 + 0.7 * log(Height) + 0.5 * log(Shape_Area) and for lodgepole pine: log(DBH) = -1.0 + 0.75 * log(Height) + 0.55 * log(Shape_Area) as the default if nothing is provided.",
+    "DO NOT use 'if __name__ == '__main__:' statement because this program needs to be executed by exec().",
+    "Use the Python built-in functions or attribute. If you do not remember, DO NOT make up fake ones, just use alternative methods.",
+    "Pandas library has no attribute or method 'StringIO', so 'pd.compat.StringIO' is wrong, you need to use 'io.StringIO' instead.",
+    "Before using Pandas or GeoPandas columns for further processing (e.g. join or calculation), drop recoreds with NaN cells in those columns, e.g., df.dropna(subset=['XX', 'YY']).",
+    "When read FIPS or GEOID columns from CSV files, read those columns as str or int, never as float.",
+    "FIPS or GEOID columns may be str type with leading zeros (digits: state: 2, county: 5, tract: 11, block group: 12), or integer type without leading zeros. Thus, when joining they, you can convert the integer column to str type with leading zeros to ensure the success.",
+    # ---- ADDITIONS TO FIX '10m around green spaces' CASES ----
+    "Distance parsing: if the prompt contains a pattern like '(\\d+)\\s*m' (e.g., '10m', '25 m'), extract the integer as metres.",
+    "For proximity like 'X m around green spaces': buffer the GREEN SPACES layer by X metres (after projecting to a metric CRS), then select TREE features using a spatial join with predicate='intersects'.",
+    "Preserve the TREE layer geometry in the output; do NOT overwrite tree geometry with polygon buffers.",
+    "When doing any buffer/distance operation, project BOTH layers to the SAME local metric CRS first (e.g., EPSG:27700 for GB). Never buffer in a geographic CRS.",
+    "After filtering, reproject the resulting TREE GeoDataFrame back to its original CRS to maintain consistency with upstream code.",
+    "If TREE and GREEN SPACE layers start in different CRSs, harmonize them BEFORE any join/buffer steps.",
+    "Prefer geopandas.sjoin(..., predicate='intersects') after buffering instead of 'within' for point-near-polygon queries, to avoid boundary corner cases.",
+    "When filtering species like 'Ash', apply attribute filters BEFORE spatial operations to reduce compute: trees = trees[trees['Species'].str.lower() == 'ash'].",
+    "If the 'function_' category is required for green spaces filtering (e.g., park types), filter that before buffering; the column name is exactly 'function_'.",
+    "Guard against empty results by validating buffer > 0 and by confirming the buffered greenspace layer has non-empty geometry before sjoin."
+]
+
 # other requirements prone to errors, not used for now
 """
 "If you need to make a map and the map size is not given, set the map size to 15*10 inches.",
@@ -369,6 +380,7 @@ sampling_data_requirement = [
  
                         #
                         ]
+
 
 
 
