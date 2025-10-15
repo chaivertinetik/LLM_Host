@@ -131,6 +131,10 @@ operation_requirement = [
                         "When working with GeoPandas, never assume a row (Series) has a .crs attribute. Always get the CRS from the parent GeoDataFrame (gdf.crs).",
                         "When reprojecting geometries in GeoPandas, only use .to_crs() on a GeoSeries or GeoDataFrame object, never on a single geometry (like a Polygon or Point). If you have a single geometry, first wrap it in a GeoSeries.",
                         "Before performing any distance-based spatial operations, reproject all geometries to a projected CRS with metric units (e.g., EPSG:27700 or the appropriate UTM zone), if they are not already. To find features within a specified distance from a target feature, compute pairwise distances using: gdf['distance_to_target'] = gdf.geometry.distance(target_geom) Then filter using: within_range = gdf[(gdf['distance_to_target'] <= max_distance) & (gdf.index != target_idx)]Replace max_distance with the desired threshold (e.g., 30). Avoid using geographic (lat/lon) coordinates or geodesic methods unless specifically required.",
+                        "Always preserve the source layer's native CRS for all I/O and results.",
+                        "If the layer's CRS is projected (units in metres/feet), compute distances/areas directly in that CRS.",
+                        "If the layer's CRS is geographic (degrees, e.g., EPSG:4326), temporarily reproject to an appropriate local metric CRS ONLY for the numeric distance/area step, then reproject results back to the original CRS before output. Do not silently change the data CRS.",
+                        "Never force British National Grid or WGS84 unless the input layer is already using them.",
                         "Always calculate distances between geometries in GeoPandas using .distance() after projecting the geometries to a projected CRS with metric units (e.g., EPSG:27700 or UTM).",
                         "All spatial joins, overlays, and cross-layer operations must use layers that share the exact same CRS. Reproject one or both layers using .to_crs() as needed before performing the operation.",
                         "Check the CRS of every GeoDataFrame before performing any spatial operation. If the CRS is geographic (e.g., EPSG:4326), reproject it to a metric-based CRS (e.g., EPSG:27700 or UTM). Never perform buffer, distance, or area calculations in a geographic CRS, as this will produce incorrect or empty results.",
@@ -365,6 +369,7 @@ sampling_data_requirement = [
  
                         #
                         ]
+
 
 
 
