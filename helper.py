@@ -1,7 +1,7 @@
 import re
 # import openai
 from collections import deque
-from openai import OpenAI
+
 
 import configparser
 
@@ -422,3 +422,4 @@ def find_source_node(graph):
 
     # Return the source nodes
     return source_nodes
+
