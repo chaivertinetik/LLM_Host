@@ -168,7 +168,9 @@ operation_requirement = [
     "Prefer geopandas.sjoin(..., predicate='intersects') after buffering instead of 'within' for point-near-polygon queries, to avoid boundary corner cases.",
     "When filtering species like 'Ash', apply attribute filters BEFORE spatial operations to reduce compute: trees = trees[trees['Species'].str.lower() == 'ash'].",
     "If the 'function_' category is required for green spaces filtering (e.g., park types), filter that before buffering; the column name is exactly 'function_'.",
-    "Guard against empty results by validating buffer > 0 and by confirming the buffered greenspace layer has non-empty geometry before sjoin."
+    "Guard against empty results by validating buffer > 0 and by confirming the buffered greenspace layer has non-empty geometry before sjoin.",
+    # ---- BETWEEN ROADS RULE ----
+    "For prompts like 'between <roadA> and <roadB>': find both road geometries from the Streets layer by matching the 'name1' field values (case-insensitive), reproject the roads and tree layers to a shared metric CRS, create a corridor polygon by buffering each road by a reasonable width (e.g., 20 m) and taking the intersection of those buffers, and then select all trees whose geometries fall within that corridor polygon. Use GeoPandas overlay (buffer + intersection) or distance-based filtering as appropriate, and return the selected trees in the original tree CRS."
 ]
 
 # other requirements prone to errors, not used for now
