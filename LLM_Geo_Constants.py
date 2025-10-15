@@ -158,6 +158,7 @@ operation_requirement = [
     "Before using Pandas or GeoPandas columns for further processing (e.g. join or calculation), drop recoreds with NaN cells in those columns, e.g., df.dropna(subset=['XX', 'YY']).",
     "When read FIPS or GEOID columns from CSV files, read those columns as str or int, never as float.",
     "FIPS or GEOID columns may be str type with leading zeros (digits: state: 2, county: 5, tract: 11, block group: 12), or integer type without leading zeros. Thus, when joining they, you can convert the integer column to str type with leading zeros to ensure the success.",
+    "When asked to find/show the trees between two roads, create a polygon corridor between both roads (not around them) by buffering each road and combining them into a convex hull or the polygon difference between their buffers. Then find all trees intersecting inside that polygon corridor.",
     # ---- ADDITIONS TO FIX '10m around green spaces' CASES ----
     "Distance parsing: if the prompt contains a pattern like '(\\d+)\\s*m' (e.g., '10m', '25 m'), extract the integer as metres.",
     "For proximity like 'X m around green spaces': buffer the GREEN SPACES layer by X metres (after projecting to a metric CRS), then select TREE features using a spatial join with predicate='intersects'.",
@@ -382,6 +383,7 @@ sampling_data_requirement = [
  
                         #
                         ]
+
 
 
 
