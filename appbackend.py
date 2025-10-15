@@ -1238,34 +1238,43 @@ def get_aoi_in_layer_crs(project_name: str, layer_url: str) -> dict:
 def make_project_data_locations(project_name: str, include_seasons: bool, attrs: dict) -> list[str]:
     logger.info(f"Building data locations for project '{project_name}' (include_seasons={include_seasons}).")
     attrs = get_project_urls(project_name)
+
+    # Core project layer
     tree_crowns_url = get_attr(attrs, "TREE_CROWNS")
-    aoi = get_aoi_in_layer_crs(project_name, tree_crowns_url)  # <- AOI now in Tree Crowns CRS
+    data_locations: list[str] = []
 
-    logger.debug(f"AOI geometry type: {aoi['geometryType']}, inSR: {aoi['inSR']}")
+    # Helper to add a layer with correct label + AOI in that layer's CRS
+    def _add(layer_url: str, label_prefix: str, insert_at: int | None = None):
+        if not layer_url:
+            return
+        try:
+            # AOI reprojected to THIS layer's CRS (no silent BNG/WGS84 forcing)
+            aoi_layer_crs = get_aoi_in_layer_crs(project_name, layer_url)
+            logger.debug(f"[{label_prefix}] AOI geometry: {aoi_layer_crs.get('geometryType')}, inSR: {aoi_layer_crs.get('inSR')}")
+            url = _build_spatial_query_url(layer_url, aoi_layer_crs, out_fields='*')
+            label = _label_for_layer(label_prefix, layer_url)
+            entry = f"{label}: {url}"
+            if insert_at is None:
+                data_locations.append(entry)
+            else:
+                data_locations.insert(insert_at, entry)
+        except Exception as ex:
+            logger.error(f"Failed to add data location for {label_prefix}: {ex}")
 
-    # Core project layers
-    tree_crowns_url = get_attr(attrs, "TREE_CROWNS")
-    if not tree_crowns_url:
-        logger.warning("Main TREE_CROWNS URL missing. Will skip.")
+    # Project tree crowns (if present)
+    if tree_crowns_url:
+        _add(tree_crowns_url, "Tree crowns")
 
-    # National context layers (static)
+    # National context layers (each with AOI in its native CRS)
     os_roads = "https://services.arcgis.com/qHLhLQrcvEnxjtPr/arcgis/rest/services/OS_OpenRoads/FeatureServer/1"
     os_buildings = "https://services.arcgis.com/qHLhLQrcvEnxjtPr/arcgis/rest/services/OS_OpenMap_Local_Buildings/FeatureServer/0"
     os_green = "https://services.arcgis.com/qHLhLQrcvEnxjtPr/arcgis/rest/services/OS_Open_Greenspace/FeatureServer/1"
 
-    data_locations = []
-    
-    if tree_crowns_url:
-        data_locations.append(
-            "Tree crown geoJSON shape file: " + _build_spatial_query_url(tree_crowns_url, aoi, out_fields='*')
-        )
+    _add(os_roads, "Roads")
+    _add(os_buildings, "Buildings")
+    _add(os_green, "Green spaces")
 
-    data_locations.extend([
-        "Roads geoJSON shape file: " + _build_spatial_query_url(os_roads, aoi, out_fields='*'),
-        "Buildings geoJSON shape file: " + _build_spatial_query_url(os_buildings, aoi, out_fields='*'),
-        "Green spaces geoJSON shape file: " + _build_spatial_query_url(os_green, aoi, out_fields='*'),
-    ])
-
+    # Optional seasonal layers — each uses AOI in its OWN CRS and correct geometry label
     if include_seasons:
         logger.info("Including seasonal crown layers.")
         try:
@@ -1273,30 +1282,50 @@ def make_project_data_locations(project_name: str, include_seasons: bool, attrs:
             attrs_winter = get_project_urls("TT_GCW1_Winter")
             tree_crown_summer = get_attr(attrs_summer, "TREE_CROWNS")
             tree_crown_winter = get_attr(attrs_winter, "TREE_CROWNS")
-            
+
             if tree_crown_summer:
-                 data_locations.insert(
-                    1 if tree_crowns_url else 0,
-                    "Before storm tree crown geoJSON: " + _build_spatial_query_url(tree_crown_summer, aoi, out_fields='*')
-                )
+                _add(tree_crown_summer, "Before storm tree crowns", insert_at=1 if tree_crowns_url else 0)
             else:
-                 logger.warning("TT_GCW1_Summer TREE_CROWNS URL missing.")
-                 
+                logger.warning("TT_GCW1_Summer TREE_CROWNS URL missing.")
+
             if tree_crown_winter:
-                data_locations.insert(
-                    2 if tree_crowns_url and tree_crown_summer else 1 if tree_crowns_url or tree_crown_summer else 0,
-                    "After storm tree crown geoJSON: " + _build_spatial_query_url(tree_crown_winter, aoi, out_fields='*')
-                )
+                insert_idx = 2 if (tree_crowns_url and tree_crown_summer) else (1 if (tree_crowns_url or tree_crown_summer) else 0)
+                _add(tree_crown_winter, "After storm tree crowns", insert_at=insert_idx)
             else:
-                 logger.warning("TT_GCW1_Winter TREE_CROWNS URL missing.")
-                 
+                logger.warning("TT_GCW1_Winter TREE_CROWNS URL missing.")
         except ValueError as ve:
-             logger.error(f"Could not fetch seasonal project URLs: {ve}")
+            logger.error(f"Could not fetch seasonal project URLs: {ve}")
         except Exception as e:
             logger.error(f"Error including seasonal data locations: {e}")
-            
+
     logger.info(f"Final list of {len(data_locations)} data locations generated.")
     for loc in data_locations:
         logger.debug(f"  - {loc}")
-        
+
     return data_locations
+
+
+def get_layer_geometry_type(layer_url: str) -> str:
+    """
+    Returns one of:
+      'esriGeometryPoint' | 'esriGeometryPolyline' | 'esriGeometryPolygon'
+    Falls back to '' if not resolvable.
+    """
+    try:
+        meta = requests.get(layer_url.rstrip("/") + "?f=json", timeout=30).json()
+        return (meta.get("geometryType") or "").strip()
+    except Exception:
+        logger.exception(f"Failed to get geometryType for {layer_url}")
+        return ""
+
+def _label_for_layer(prefix: str, layer_url: str) -> str:
+    gtype = get_layer_geometry_type(layer_url).lower()
+    if "point" in gtype:
+        kind = "Points"
+    elif "polyline" in gtype or "line" in gtype:
+        kind = "Lines"
+    elif "polygon" in gtype:
+        kind = "Polygons"
+    else:
+        kind = "Features"
+    return f"{kind} geoJSON: {prefix}"
