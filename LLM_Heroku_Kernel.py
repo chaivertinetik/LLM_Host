@@ -6,7 +6,6 @@ import networkx as nx
 import pandas as pd
 import geopandas as gpd
 # from pyvis.network import Network
-from openai import OpenAI
 import configparser
 import pickle
 import time
@@ -795,6 +794,7 @@ class Solution():
         #     new_code = code
 
         # self.direct_request_code = new_code
+
 
 
 
