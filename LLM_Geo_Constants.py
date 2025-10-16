@@ -140,6 +140,14 @@ operation_requirement = [
     "Check the CRS of every GeoDataFrame before performing any spatial operation. If the CRS is geographic (e.g., EPSG:4326), reproject it to a metric-based CRS (e.g., EPSG:27700 or UTM). Never perform buffer, distance, or area calculations in a geographic CRS, as this will produce incorrect or empty results.",
     "If a GeoDataFrame or GeoSeries is missing CRS information, set it only if you know the true CRS from data context using .set_crs(). Never use .to_crs() on data with undefined CRS. Use .to_crs() only to convert between known coordinate systems.",
     "When constructing a GeoSeries or GeoDataFrame from individual or raw geometries, always assign the CRS from the source or parent GeoDataFrame to avoid errors from undefined or inconsistent spatial references.",
+    # --- Spatial join hygiene (added) ---
+    "In all spatial joins, preserve the LEFT (query) layer geometry in the output; do NOT overwrite left geometry with right-hand geometries or temporary buffers.",
+    "Before joining, subset the RIGHT GeoDataFrame to ONLY the required attribute columns plus its geometry to avoid carrying Shape__Area/Shape__Length and other unneeded fields.",
+    "When using geopandas.sjoin, set lsuffix='' (keep left names as-is) and set a meaningful rsuffix (e.g., '_road', '_bldg', '_park') to avoid generic '_right' clutter. Drop 'index_right' after the join.",
+    "If a spatial join can create 1:N matches (e.g., one tree intersecting many road segments), de-duplicate to one row per left feature as required (e.g., drop_duplicates on 'Tree_ID', keeping the first or by preferred rule).",
+    "For nearest-within-distance tasks, use gpd.sjoin_nearest with max_distance (after projecting to a metric CRS) and optionally add distance_col='dist_m'; then reproject results back to the original left-layer CRS.",
+    # --- Output CRS consistency (added) ---
+    "After any spatial operation (buffer, distance, spatial join, nearest), reproject the RESULT back to the ORIGINAL CRS of the LEFT layer to maintain consistency with upstream code.",
     # "When joining tables, convert the involved columns to string type without leading zeros. ",
     # "When doing spatial joins, remove the duplicates in the results. Or please think about whether it needs to be removed.",
     # "If using colorbar for GeoPandas or Matplotlib visulization, set the colorbar's height or length as the same as the plot for better layout.",
@@ -149,19 +157,19 @@ operation_requirement = [
     # "When crawl the webpage context to ChatGPT, using Beautifulsoup to crawl the text only, not all the HTML file.",
     "If using GeoPandas for spatial analysis, when doing overlay analysis, carefully think about use Geopandas.GeoSeries.intersects() or geopandas.sjoin().",
     "Geopandas.GeoSeries.intersects(other, align=True) returns a Series of dtype('bool') with value True for each aligned geometry that intersects other. other:GeoSeries or geometric object.",
-    "If using GeoPandas for spatial joining, the arguements are: geopandas.sjoin(left_df, right_df, how='inner', predicate='intersects', lsuffix='left', rsuffix='right', **kwargs), how: the type of join, default ‘inner’, means use intersection of keys from both dfs while retain only left_df geometry column. If 'how' is 'left': use keys from left_df; retain only left_df geometry column, and similarly when 'how' is 'right'.",
+    "If using GeoPandas for spatial joining, the arguments are: geopandas.sjoin(left_df, right_df, how='inner', predicate='intersects', lsuffix='', rsuffix='_rhs', **kwargs). If 'how' is 'left': use keys from left_df; retain only left_df geometry column, and similarly when 'how' is 'right'.",
     "Note geopandas.sjoin() returns all joined pairs, i.e., the return could be one-to-many. E.g., the intersection result of a polygon with two points inside it contains two rows; in each row, the polygon attributes are the same. If you need to extract the polygons intersecting with the points, please remember to remove the duplicated rows in the results.",
     "For oak use the formula: log(DBH_cm) = 2.20733 + 0.97484 * log(Height) + 0.0681 * (Shape_Area) and for ash: log(DBH) = -1.0 + 0.7 * log(Height) + 0.5 * log(Shape_Area) and for spruce: log(DBH) = -1.5 + 0.8 * log(Height) + 0.6 * log(Shape_Area) and for japanese larch: log(DBH) = -1.2 + 0.7 * log(Height) + 0.5 * log(Shape_Area) and for lodgepole pine: log(DBH) = -1.0 + 0.75 * log(Height) + 0.55 * log(Shape_Area) as the default if nothing is provided.",
     "DO NOT use 'if __name__ == '__main__:' statement because this program needs to be executed by exec().",
     "Use the Python built-in functions or attribute. If you do not remember, DO NOT make up fake ones, just use alternative methods.",
     "Pandas library has no attribute or method 'StringIO', so 'pd.compat.StringIO' is wrong, you need to use 'io.StringIO' instead.",
-    "Before using Pandas or GeoPandas columns for further processing (e.g. join or calculation), drop recoreds with NaN cells in those columns, e.g., df.dropna(subset=['XX', 'YY']).",
+    "Before using Pandas or GeoPandas columns for further processing (e.g. join or calculation), drop records with NaN cells in those columns, e.g., df.dropna(subset=['XX', 'YY']).",
     "When read FIPS or GEOID columns from CSV files, read those columns as str or int, never as float.",
     "FIPS or GEOID columns may be str type with leading zeros (digits: state: 2, county: 5, tract: 11, block group: 12), or integer type without leading zeros. Thus, when joining they, you can convert the integer column to str type with leading zeros to ensure the success.",
     # ---- ADDITIONS TO FIX '10m around green spaces' CASES ----
     "Distance parsing: if the prompt contains a pattern like '(\\d+)\\s*m' (e.g., '10m', '25 m'), extract the integer as metres.",
     "For proximity like 'X m around green spaces': buffer the GREEN SPACES layer by X metres (after projecting to a metric CRS), then select TREE features using a spatial join with predicate='intersects'.",
-    "Preserve the TREE layer geometry in the output; do NOT overwrite tree geometry with polygon buffers.",
+    "In all spatial joins, preserve the LEFT (TREE) layer geometry in the output; do NOT overwrite tree geometry with polygon buffers.",
     "When doing any buffer/distance operation, project BOTH layers to the SAME local metric CRS first (e.g., EPSG:27700 for GB). Never buffer in a geographic CRS.",
     "After filtering, reproject the resulting TREE GeoDataFrame back to its original CRS to maintain consistency with upstream code.",
     "If TREE and GREEN SPACE layers start in different CRSs, harmonize them BEFORE any join/buffer steps.",
@@ -170,8 +178,11 @@ operation_requirement = [
     "If the 'function_' category is required for green spaces filtering (e.g., park types), filter that before buffering; the column name is exactly 'function_'.",
     "Guard against empty results by validating buffer > 0 and by confirming the buffered greenspace layer has non-empty geometry before sjoin.",
     # ---- BETWEEN ROADS RULE ----
-    "For prompts like 'between <roadA> and <roadB>': find both road geometries from the Streets layer by matching the 'name1' field values (case-insensitive), reproject the roads and tree layers to a shared metric CRS, create a corridor polygon by buffering each road by a reasonable width (e.g., 20 m) and taking the intersection of those buffers, and then select all trees whose geometries fall within that corridor polygon. Use GeoPandas overlay (buffer + intersection) or distance-based filtering as appropriate, and return the selected trees in the original tree CRS."
+    "For prompts like 'between <roadA> and <roadB>': find both road geometries from the Streets layer by matching the 'name1' field values (case-insensitive), reproject the roads and tree layers to a shared metric CRS, create a corridor polygon by buffering each road by a reasonable width (e.g., 20 m) and taking the intersection of those buffers, and then select all trees whose geometries fall within that corridor polygon. Use GeoPandas overlay (buffer + intersection) or distance-based filtering as appropriate, and return the selected trees in the original tree CRS.",
+    # ---- Right-side field control in joins (added) ----
+    "When carrying right-side attributes across a join, include only essential identifiers (e.g., ESRIUKCASTID, name1) and avoid bringing measurement fields (Shape__Area, Shape__Length) from the right side unless explicitly requested."
 ]
+
 
 # other requirements prone to errors, not used for now
 """
@@ -382,6 +393,7 @@ sampling_data_requirement = [
  
                         #
                         ]
+
 
 
 
