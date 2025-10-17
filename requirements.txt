@@ -44,3 +44,4 @@ black
 autopep8
 google-cloud-firestore
 statsmodels
+sklearn
