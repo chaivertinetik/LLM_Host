@@ -51,6 +51,7 @@ langchain-community
 earthengine-api
 sentence-transformers
 google-cloud-firestore
+statsmodels
 
 
 
