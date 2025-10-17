@@ -64,7 +64,8 @@ graph_requirement = [
                         'The connection between a node and an operation node is an edge.', 
                         'Add all nodes and edges, including node attributes to a NetworkX instance, DO NOT change the attribute names.',
                         'DO NOT generate code to implement the steps.',
-                        'Ensure all outputs are valid for nx.write_graphml() and follow safe serialization conventions, the LLM shouldn't produce a dict-based node that breaks GraphML saving.',
+                        'Ensure all outputs are valid for nx.write_graphml() and follow safe serialization conventions, the LLM shouldnt produce a dict-based node that breaks GraphML saving.',
+                        'Dont filter for the Species_Conf, Health_Conf columns unless the prompt has asked for them (like what are the confidence scores), becuase these values are empty for some sites.',
                         'Join the attribute to the vector layer via a common attribute if necessary.',
                         #'Ensure the python code generated has no indentation errors and is properly indented.',
                         'Ensure the location for saving the graph file is not commented out.',
@@ -366,6 +367,7 @@ sampling_data_requirement = [
  
                         #
                         ]
+
 
 
 
