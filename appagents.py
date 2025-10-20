@@ -335,6 +335,7 @@ def prompt_suggetions(task_name:str, user_prompt:str) -> list[str]:
 def try_llm_fix(code, error_message=None, max_attempts=2):
     fixed_code = code
     exec_globals = {}
+    
     for attempt in range(max_attempts):
         try:
             if error_message:
@@ -352,7 +353,45 @@ def try_llm_fix(code, error_message=None, max_attempts=2):
         except Exception as e:
             print(f"Error during LLM fix attempt {attempt + 1}: {e}")
             error_message = str(e)
-    return False, error_message
+    explanation_prompt = (
+        f"The following Python code consistently failed to execute:\n{code}\n"
+        f"The last error message was:\n{error_message}\n"
+        f"As an expert GIS forestry assistant, explain in simple, concise, friendly terms "
+        "what might be wrong and what the user can do to fix or provide clearer input. " \
+        "For example for a KeyError, suggest checking for typos, or making sure the data actually exists."
+        )
+    
+    try: 
+        explanation = model.generate_content(explanation_prompt).text.strip()
+    except Exception as e: 
+        explanation = (
+            "There was an unexpected problem executing your request. "
+            "Please check your input and try again."
+        )
+
+    return False, explanation
+
+# def try_llm_fix(code, error_message=None, max_attempts=2):
+#     fixed_code = code
+#     exec_globals = {}
+#     for attempt in range(max_attempts):
+#         try:
+#             if error_message:
+#                 prompt = (
+#                     f"The following Python code produced the error: \n"
+#                     f"{error_message}\n"
+#                     f"Please fix the code and output only the corrected Python code:\n{fixed_code}\n"
+#                 )
+#             else:
+#                 prompt = f"Fix the following Python code and output only the corrected code:\n{fixed_code}\n"
+#             response = model.generate_content(prompt)
+#             fixed_code = helper.extract_code(response.text)
+#             exec(fixed_code, exec_globals)
+#             return True, fixed_code
+#         except Exception as e:
+#             print(f"Error during LLM fix attempt {attempt + 1}: {e}")
+#             error_message = str(e)
+#     return False, error_message
 
 #---- The geospatial code llm pipeline -----------
 
@@ -467,18 +506,25 @@ def long_running_task(user_task: str, task_name: str, data_locations: list):
                     print(f"Execution after LLM fix failed: {e2}")
                     return {
                         "status": "completed",
-                        "message": f"Try being more specific with your prompt."
+                        "message": f"Execution failed even after code correction, try being more specific with your prompt."
                     }
             else:
                 print(f"LLM fix failed: {fixed_code_or_error}")
                 return {
                         "status": "completed",
-                        "message": "The server seems to be down or what you're asking for isn't in the database."
+                        "message": fixed_code_or_error,
                        }
         result = globals().get('result', None)
         print("result type:", type(result))
         print("Final result:", result)
-       
+        is_empty_result = False
+        is_empty_result = result is None or (isinstance(result, list) and len(result) == 0) or (hasattr(result, "empty") and result.empty)
+        if is_empty_result: 
+            return {
+                "status": "completed",
+                "message": "Your query returned no data. Please check your input."
+            }
+        
         if wants_map_output(user_task):
             
             print("Execution completed.")
