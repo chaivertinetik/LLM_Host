@@ -11,7 +11,8 @@ import ee
 import numpy as np 
 from google.oauth2 import service_account
 from sentence_transformers import util
-from langchain.agents import initialize_agent, Tool
+from langchain.agents import Tool
+from langchain.agents.initialize import initialize_agent
 from langchain.agents.agent_types import AgentType
 from langchain.prompts import PromptTemplate
 from langchain_core.language_models import LLM
