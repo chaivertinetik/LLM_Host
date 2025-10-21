@@ -876,8 +876,7 @@ tools = [
 
 agent = create_react_agent(
     model=llm,
-    tools=tools,
-    verbose=True
+    tools=tools
 )
 
 
