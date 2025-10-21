@@ -16,7 +16,14 @@ from fastapi import HTTPException
 from shapely.geometry import mapping
 import requests
 from shapely.ops import transform as _shp_transform
+import os
+from functools import lru_cache
+from typing import Any, Dict, List, Optional, Union
 
+try:
+    import yaml  # PyYAML
+except ImportError:
+    yaml = None  # We’ll handle gracefully.
 # NEW: local reprojection
 from pyproj import CRS, Transformer
 
@@ -34,6 +41,8 @@ _retry = Retry(
 )
 _session.mount("http://", HTTPAdapter(max_retries=_retry))
 _session.mount("https://", HTTPAdapter(max_retries=_retry))
+
+YAML_DEFAULT_PATH = os.environ.get("EXTRA_DATA_LOCATIONS_YAML", "config/data_locations.yml")
 
 # --- simple print-based "logger" --------------------------------------------
 def _print_log(level, *args):
@@ -1235,8 +1244,57 @@ def get_aoi_in_layer_crs(project_name: str, layer_url: str) -> dict:
     target_wkid = fetch_crs(lyr) or int(aoi.get("inSR", 4326))
     return _reproject_aoi_to_wkid(aoi, target_wkid)
 
+@lru_cache(maxsize=1)
+def _load_extra_locations_yaml(path: str) -> Dict[str, Any]:
+    """Load and cache the YAML file. Returns {} if file missing or PyYAML not installed."""
+    if yaml is None:
+        # PyYAML not available; quietly disable YAML-driven extras
+        return {}
+    if not os.path.exists(path):
+        return {}
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = yaml.safe_load(f) or {}
+        if not isinstance(data, dict):
+            return {}
+        return data
+    except Exception:
+        # Be defensive: bad YAML should not break the app
+        return {}
+
+
+def _iter_project_extra_entries(project_name: str, yaml_path: str) -> List[Dict[str, Any]]:
+    """
+    Merge default + project-specific entries. Later (project) entries come after defaults.
+    Returns a clean list of dicts with keys: label, url|use_attr, aoifilter(bool), insert_at(optional).
+    """
+    data = _load_extra_locations_yaml(yaml_path)
+    block = (data.get("additional_data_locations") or {}) if isinstance(data, dict) else {}
+    default_list = block.get("default") or []
+    proj_list = block.get(project_name) or []
+
+    # Normalize to list[dict]
+    def _norm(lst: Any) -> List[Dict[str, Any]]:
+        if not isinstance(lst, list):
+            return []
+        cleaned: List[Dict[str, Any]] = []
+        for item in lst:
+            if not isinstance(item, dict):
+                continue
+            # minimal validation: must have either 'url' or 'use_attr'
+            if not (item.get("url") or item.get("use_attr")):
+                continue
+            if not item.get("label"):
+                continue
+            cleaned.append(item)
+        return cleaned
+
+    return _norm(default_list) + _norm(proj_list)
+
+
 def make_project_data_locations(project_name: str, include_seasons: bool, attrs: dict) -> list[str]:
     logger.info(f"Building data locations for project '{project_name}' (include_seasons={include_seasons}).")
+    # Always refresh from the project index (keeps behaviour consistent with your original)
     attrs = get_project_urls(project_name)
 
     # Core project layer
@@ -1244,7 +1302,7 @@ def make_project_data_locations(project_name: str, include_seasons: bool, attrs:
     data_locations: list[str] = []
 
     # Helper to add a layer with correct label + AOI in that layer's CRS
-    def _add(layer_url: str, label_prefix: str, insert_at: int | None = None):
+    def _add(layer_url: str, label_prefix: str, insert_at: Optional[int] = None):
         if not layer_url:
             return
         try:
@@ -1254,12 +1312,28 @@ def make_project_data_locations(project_name: str, include_seasons: bool, attrs:
             url = _build_spatial_query_url(layer_url, aoi_layer_crs, out_fields='*')
             label = _label_for_layer(label_prefix, layer_url)
             entry = f"{label}: {url}"
-            if insert_at is None:
+            if insert_at is None or insert_at < 0:
                 data_locations.append(entry)
             else:
-                data_locations.insert(insert_at, entry)
+                # Bound the index safely
+                idx = min(insert_at, len(data_locations))
+                data_locations.insert(idx, entry)
         except Exception as ex:
             logger.error(f"Failed to add data location for {label_prefix}: {ex}")
+
+    # Helper to add a raw, non-AOI URL (e.g., docs, tiles, WMS landing pages)
+    def _add_raw(raw_url: str, label: str, insert_at: Optional[int] = None):
+        if not raw_url:
+            return
+        try:
+            entry = f"{label}: {raw_url}"
+            if insert_at is None or insert_at < 0:
+                data_locations.append(entry)
+            else:
+                idx = min(insert_at, len(data_locations))
+                data_locations.insert(idx, entry)
+        except Exception as ex:
+            logger.error(f"Failed to add raw data location for {label}: {ex}")
 
     # Project tree crowns (if present)
     if tree_crowns_url:
@@ -1297,6 +1371,45 @@ def make_project_data_locations(project_name: str, include_seasons: bool, attrs:
             logger.error(f"Could not fetch seasonal project URLs: {ve}")
         except Exception as e:
             logger.error(f"Error including seasonal data locations: {e}")
+
+    # -----------------------------------------------------------------
+    # NEW: Append/insert project-specific extras from YAML
+    # -----------------------------------------------------------------
+    extras = _iter_project_extra_entries(project_name, YAML_DEFAULT_PATH)
+    if extras:
+        logger.info(f"Applying {len(extras)} extra data locations from YAML for '{project_name}'.")
+    for item in extras:
+        label: str = item.get("label")
+        aoifilter: bool = bool(item.get("aoifilter", True))
+        insert_at: Optional[int] = item.get("insert_at", None)
+
+        # Source resolution: use_attr takes precedence if provided, else url
+        layer_url: Optional[str] = None
+        if item.get("use_attr"):
+            try:
+                layer_url = get_attr(attrs, str(item["use_attr"]))
+                if not layer_url:
+                    logger.warning(f"YAML extra '{label}': attribute '{item['use_attr']}' not found or empty; skipping.")
+                    continue
+            except Exception as ex:
+                logger.error(f"YAML extra '{label}': error resolving use_attr '{item['use_attr']}': {ex}")
+                continue
+        else:
+            layer_url = item.get("url")
+
+        if not layer_url:
+            logger.warning(f"YAML extra '{label}': no usable 'url' or 'use_attr' resolved; skipping.")
+            continue
+
+        try:
+            if aoifilter:
+                _add(layer_url, label, insert_at=insert_at)
+            else:
+                _add_raw(layer_url, label, insert_at=insert_at)
+        except Exception as ex:
+            logger.error(f"Failed to apply YAML extra '{label}': {ex}")
+
+    # -----------------------------------------------------------------
 
     logger.info(f"Final list of {len(data_locations)} data locations generated.")
     for loc in data_locations:
