@@ -14,7 +14,7 @@ from sentence_transformers import util
 # from langchain.agents import Tool
 from langchain_core.tools import Tool
 from langgraph.prebuilt import create_react_agent
-from langchain.agents.agent_types import AgentType
+# from langchain.agents.agent_types import AgentType
 from langchain.prompts import PromptTemplate
 from langchain_core.language_models import LLM
 from vertexai.generative_models import GenerativeModel
