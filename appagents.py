@@ -13,7 +13,7 @@ from google.oauth2 import service_account
 from sentence_transformers import util
 # from langchain.agents import Tool
 from langchain_core.tools import Tool
-from langchain.agents import initialize_agent
+from langgraph.prebuilt import create_react_agent
 from langchain.agents.agent_types import AgentType
 from langchain.prompts import PromptTemplate
 from langchain_core.language_models import LLM
@@ -859,12 +859,10 @@ tools = [
 
 # --------------------- Initialize agent with tools and LangChain LLM ---------------------
 
-agent = initialize_agent(
+agent = create_react_agent(
+    model=llm,
     tools=tools,
-    llm=llm,
-    agent=AgentType.ZERO_SHOT_REACT_DESCRIPTION,
-    verbose=True,
-    handle_parsing_errors=True,
+    verbose=True
 )
 
 
