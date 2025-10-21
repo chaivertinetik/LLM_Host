@@ -29,18 +29,19 @@ from LLM_Heroku_Kernel import Solution
 # --------------------- GIS CODE AGENT WRAPPER ---------------------
 
 class GeminiLLMWrapper(LLM):
-    _gemini_llm: Any = PrivateAttr()  # Private attribute
+    _gemini_llm: Any = PrivateAttr()
+    _tools: Optional[List[Any]] = PrivateAttr(default=None)
 
     def __init__(self, gemini_llm, **kwargs):
         super().__init__(**kwargs)
         self._gemini_llm = gemini_llm
 
     def _call(self, prompt: str, stop: Optional[List[str]] = None, **kwargs: Any) -> str:
+        # You can use self._tools if needed here
         return self._gemini_llm.generate_content(prompt).text
 
     def bind_tools(self, tools: List[Any]) -> "GeminiLLMWrapper":
-        # Store or process tools as needed
-        self.tools = tools
+        self._tools = tools
         return self
 
     @property
