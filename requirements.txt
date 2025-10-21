@@ -43,8 +43,8 @@ fastapi
 uvicorn
 pydantic
 black
-autopep8>=1.0.0
-langchain==0.1.0
+autopep8
+langchain
 langchain-core
 langchain-google-genai
 langchain-community
@@ -52,6 +52,7 @@ earthengine-api
 sentence-transformers
 google-cloud-firestore
 statsmodels
+
 
 
 
