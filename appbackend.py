@@ -1339,14 +1339,6 @@ def make_project_data_locations(project_name: str, include_seasons: bool, attrs:
     if tree_crowns_url:
         _add(tree_crowns_url, "Tree crowns")
 
-    # National context layers (each with AOI in its native CRS)
-    os_roads = "https://services.arcgis.com/qHLhLQrcvEnxjtPr/arcgis/rest/services/OS_OpenRoads/FeatureServer/1"
-    os_buildings = "https://services.arcgis.com/qHLhLQrcvEnxjtPr/arcgis/rest/services/OS_OpenMap_Local_Buildings/FeatureServer/0"
-    os_green = "https://services.arcgis.com/qHLhLQrcvEnxjtPr/arcgis/rest/services/OS_Open_Greenspace/FeatureServer/1"
-
-    _add(os_roads, "Roads")
-    _add(os_buildings, "Buildings")
-    _add(os_green, "Green spaces")
 
     # Optional seasonal layers — each uses AOI in its OWN CRS and correct geometry label
     if include_seasons:

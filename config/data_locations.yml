@@ -1,0 +1,38 @@
+# config/data_locations.yml
+# -------------------------------------------------------------------------
+# Additional ArcGIS / external data sources per project.
+# These will be automatically added to `make_project_data_locations()` results.
+#
+# Keys:
+#   label:      Display name (required)
+#   url:        Direct REST or web URL (optional if using 'use_attr')
+#   use_attr:   Attribute key from project index (TREE_CROWNS, WINDTHROW_FC, etc.)
+#   aoifilter:  true/false — whether to apply AOI spatial filter (default: true)
+#   insert_at:  Optional integer index for insertion in the list
+# -------------------------------------------------------------------------
+
+
+additional_data_locations:
+  default:
+    # --- National context layers (each with AOI in its native CRS) ---
+    - label: "OS Roads"
+      url: "https://services.arcgis.com/qHLhLQrcvEnxjtPr/arcgis/rest/services/OS_OpenRoads/FeatureServer/1"
+      aoifilter: true
+
+    - label: "OS Buildings"
+      url: "https://services.arcgis.com/qHLhLQrcvEnxjtPr/arcgis/rest/services/OS_OpenMap_Local_Buildings/FeatureServer/0"
+      aoifilter: true
+
+    - label: "OS Green Spaces"
+      url: "https://services.arcgis.com/qHLhLQrcvEnxjtPr/arcgis/rest/services/OS_Open_Greenspace/FeatureServer/1"
+      aoifilter: true
+  
+  # --- Project-specific layers ---
+  CC_07102025:
+    - label: "ArbotrackPoints"
+      url: "https://services-eu1.arcgis.com/8uHkpVrXUjYCyrO4/arcgis/rest/services/ArbotrackPoints_CC_07102025/FeatureServer/0"
+      aoifilter: true
+
+    - label: "ArbotrackPolygons"
+      url: "https://services-eu1.arcgis.com/8uHkpVrXUjYCyrO4/arcgis/rest/services/ArbotrackPolygons_CC_07102025/FeatureServer/0"
+      aoifilter: true
