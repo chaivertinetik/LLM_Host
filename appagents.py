@@ -17,6 +17,7 @@ from langgraph.prebuilt import create_react_agent
 # from langchain.agents.agent_types import AgentType
 # from langchain.prompts import PromptTemplate
 from langchain_core.language_models import LLM
+from typing import List, Optional, Any 
 from vertexai.generative_models import GenerativeModel
 from google.api_core.exceptions import ResourceExhausted
 from appbackend import filter as push_to_map
@@ -26,20 +27,29 @@ from LLM_Heroku_Kernel import Solution
 
 # --------------------- GIS CODE AGENT WRAPPER ---------------------
 
-class GeminiLLM(LLM):
-    model: GenerativeModel
+class GeminiLLMWrapper(LLM):
+    def __init__(self, gemini_llm):
+        self.gemini_llm = gemini_llm
 
-    def _call(self, prompt: str, stop=None, run_manager=None) -> str:
-        response = self.model.generate_content(prompt)
-        return response.text
+    def _call(self, prompt: str, stop: Optional[List[str]] = None, **kwargs: Any) -> str:
+        # Call your gemini model's generate_content or invoke method
+        return self.gemini_llm.generate_content(prompt).text
+
+    def bind_tools(self, tools: List[Any]) -> "GeminiLLMWrapper":
+        self.tools = tools
+        return self
 
     @property
     def _llm_type(self) -> str:
-        return "code-gemini"
+        return "gemini"
+
+    @property
+    def _identifying_params(self) -> dict:
+        return {"model": "gemini"}
     
 # === Create Gemini model ===
 model = GenerativeModel("gemini-2.0-flash-001")
-llm = GeminiLLM(model=model)
+llm = GeminiLLMWrapper(model)
 #------------------------------------------- Firestore to store and retrieve old prompts ------------------------------------------------------
 
 #Temporary : need to revert to the collections-> with documents version and fix the datetime serialization error 
@@ -875,7 +885,7 @@ tools = [
 # --------------------- Initialize agent with tools and LangChain LLM ---------------------
 
 agent = create_react_agent(
-    model=llm,
+    model=llm.bind_tools(tools),
     tools=tools
 )
 
