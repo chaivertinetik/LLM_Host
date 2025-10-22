@@ -28,7 +28,7 @@ additional_data_locations:
       aoifilter: true
   
   # --- Project-specific layers ---
-  CC__Cardiff_07102025:
+  CC_Cardiff_07102025:
     - label: "Tree Points"
       url: "https://services-eu1.arcgis.com/8uHkpVrXUjYCyrO4/arcgis/rest/services/ArbotrackPoints_CC_07102025/FeatureServer/0"
       aoifilter: true
