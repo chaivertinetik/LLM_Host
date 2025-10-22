@@ -7,14 +7,12 @@ import geopandas as gpd
 import pandas as pd
 import numpy as np
 import datetime
-import json
 from geopandas import GeoDataFrame
 from shapely.geometry import shape, Polygon, MultiPolygon, GeometryCollection
 from shapely.ops import unary_union
 from pydantic import BaseModel
 from fastapi import HTTPException
 from shapely.geometry import mapping
-import requests
 from shapely.ops import transform as _shp_transform
 import os
 from functools import lru_cache
@@ -24,6 +22,7 @@ try:
     import yaml  # PyYAML
 except ImportError:
     yaml = None  # We’ll handle gracefully.
+
 # NEW: local reprojection
 from pyproj import CRS, Transformer
 
@@ -80,6 +79,43 @@ def _json_default(obj):
         return None
     # safest fallback
     return str(obj)
+
+def _sanitize_value(v):
+    # NaNs/NaT → None
+    try:
+        import pandas as pd
+        if v is pd.NaT:
+            return None
+    except Exception:
+        pass
+    try:
+        if hasattr(np, "isnat") and isinstance(v, (np.datetime64,)):
+            if np.isnat(v):
+                return None
+    except Exception:
+        pass
+
+    # Fast path for common types via existing default
+    try:
+        return _json.loads(_json.dumps(v, default=_json_default))
+    except Exception:
+        # Last resort: drop non-serializable
+        return None
+
+def _sanitize_attributes(row, allowed_fields=None):
+    """
+    Build an attribute dict from a pandas/GeoPandas row that is JSON-safe.
+    - If allowed_fields is provided, only keep those columns.
+    - Timestamp/NaT → ISO 8601 / None
+    - Anything still not serializable → None
+    """
+    cols = (list(allowed_fields) if allowed_fields else list(row.index))
+    out = {}
+    for c in cols:
+        if c in row.index:
+            out[c] = _sanitize_value(row[c])
+    return out
+
 
 def _looks_like_url(u: str) -> bool:
     if not isinstance(u, str): return False
@@ -502,7 +538,7 @@ def post_features_to_layer(gdf, target_url, project_name, batch_size=800):
                 arcgis_geom = shapely_to_arcgis_geometry(row.geometry, wkid=layer_wkid)
                 arcgis_geom_sanitized = sanitize_arcgis_geometry(arcgis_geom)
                 
-                attributes = {k: row.get(k, None) for k in allowed_fields if k in batch_gdf.columns}
+                attributes = _sanitize_attributes(row, allowed_fields)
 
                 if arcgis_geom_sanitized is None:
                     invalid_geom_count += 1
@@ -524,7 +560,7 @@ def post_features_to_layer(gdf, target_url, project_name, batch_size=800):
             logger.warning(f"Batch {start//batch_size + 1}: {invalid_geom_count} features sent with geometry=None due to invalid coordinates.")
 
         payload = {
-            "features": json.dumps(features, default=_json_default),
+            "features": _json.dumps(features, default=_json_default),
             "f": "json"
         }
 
@@ -847,17 +883,17 @@ def to_gdf(maybe_gdf):
         # Try stringified GeoJSON
         if isinstance(maybe_gdf, str):
             logger.debug("Input is a string, attempting JSON load.")
-            s = maybe_gdf.strip()
+            s = s = maybe_gdf.strip()
             if not s:
                 logger.debug("Input string is empty after stripping.")
                 return None
             try:
-                gj = json.loads(s)
+                gj = _json.loads(s)
                 feats = gj.get("features")
                 if feats:
                     logger.info(f"Created GDF from stringified JSON with {len(feats)} features.")
                     return gpd.GeoDataFrame.from_features(feats)
-            except json.JSONDecodeError:
+            except _json.JSONDecodeError:
                 logger.debug("String is not valid JSON.")
             except Exception as e:
                 logger.debug(f"Error parsing JSON features from string: {e}")
@@ -929,7 +965,7 @@ def _reproject_aoi_to_wkid(aoi: dict, target_wkid: int) -> dict:
     tgt_wkid = int(target_wkid)
     if src_wkid == tgt_wkid:
         # Ensure spatialReference updated to target in geometry payload
-        out = json.loads(json.dumps(aoi))
+        out = _json.loads(_json.dumps(aoi, default=_json_default))
         geom = out.get("geometry", {})
         # normalize spatialReference
         if isinstance(geom, dict):
@@ -1012,7 +1048,7 @@ def _gdf_from_layer_all(layer_url: str, out_wkid: int = 4326, timeout: int = 30)
         except requests.RequestException as e:
             logger.error(f"Network/HTTP error fetching all features from {layer_url}: {e}")
             raise
-        except json.JSONDecodeError as je:
+        except _json.JSONDecodeError as je:
             logger.error(f"Non-JSON response fetching all features: {je}")
             raise RuntimeError("Non-JSON response when fetching all features.") from je
             
@@ -1218,7 +1254,7 @@ def _build_spatial_query_url(layer_url: str, aoi: dict, where: str = "1=1", out_
     # local reprojection of AOI geometry to the layer's CRS
     aoi_proj = _reproject_aoi_to_wkid(aoi, target_wkid)
 
-    geom_json = _json.dumps(aoi_proj["geometry"], separators=(",", ":"))
+    geom_json = _json.dumps(aoi_proj["geometry"], separators=(",", ":"), default=_json_default)
     geom = _q(geom_json)
 
     geometry_type = aoi_proj.get("geometryType", "esriGeometryPolygon")
@@ -1232,6 +1268,7 @@ def _build_spatial_query_url(layer_url: str, aoi: dict, where: str = "1=1", out_
         f"&outFields={_q(out_fields)}"
         f"&f=geojson"
     )
+
 def get_aoi_in_layer_crs(project_name: str, layer_url: str) -> dict:
     """
     Returns AOI geometry dict reprojected locally (no REST reprojection)
@@ -1262,7 +1299,6 @@ def _load_extra_locations_yaml(path: str) -> Dict[str, Any]:
         # Be defensive: bad YAML should not break the app
         return {}
 
-
 def _iter_project_extra_entries(project_name: str, yaml_path: str) -> List[Dict[str, Any]]:
     """
     Merge default + project-specific entries. Later (project) entries come after defaults.
@@ -1290,7 +1326,6 @@ def _iter_project_extra_entries(project_name: str, yaml_path: str) -> List[Dict[
         return cleaned
 
     return _norm(default_list) + _norm(proj_list)
-
 
 def make_project_data_locations(project_name: str, include_seasons: bool, attrs: dict) -> list[str]:
     logger.info(f"Building data locations for project '{project_name}' (include_seasons={include_seasons}).")
