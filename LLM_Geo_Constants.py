@@ -7,6 +7,98 @@ import configparser
 # print("OpenAI_key:", OpenAI_key)
 
 
+
+
+# --- Robust ArcGIS/GeoJSON fetch policy (used by all prompts) ---
+arcgis_fetch_policy = r"""
+When loading a URL with GeoPandas, if gpd.read_file(URL) fails OR the server returns non-GeoJSON (e.g., HTML, login, transfer-limit or error JSON), recover automatically:
+
+1) Probe:
+   - GET the URL with requests (timeout=60). If Content-Type is not JSON/GeoJSON, or text starts with "<" or contains "<html" in the first 500 chars, treat as non-GeoJSON.
+
+2) Fallback (same upstream URL):
+   - If the query has "f=geojson", re-try with "f=json".
+   - If no "f=" present, try as-is; if still non-JSON, append "f=json".
+   - Convert ArcGIS JSON to GeoJSON yourself:
+       • Point: {"type":"Point","coordinates":[x,y]}
+       • Polygon: {"type":"Polygon","coordinates": rings}
+       • Polyline: {"type":"MultiLineString","coordinates": paths}
+   - If response signals paging (e.g., exceededTransferLimit), paginate via resultOffset/resultRecordCount until complete.
+   - Use outSR=4326 in fallback so results are valid GeoJSON; set gdf.crs = "EPSG:4326".
+
+3) Retries & diagnostics:
+   - Retry transient 5xx/429 with backoff (1s, 2s, 4s, up to 4 attempts).
+   - On failure, log first 400 chars of the body and Content-Type.
+
+4) Contract:
+   - Always return a valid GeoDataFrame (possibly empty). Do not crash the program.
+
+Reference helper the model may write when needed:
+
+def safe_read_arcgis(url: str):
+    import requests, geopandas as gpd
+    from shapely.geometry import shape
+
+    def _looks_like_html(text): 
+        t = text.lstrip().lower()
+        return t.startswith("<") or "<html" in t[:500]
+
+    try:
+        # First try the normal path (fast path)
+        return gpd.read_file(url)
+    except Exception:
+        pass
+
+    # Probe
+    r = requests.get(url, timeout=60)
+    ct = r.headers.get("Content-Type", "").lower()
+    text = r.text
+
+    # Decide fallback URL
+    fu = url
+    if "json" not in ct or _looks_like_html(text):
+        if "f=geojson" in fu.lower():
+            fu = fu.replace("f=geojson", "f=json")
+        elif "f=" not in fu.lower():
+            fu = fu + ("&" if "?" in fu else "?") + "f=json"
+
+    # Pull pages if needed
+    all_features = []
+    offset = 0
+    page_size = 2000
+    while True:
+        rr = requests.get(fu, params={"outSR": 4326, "resultOffset": offset, "resultRecordCount": page_size}, timeout=60)
+        ctt = rr.headers.get("Content-Type", "").lower()
+        if "json" not in ctt:
+            raise RuntimeError(f"Non-JSON from upstream (Content-Type={ctt}): {rr.text[:400]}")
+        data = rr.json()
+        if "error" in data:
+            raise RuntimeError(f"ArcGIS error: {data['error']}")
+        feats = data.get("features", [])
+        for f in feats:
+            attrs = f.get("attributes", {}) or {}
+            geom = f.get("geometry") or {}
+            if "x" in geom and "y" in geom:
+                gj = {"type": "Point", "coordinates": [geom["x"], geom["y"]]}
+            elif "rings" in geom:
+                gj = {"type": "Polygon", "coordinates": geom["rings"]}
+            elif "paths" in geom:
+                gj = {"type": "MultiLineString", "coordinates": geom["paths"]}
+            else:
+                continue
+            all_features.append({"type":"Feature","geometry":gj,"properties":attrs})
+        if not data.get("exceededTransferLimit"):
+            break
+        offset += page_size
+
+    gdf = gpd.GeoDataFrame.from_features(all_features, crs="EPSG:4326")
+    return gdf
+"""
+
+
+
+
+
 # carefully change these prompt parts!   
 
 #--------------- constants for graph generation  ---------------
@@ -87,7 +179,7 @@ graph_requirement = [
 
 
 #--------------- constants for operation generation  ---------------
-operation_role = r'''A professional Geo-information scientist and programmer good at Python. You can read geoJSON files and depending on the task perform GIS operations. You have worked on Geographic information science more than 20 years, and know every detail and pitfall when processing spatial data and coding. You know well how to design and implement a function that meet the interface between other functions. Yor program is always robust, considering the various data circumstances, such as column data types, avoiding mistakes when joining tables, and remove NAN cells before further processing. You have an good feeling of overview, meaning the functions in your program is coherent, and they connect to each other well, such as function names, parameters types, and the calling orders. You are also super experienced on generating maps using GeoPandas and Matplotlib.
+operation_role = r'''A professional Geo-information scientist and programmer good at Python. You can read geoJSON files and depending on the task perform GIS operations. You have worked on Geographic information science more than 20 years, and know every detail and pitfall when processing spatial data and coding. You know well how to design and implement a function that meet the interface between other functions. Your program is always robust, considering the various data circumstances, such as column data types, avoiding mistakes when joining tables, and remove NAN cells before further processing. You have an good feeling of overview, meaning the functions in your program is coherent, and they connect to each other well, such as function names, parameters types, and the calling orders. You are also super experienced on generating maps using GeoPandas and Matplotlib.You write robust I/O: if remote GeoJSON reads fail, you probe Content-Type and fall back to ArcGIS JSON → GeoJSON per the project’s fetch policy.
 '''
 
 operation_task_prefix = r'The geoJSON file has the following properties like: "Health" (either "Healthy" or "Unhealthy"), "Health_Level" ("1","2","3","4"), "Tree_ID", "Species" ("Ash", "Field Maple", "Oak"), "SURVEY_DATE" (format: Wed, 11 Sep 2024 00:00:00 GMT), "Height", "Shape__Area", "Shape__Length"  and the final goal is to return a GeoDataFrame containing the relevant data or a text summary based on what the user wants. You need to generate a Python function to do: In any request that specifies a numeric distance (e.g., "10m"), parse the number as metres, reproject the involved layers to a suitable local projected CRS with metre units (in Great Britain use EPSG:27700 unless data context dictates otherwise), perform the distance/buffer operation there, then reproject results back to the source CRS for output.'
@@ -118,7 +210,7 @@ operation_requirement = [
     "If using GeoPandas to load a zipped ESRI shapefile from a URL, the correct method is \"gpd.read_file(URL)\". DO NOT download and unzip the file.",
     # "Generate descriptions for input and output arguments.",
     "Ensure all comments and descriptions use # and are single line.",
-    "If the query is for Cardiff, and the user asks about ash trees also look at the data fields containing 'Fraxinus excelsior', for example species called 'Fraxinus excelsior Altena', 'Fraxinus excelsior Pendula' ..should all be factored in when qureying ash trees."
+    "If the query is for Cardiff, and the user asks about ash trees also look at the data fields containing 'Fraxinus excelsior', for example species called 'Fraxinus excelsior Altena', 'Fraxinus excelsior Pendula' ..should all be factored in when qureying ash trees.",
     "If the query is for Cardiff, find neighbourhood info ('Cardiff East', 'Cardiff Noth'..) under 'neighbourhood' and 'name1' has specific locations like 'Castle Golf Course', 'Whitchurch High School', for wards (like 'Riverside', 'Cathays') look under 'ward', for areas based on their role ('civic spaces', 'green corridors', 'natural and semi-natural greenspaces', 'water') look under 'function_'.",
     "When accessing green spaces data and you want specific categories like 'Bowling Green', 'Religious Grounds' use the 'function_' column header and when accessing the building data and you need categories like 'Education', 'Emergency Service', and 'Religious Buildings' use the 'BUILDGTHEM' column header and for Streets/Roads use the 'name1' header for streets like Clumber Road East.",
     "You need to receive the data from the functions, DO NOT load in the function if other functions have loaded the data and returned it in advance.",
@@ -182,7 +274,10 @@ operation_requirement = [
     # ---- BETWEEN ROADS RULE ----
     "For prompts like 'between <roadA> and <roadB>': find both road geometries from the Streets layer by matching the 'name1' field values (case-insensitive), reproject the roads and tree layers to a shared metric CRS, create a corridor polygon by buffering each road by a reasonable width (e.g., 20 m) and taking the intersection of those buffers, and then select all trees whose geometries fall within that corridor polygon. Use GeoPandas overlay (buffer + intersection) or distance-based filtering as appropriate, and return the selected trees in the original tree CRS.",
     # ---- Right-side field control in joins (added) ----
-    "When carrying right-side attributes across a join, include only essential identifiers (e.g., ESRIUKCASTID, name1) and avoid bringing measurement fields (Shape__Area, Shape__Length) from the right side unless explicitly requested."
+    "When carrying right-side attributes across a join, include only essential identifiers (e.g., ESRIUKCASTID, name1) and avoid bringing measurement fields (Shape__Area, Shape__Length) from the right side unless explicitly requested.",
+    "When loading remote spatial data from ArcGIS FeatureServer/MapServer or URLs using 'f=geojson', follow the Robust ArcGIS/GeoJSON fetch policy and implement/use a helper like safe_read_arcgis(url) when gpd.read_file(url) fails.",
+    "Prefer gpd.read_file(url) first; on exception or non-GeoJSON, call safe_read_arcgis(url) and continue with the returned GeoDataFrame.",
+    arcgis_fetch_policy
 ]
 
 
@@ -198,8 +293,13 @@ If joining FIPS or GEOID, need to fill the leading zeros (digits: state: 2, coun
 """
 
 
+
+
+
+
+
 #--------------- constants for assembly prompt generation  ---------------
-assembly_role =  r'''A professional Geo-information scientist and programmer good at Python. You can read geoJSON files and depending on the task perform GIS operations. You have worked on Geographic information science more than 20 years, and know every detail and pitfall when processing spatial data and coding. Your are very good at assembling functions and small programs together. You know how to make programs robust.
+assembly_role =  r'''A professional Geo-information scientist and programmer good at Python. You can read geoJSON files and depending on the task perform GIS operations. You have worked on Geographic information science more than 20 years, and know every detail and pitfall when processing spatial data and coding. You are very good at assembling functions and small programs together. You know how to make programs robust.When assembling programs, ensure URL loads self-heal using the robust ArcGIS/GeoJSON fetch policy.
 '''
 
 assembly_requirement = ['You can think step by step. ',
@@ -220,7 +320,9 @@ assembly_requirement = ['You can think step by step. ',
                     "If using GeoPandas for spatial analysis, when doing overlay analysis, carefully think about use Geopandas.GeoSeries.intersects() or geopandas.sjoin(). ",
                     "Geopandas.GeoSeries.intersects(other, align=True) returns a Series of dtype('bool') with value True for each aligned geometry that intersects other. other:GeoSeries or geometric object. ",
                     "Note geopandas.sjoin() returns all joined pairs, i.e., the return could be one-to-many. E.g., the intersection result of a polygon with two points inside it contains two rows; in each row, the polygon attribute is the same. If you need of extract the polygons intersecting with the points, please remember to remove the duplicated rows in the results.",
-                    ]
+                    "All data loads from URLs must be resilient: try gpd.read_file(url) first; if it fails or returns non-GeoJSON, call safe_read_arcgis(url).",
+                    arcgis_fetch_policy
+                       ]
 
 #--------------- constants for direct request prompt generation  ---------------
 direct_request_role = r'''A professional Geo-information scientist and programmer good at Python. You have worked on Geographic information science more than 20 years, and know every detail and pitfall when processing spatial data and coding. Yor programs are always concise and robust, considering the various data circumstances, such as map projections, column data types, and spatial joinings. You are also super experienced on generating map.
@@ -255,16 +357,18 @@ direct_request_requirement = [
                         # "When crawl the webpage context to ChatGPT, using Beautifulsoup to crawl the text only, not all the HTML file.",
                         "If using GeoPandas for spatial analysis, when doing overlay analysis, carefully think about use Geopandas.GeoSeries.intersects() or geopandas.sjoin(). ",
                         "Geopandas.GeoSeries.intersects(other, align=True) returns a Series of dtype('bool') with value True for each aligned geometry that intersects other. other:GeoSeries or geometric object. ",
-                        "If using GeoPandas for spatial joining, the arguements are: geopandas.sjoin(left_df, right_df, how='inner', predicate='intersects', lsuffix='left', rsuffix='right', **kwargs), how: the type of join, default ‘inner’, means use intersection of keys from both dfs while retain only left_df geometry column. If 'how' is 'left': use keys from left_df; retain only left_df geometry column, and similarly when 'how' is 'right'. ",
+                        "If using GeoPandas for spatial joining, the arguments are: geopandas.sjoin(left_df, right_df, how='inner', predicate='intersects', lsuffix='left', rsuffix='right', **kwargs), how: the type of join, default ‘inner’, means use intersection of keys from both dfs while retain only left_df geometry column. If 'how' is 'left': use keys from left_df; retain only left_df geometry column, and similarly when 'how' is 'right'. ",
                         "Note geopandas.sjoin() returns all joined pairs, i.e., the return could be one-to-many. E.g., the intersection result of a polygon with two points inside it contains two rows; in each row, the polygon attribute is the same. If you need of extract the polygons intersecting with the points, please remember to remove the duplicated rows in the results.",
                         # "GEOID in US Census data and FIPS (or 'fips') in Census boundaries are integer with leading zeros. If use pandas.read_csv() to GEOID or FIPS (or 'fips') columns from read CSV files, set the dtype as 'str'.",
                         # "Drop rows with NaN cells, i.e., df.dropna(), before using Pandas or GeoPandas columns for processing (e.g. join or calculation).",
                         "The program is executable, put it in a function named 'direct_solution()' then run it, but DO NOT use 'if __name__ == '__main__:' statement because this program needs to be executed by exec().",
-                        "Before using Pandas or GeoPandas columns for further processing (e.g. join or calculation), drop recoreds with NaN cells in that column, i.e., df.dropna(subset=['XX', 'YY']).",
+                        "Before using Pandas or GeoPandas columns for further processing (e.g. join or calculation), drop records with NaN cells in that column, i.e., df.dropna(subset=['XX', 'YY']).",
                         "When read FIPS or GEOID columns from CSV files, read those columns as str or int, never as float.",
                         "FIPS or GEOID columns may be str type with leading zeros (digits: state: 2, county: 5, tract: 11, block group: 12), or integer type without leading zeros. Thus, when joining they, you can convert the integer colum to str type with leading zeros to ensure the success.",
                         "If you need to make a map and the map size is not given, set the map size to 15*10 inches.",
-                        ]
+                        "If reading a URL fails with 'Failed to read GeoJSON data' or similar, automatically switch to the robust loader per the ArcGIS/GeoJSON fetch policy (use safe_read_arcgis(url)).",
+                        arcgis_fetch_policy
+]
 
 #--------------- constants for debugging prompt generation  ---------------
 debug_role =  r'''A professional Geo-information scientist and programmer good at Python. You have worked on Geographic information science more than 20 years, and know every detail and pitfall when processing spatial data and coding. You have significant experience on code debugging. You like to find out debugs and fix code. Moreover, you usually will consider issues from the data side, not only code implementation.
@@ -298,9 +402,11 @@ debug_requirement = [
                         # "Drop rows with NaN cells, i.e., df.dropna(),  if the error information reports NaN related errors."
                         "Bugs may caused by data, such as map projection inconsistency, column data type mistakes (e.g., int, flota, str), spatial joining type (e.g., inner, outer), and NaN cells.",
                         "When read FIPS or GEOID columns from CSV files, read those columns as str or int, never as float.",
-                        "FIPS or GEOID columns may be str type with leading zeros (digits: state: 2, county: 5, tract: 11, block group: 12), or integer type without leading zeros. Thus, when joining using they, you can convert the integer colum to str type with leading zeros to ensure the success.",
+                        "FIPS or GEOID columns may be str type with leading zeros (digits: state: 2, county: 5, tract: 11, block group: 12), or integer type without leading zeros. Thus, when joining using they, you can convert the integer column to str type with leading zeros to ensure the success.",
                         "If you need to make a map and the map size is not given, set the map size to 15*10 inches.",
-                        ]
+                        "If the reported error involves 'Failed to read GeoJSON data' or unexpected HTML/Content-Type, fix the program by replacing direct gpd.read_file(url) with a resilient call using the ArcGIS/GeoJSON fetch policy and the safe_read_arcgis(url) helper.",
+                        arcgis_fetch_policy
+]
 
 #--------------- constants for operation review prompt generation  ---------------
 operation_review_role =  r'''A professional Geo-information scientist and developer good at Python. You have worked on Geographic information science more than 20 years, and know every detail and pitfall when processing spatial data and coding. Your current job is to review other's code, mostly single functions; you are a very careful person, and enjoy code review. You love to point out the potential bugs of code of data misunderstanding.
@@ -391,10 +497,11 @@ sampling_task_prefix = r"Given a function, write a program to run this function,
 sampling_data_requirement = [
                         'Return all sampled data in a string variable named "sampled_data", i.e., sampled_data=given_function().',
                         'The data usually are tables or vectors. You need to sample the top 5 record of the table (e.g., CSV file or vector attritube table) If the data is a vector, return the map projection information.',
-                        'The sampled data format is: "Map projection: XXX. Sampled data: XXX',
+                        'The sampled data format is: "Map projection: XXX. Sampled data: XXX"',
  
                         #
                         ]
+
 
 
 
