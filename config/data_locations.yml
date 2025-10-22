@@ -15,29 +15,50 @@
 additional_data_locations:
   default:
     # --- National context layers (each with AOI in its native CRS) ---
-    - label: "OS Roads"
+    - label: "Roads - National"
       url: "https://services.arcgis.com/qHLhLQrcvEnxjtPr/arcgis/rest/services/OS_OpenRoads/FeatureServer/1"
       aoifilter: true
+      priority: 100
 
-    - label: "OS Buildings"
+    - label: "Buildings - National"
       url: "https://services.arcgis.com/qHLhLQrcvEnxjtPr/arcgis/rest/services/OS_OpenMap_Local_Buildings/FeatureServer/0"
       aoifilter: true
+      priority: 100
 
-    - label: "OS Green Spaces"
+    - label: "Green Spaces - National"
       url: "https://services.arcgis.com/qHLhLQrcvEnxjtPr/arcgis/rest/services/OS_Open_Greenspace/FeatureServer/1"
       aoifilter: true
+      priority: 100
   
   # --- Project-specific layers ---
   CC_Cardiff_07102025:
-    - label: "Tree Points"
+    - label: "Tree Points - Cardiff"
       url: "https://services-eu1.arcgis.com/8uHkpVrXUjYCyrO4/arcgis/rest/services/ArbotrackPoints_CC_07102025/FeatureServer/0"
       aoifilter: true
+      priority: 10
 
-    # - label: "Tree Polygons"
-    #   url: "https://services-eu1.arcgis.com/8uHkpVrXUjYCyrO4/arcgis/rest/services/ArbotrackPolygons_CC_07102025/FeatureServer/0"
-    #   aoifilter: true
+    - label: "Tree Polygons - Cardiff"
+      url: "https://services-eu1.arcgis.com/8uHkpVrXUjYCyrO4/arcgis/rest/services/ArbotrackPolygons_CC_07102025/FeatureServer/0"
+      aoifilter: true
+      priority: 10
 
-    - label: "Open Space"
+    - label: "Open Space - Cardiff"
       url: "https://services-eu1.arcgis.com/8uHkpVrXUjYCyrO4/arcgis/rest/services/OpenSpaces_CC_2025/FeatureServer"
-      aoifilter: true 
+      aoifilter: true
+      priority: 10 
     
+    - label: "Building - Cardiff"
+      url: "https://services-eu1.arcgis.com/8uHkpVrXUjYCyrO4/arcgis/rest/services/Building_CC_01102025/FeatureServer"
+      aoifilter: true
+      priority: 10 
+
+    - label: "Non Operational Property - Cardiff"
+      url: "https://services-eu1.arcgis.com/8uHkpVrXUjYCyrO4/arcgis/rest/services/NonOperationalProperty_CC_2025/FeatureServer"
+      aoifilter: true
+      priority: 10
+
+    - label: "Operational Property - Cardiff"
+      url: "https://services-eu1.arcgis.com/8uHkpVrXUjYCyrO4/arcgis/rest/services/OperationalProperty_CC_2025/FeatureServer"
+      aoifilter: true
+      priority: 10
+

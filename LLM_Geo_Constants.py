@@ -11,90 +11,100 @@ import configparser
 
 # --- Robust ArcGIS/GeoJSON fetch policy (used by all prompts) ---
 arcgis_fetch_policy = r"""
-When loading a URL with GeoPandas, if gpd.read_file(URL) fails OR the server returns non-GeoJSON (e.g., HTML, login, transfer-limit or error JSON), recover automatically:
+    When loading a URL with GeoPandas, if gpd.read_file(URL) fails OR the server returns non-GeoJSON (e.g., HTML, login, transfer-limit or error JSON), recover automatically:
 
-1) Probe:
-   - GET the URL with requests (timeout=60). If Content-Type is not JSON/GeoJSON, or text starts with "<" or contains "<html" in the first 500 chars, treat as non-GeoJSON.
+    1) Probe:
+    - GET the URL with requests (timeout=60). If Content-Type is not JSON/GeoJSON, or text starts with "<" or contains "<html" in the first 500 chars, treat as non-GeoJSON.
 
-2) Fallback (same upstream URL):
-   - If the query has "f=geojson", re-try with "f=json".
-   - If no "f=" present, try as-is; if still non-JSON, append "f=json".
-   - Convert ArcGIS JSON to GeoJSON yourself:
-       • Point: {"type":"Point","coordinates":[x,y]}
-       • Polygon: {"type":"Polygon","coordinates": rings}
-       • Polyline: {"type":"MultiLineString","coordinates": paths}
-   - If response signals paging (e.g., exceededTransferLimit), paginate via resultOffset/resultRecordCount until complete.
-   - Use outSR=4326 in fallback so results are valid GeoJSON; set gdf.crs = "EPSG:4326".
+    2) Fallback (same upstream URL):
+    - If the query has "f=geojson", re-try with "f=json".
+    - If no "f=" present, try as-is; if still non-JSON, append "f=json".
+    - Convert ArcGIS JSON to GeoJSON yourself:
+        • Point: {"type":"Point","coordinates":[x,y]}
+        • Polygon: {"type":"Polygon","coordinates": rings}
+        • Polyline: {"type":"MultiLineString","coordinates": paths}
+    - If response signals paging (e.g., exceededTransferLimit), paginate via resultOffset/resultRecordCount until complete.
+    - Use outSR=4326 in fallback so results are valid GeoJSON; set gdf.crs = "EPSG:4326".
 
-3) Retries & diagnostics:
-   - Retry transient 5xx/429 with backoff (1s, 2s, 4s, up to 4 attempts).
-   - On failure, log first 400 chars of the body and Content-Type.
+    3) Retries & diagnostics:
+    - Retry transient 5xx/429 with backoff (1s, 2s, 4s, up to 4 attempts).
+    - On failure, log first 400 chars of the body and Content-Type.
 
-4) Contract:
-   - Always return a valid GeoDataFrame (possibly empty). Do not crash the program.
+    4) Contract:
+    - Always return a valid GeoDataFrame (possibly empty). Do not crash the program.
 
-Reference helper the model may write when needed:
+    Reference helper the model may write when needed:
 
-def safe_read_arcgis(url: str):
-    import requests, geopandas as gpd
-    from shapely.geometry import shape
+    def safe_read_arcgis(url: str):
+        import requests, geopandas as gpd
+        from shapely.geometry import shape
 
-    def _looks_like_html(text): 
-        t = text.lstrip().lower()
-        return t.startswith("<") or "<html" in t[:500]
+        def _looks_like_html(text): 
+            t = text.lstrip().lower()
+            return t.startswith("<") or "<html" in t[:500]
 
-    try:
-        # First try the normal path (fast path)
-        return gpd.read_file(url)
-    except Exception:
-        pass
+        try:
+            # First try the normal path (fast path)
+            return gpd.read_file(url)
+        except Exception:
+            pass
 
-    # Probe
-    r = requests.get(url, timeout=60)
-    ct = r.headers.get("Content-Type", "").lower()
-    text = r.text
+        # Probe
+        r = requests.get(url, timeout=60)
+        ct = r.headers.get("Content-Type", "").lower()
+        text = r.text
 
-    # Decide fallback URL
-    fu = url
-    if "json" not in ct or _looks_like_html(text):
-        if "f=geojson" in fu.lower():
-            fu = fu.replace("f=geojson", "f=json")
-        elif "f=" not in fu.lower():
-            fu = fu + ("&" if "?" in fu else "?") + "f=json"
+        # Decide fallback URL
+        fu = url
+        if "json" not in ct or _looks_like_html(text):
+            if "f=geojson" in fu.lower():
+                fu = fu.replace("f=geojson", "f=json")
+            elif "f=" not in fu.lower():
+                fu = fu + ("&" if "?" in fu else "?") + "f=json"
 
-    # Pull pages if needed
-    all_features = []
-    offset = 0
-    page_size = 2000
-    while True:
-        rr = requests.get(fu, params={"outSR": 4326, "resultOffset": offset, "resultRecordCount": page_size}, timeout=60)
-        ctt = rr.headers.get("Content-Type", "").lower()
-        if "json" not in ctt:
-            raise RuntimeError(f"Non-JSON from upstream (Content-Type={ctt}): {rr.text[:400]}")
-        data = rr.json()
-        if "error" in data:
-            raise RuntimeError(f"ArcGIS error: {data['error']}")
-        feats = data.get("features", [])
-        for f in feats:
-            attrs = f.get("attributes", {}) or {}
-            geom = f.get("geometry") or {}
-            if "x" in geom and "y" in geom:
-                gj = {"type": "Point", "coordinates": [geom["x"], geom["y"]]}
-            elif "rings" in geom:
-                gj = {"type": "Polygon", "coordinates": geom["rings"]}
-            elif "paths" in geom:
-                gj = {"type": "MultiLineString", "coordinates": geom["paths"]}
-            else:
-                continue
-            all_features.append({"type":"Feature","geometry":gj,"properties":attrs})
-        if not data.get("exceededTransferLimit"):
-            break
-        offset += page_size
+        # Pull pages if needed
+        all_features = []
+        offset = 0
+        page_size = 2000
+        while True:
+            rr = requests.get(fu, params={"outSR": 4326, "resultOffset": offset, "resultRecordCount": page_size}, timeout=60)
+            ctt = rr.headers.get("Content-Type", "").lower()
+            if "json" not in ctt:
+                raise RuntimeError(f"Non-JSON from upstream (Content-Type={ctt}): {rr.text[:400]}")
+            data = rr.json()
+            if "error" in data:
+                raise RuntimeError(f"ArcGIS error: {data['error']}")
+            feats = data.get("features", [])
+            for f in feats:
+                attrs = f.get("attributes", {}) or {}
+                geom = f.get("geometry") or {}
+                if "x" in geom and "y" in geom:
+                    gj = {"type": "Point", "coordinates": [geom["x"], geom["y"]]}
+                elif "rings" in geom:
+                    gj = {"type": "Polygon", "coordinates": geom["rings"]}
+                elif "paths" in geom:
+                    gj = {"type": "MultiLineString", "coordinates": geom["paths"]}
+                else:
+                    continue
+                all_features.append({"type":"Feature","geometry":gj,"properties":attrs})
+            if not data.get("exceededTransferLimit"):
+                break
+            offset += page_size
 
-    gdf = gpd.GeoDataFrame.from_features(all_features, crs="EPSG:4326")
-    return gdf
-"""
+        gdf = gpd.GeoDataFrame.from_features(all_features, crs="EPSG:4326")
+        return gdf
+    """
 
+# --- Data location priority policy (referenced by multiple prompt blocks) ---
+data_location_priority_rules = r"""
+        Priority for data sources:
+        1) Project-local layers (from config/data_locations.yml for the active project).
+        2) Project index layers (e.g., TREE_CROWNS, USER_* from Project_index).
+        3) National context layers (OS Open Roads, OS OpenMap Local Buildings, OS Open Greenspace).
+        When both local and national exist for the same category (e.g., Buildings, Roads, Green/Open Space),
+        ALWAYS prefer the LOCAL layer. Treat national layers as fallbacks only, and avoid duplicating the same category
+        unless the user explicitly requests both.
+        """
 
 
 
@@ -211,7 +221,7 @@ operation_requirement = [
     # "Generate descriptions for input and output arguments.",
     "Ensure all comments and descriptions use # and are single line.",
     "If the query is for Cardiff, and the user asks about ash trees also look at the data fields containing 'Fraxinus excelsior', for example species called 'Fraxinus excelsior Altena', 'Fraxinus excelsior Pendula' ..should all be factored in when qureying ash trees.",
-    "If the query is for Cardiff, find neighbourhood info ('Cardiff East', 'Cardiff Noth'..) under 'neighbourhood' and 'name1' has specific locations like 'Castle Golf Course', 'Whitchurch High School', for wards (like 'Riverside', 'Cathays') look under 'ward', for areas based on their role ('civic spaces', 'green corridors', 'natural and semi-natural greenspaces', 'water') look under 'function_'.",
+    "If the query is for Cardiff, find neighbourhood info ('Cardiff East', 'Cardiff North'..) under 'neighbourhood' and 'name1' has specific locations like 'Castle Golf Course', 'Whitchurch High School', for wards (like 'Riverside', 'Cathays') look under 'ward', for areas based on their role ('civic spaces', 'green corridors', 'natural and semi-natural greenspaces', 'water') look under 'function_'.",
     "When accessing green spaces data and you want specific categories like 'Bowling Green', 'Religious Grounds' use the 'function_' column header and when accessing the building data and you need categories like 'Education', 'Emergency Service', and 'Religious Buildings' use the 'BUILDGTHEM' column header and for Streets/Roads use the 'name1' header for streets like Clumber Road East.",
     "You need to receive the data from the functions, DO NOT load in the function if other functions have loaded the data and returned it in advance.",
     # "Note module 'pandas' has no attribute or method of 'StringIO'",
@@ -277,6 +287,7 @@ operation_requirement = [
     "When carrying right-side attributes across a join, include only essential identifiers (e.g., ESRIUKCASTID, name1) and avoid bringing measurement fields (Shape__Area, Shape__Length) from the right side unless explicitly requested.",
     "When loading remote spatial data from ArcGIS FeatureServer/MapServer or URLs using 'f=geojson', follow the Robust ArcGIS/GeoJSON fetch policy and implement/use a helper like safe_read_arcgis(url) when gpd.read_file(url) fails.",
     "Prefer gpd.read_file(url) first; on exception or non-GeoJSON, call safe_read_arcgis(url) and continue with the returned GeoDataFrame.",
+    "When loading layers, always prioritize project-local entries from config/data_locations.yml and project index attrs; use national context layers strictly as fallbacks when no local equivalent exists.",
     arcgis_fetch_policy
 ]
 

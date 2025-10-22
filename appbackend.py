@@ -1318,6 +1318,7 @@ def make_project_data_locations(project_name: str, include_seasons: bool, attrs:
                 # Bound the index safely
                 idx = min(insert_at, len(data_locations))
                 data_locations.insert(idx, entry)
+            logger.debug(f"Added data location: {entry}")
         except Exception as ex:
             logger.error(f"Failed to add data location for {label_prefix}: {ex}")
 
@@ -1332,13 +1333,65 @@ def make_project_data_locations(project_name: str, include_seasons: bool, attrs:
             else:
                 idx = min(insert_at, len(data_locations))
                 data_locations.insert(idx, entry)
+            logger.debug(f"Added RAW data location: {entry}")
         except Exception as ex:
             logger.error(f"Failed to add raw data location for {label}: {ex}")
+
+    # Small helper to normalize categories so we can avoid duplicates later
+    def _infer_category(label: str, url: Optional[str]) -> str:
+        lbl = (label or "").lower()
+        u = (url or "").lower()
+
+        # National flags
+        is_national = any(k in lbl for k in ["national"]) or any(k in u for k in [
+            "os_openroads", "openmap_local", "open_greenspace", "ordnance", "services.arcgis.com/qhlhlqrcvenxjtpr"
+        ])
+
+        # Categories
+        if any(k in lbl for k in ["building", "buildings"]) or "openmap_local_buildings" in u:
+            base = "buildings"
+        elif any(k in lbl for k in ["road", "street"]) or "openroads" in u:
+            base = "roads"
+        elif any(k in lbl for k in ["green space", "greenspace", "open space", "park"]) or "open_greenspace" in u:
+            base = "greenspace"
+        elif any(k in lbl for k in ["tree points", "arbotrackpoints"]):
+            base = "tree_points"
+        elif any(k in lbl for k in ["tree polygons", "arbotrackpolygons"]):
+            base = "tree_polygons"
+        elif any(k in lbl for k in ["operational property"]):
+            base = "operational_property"
+        elif any(k in lbl for k in ["non operational property", "non-operational property"]):
+            base = "non_operational_property"
+        else:
+            base = lbl.strip() or "unknown"
+
+        return f"{base}::{'national' if is_national else 'local'}"
+
+    # Track which base categories have already been added (prefer first-come, i.e., local with higher priority)
+    def _category_already_present(category_key: str) -> bool:
+        # We compare only the base (before ::), so later nationals are skipped if a local exists
+        base = category_key.split("::", 1)[0]
+        for line in data_locations:
+            low = line.lower()
+            if base == "buildings" and ("building" in low or "buildings" in low):
+                return True
+            if base == "roads" and ("road" in low or "street" in low):
+                return True
+            if base == "greenspace" and any(k in low for k in ["green space", "greenspace", "open space", "park"]):
+                return True
+            if base == "tree_points" and any(k in low for k in ["points geojson", "tree points"]):
+                return True
+            if base == "tree_polygons" and any(k in low for k in ["polygons geojson", "tree polygons"]):
+                return True
+            if base == "operational_property" and "operational property" in low:
+                return True
+            if base == "non_operational_property" and "non operational property" in low:
+                return True
+        return False
 
     # Project tree crowns (if present)
     if tree_crowns_url:
         _add(tree_crowns_url, "Tree crowns")
-
 
     # Optional seasonal layers — each uses AOI in its OWN CRS and correct geometry label
     if include_seasons:
@@ -1365,11 +1418,28 @@ def make_project_data_locations(project_name: str, include_seasons: bool, attrs:
             logger.error(f"Error including seasonal data locations: {e}")
 
     # -----------------------------------------------------------------
-    # NEW: Append/insert project-specific extras from YAML
+    # NEW: Append/insert project-specific extras from YAML with PRIORITY & DE-DUP
     # -----------------------------------------------------------------
-    extras = _iter_project_extra_entries(project_name, YAML_DEFAULT_PATH)
-    if extras:
-        logger.info(f"Applying {len(extras)} extra data locations from YAML for '{project_name}'.")
+    extras = _iter_project_extra_entries(project_name, YAML_DEFAULT_PATH)  # pulls default + project blocks
+
+    # Compute explicit or inferred priority
+    def _infer_priority(item: dict) -> int:
+        if isinstance(item.get("priority"), int):
+            return item["priority"]
+        lbl = (item.get("label") or "")
+        # heuristic: project-specific/local if label mentions project name or doesn't say 'National'
+        if project_name.lower() in lbl.lower() or "national" not in lbl.lower():
+            return 10
+        return 100
+
+    # Attach computed priorities
+    for it in extras:
+        it["__priority"] = _infer_priority(it)
+
+    # Sort: lower priority number first (locals before nationals)
+    extras.sort(key=lambda d: d.get("__priority", 50))
+
+    # Add extras in sorted order, skipping later items whose category already exists
     for item in extras:
         label: str = item.get("label")
         aoifilter: bool = bool(item.get("aoifilter", True))
@@ -1393,6 +1463,14 @@ def make_project_data_locations(project_name: str, include_seasons: bool, attrs:
             logger.warning(f"YAML extra '{label}': no usable 'url' or 'use_attr' resolved; skipping.")
             continue
 
+        cat_key = _infer_category(label, layer_url)
+        base_key = cat_key.split("::", 1)[0]
+        if _category_already_present(cat_key):
+            # If a category is already represented (likely by a local, given sorting),
+            # skip adding later (usually national) duplicates.
+            logger.info(f"Skipping '{label}' ({base_key}) because a {base_key} layer already exists (local preferred).")
+            continue
+
         try:
             if aoifilter:
                 _add(layer_url, label, insert_at=insert_at)
@@ -1408,6 +1486,7 @@ def make_project_data_locations(project_name: str, include_seasons: bool, attrs:
         logger.debug(f"  - {loc}")
 
     return data_locations
+
 
 
 def get_layer_geometry_type(layer_url: str) -> str:
