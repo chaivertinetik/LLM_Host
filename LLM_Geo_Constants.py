@@ -102,6 +102,20 @@ def safe_read_arcgis(url: str):
 
     return gpd.GeoDataFrame.from_features(all_features, crs="EPSG:4326")
 """
+arcgis_fetch_policy += r"""
+
+5) Output datetime policy (ArcGIS Online compatibility):
+- Do NOT return pandas.Timestamp or numpy.datetime64 columns in final GeoDataFrames/DataFrames.
+- Convert all datetime-like columns to ISO 8601 strings (UTC) and ensure dtype='object' before returning or serializing.
+"""
+timestamp_output_rules = r"""
+Datetime/timestamp hygiene for ArcGIS Online:
+- Never return pandas.Timestamp or numpy.datetime64 columns in final outputs (GeoDataFrames, DataFrames, or JSON payloads).
+- Before returning or serializing any table/geotable, convert ALL datetime-like columns to ISO 8601 strings
+  (e.g., 'YYYY-MM-DDTHH:MM:SSZ') in UTC and ensure dtype='object'.
+- Avoid timezone-aware datetimes in outputs; normalize to UTC and drop tzinfo.
+- This applies to fields like SURVEY_DATE and any other date/time attributes.
+"""
 
 
 # --- Data location priority policy (referenced by multiple prompt blocks) ---
@@ -315,8 +329,9 @@ If joining FIPS or GEOID, need to fill the leading zeros (digits: state: 2, coun
 operation_requirement += [
     "When packaging any Python dict/list to JSON, ensure pandas.Timestamp and numpy scalars serialize (use a default handler or pre-convert to ISO8601).",
     "If a request asks for 'show_tree_id', return a DataFrame/Series of the matching Tree_ID values and keep geometry unchanged unless spatial filters are requested.",
+    "Final outputs (GeoDataFrame/DataFrame/JSON) must NOT contain pandas.Timestamp or numpy.datetime64 dtypes; convert all datetime-like columns to ISO 8601 strings (UTC) with dtype=object.",
+    timestamp_output_rules,
 ]
-
 
 
 
@@ -344,8 +359,11 @@ assembly_requirement = ['You can think step by step. ',
                     "Geopandas.GeoSeries.intersects(other, align=True) returns a Series of dtype('bool') with value True for each aligned geometry that intersects other. other:GeoSeries or geometric object. ",
                     "Note geopandas.sjoin() returns all joined pairs, i.e., the return could be one-to-many. E.g., the intersection result of a polygon with two points inside it contains two rows; in each row, the polygon attribute is the same. If you need of extract the polygons intersecting with the points, please remember to remove the duplicated rows in the results.",
                     "All data loads from URLs must be resilient: try gpd.read_file(url) first; if it fails or returns non-GeoJSON, call safe_read_arcgis(url).",
-                    arcgis_fetch_policy
-                       ]
+                    arcgis_fetch_policy,
+                    "Before returning 'result', ensure no pandas.Timestamp/numpy.datetime64 columns remain; coerce all datetimes to ISO 8601 strings (UTC) with dtype=object.",
+                    timestamp_output_rules,
+]
+
 
 #--------------- constants for direct request prompt generation  ---------------
 direct_request_role = r'''A professional Geo-information scientist and programmer good at Python. You have worked on Geographic information science more than 20 years, and know every detail and pitfall when processing spatial data and coding. Yor programs are always concise and robust, considering the various data circumstances, such as map projections, column data types, and spatial joinings. You are also super experienced on generating map.
@@ -390,7 +408,9 @@ direct_request_requirement = [
                         "FIPS or GEOID columns may be str type with leading zeros (digits: state: 2, county: 5, tract: 11, block group: 12), or integer type without leading zeros. Thus, when joining they, you can convert the integer colum to str type with leading zeros to ensure the success.",
                         "If you need to make a map and the map size is not given, set the map size to 15*10 inches.",
                         "If reading a URL fails with 'Failed to read GeoJSON data' or similar, automatically switch to the robust loader per the ArcGIS/GeoJSON fetch policy (use safe_read_arcgis(url)).",
-                        arcgis_fetch_policy
+                        arcgis_fetch_policy,
+                        "Ensure the program's final output has no pandas.Timestamp/numpy.datetime64 columns; convert to ISO 8601 strings (UTC) with dtype=object before return.",
+                        timestamp_output_rules,
 ]
 
 #--------------- constants for debugging prompt generation  ---------------
@@ -428,7 +448,9 @@ debug_requirement = [
                         "FIPS or GEOID columns may be str type with leading zeros (digits: state: 2, county: 5, tract: 11, block group: 12), or integer type without leading zeros. Thus, when joining using they, you can convert the integer column to str type with leading zeros to ensure the success.",
                         "If you need to make a map and the map size is not given, set the map size to 15*10 inches.",
                         "If the reported error involves 'Failed to read GeoJSON data' or unexpected HTML/Content-Type, fix the program by replacing direct gpd.read_file(url) with a resilient call using the ArcGIS/GeoJSON fetch policy and the safe_read_arcgis(url) helper.",
-                        arcgis_fetch_policy
+                        arcgis_fetch_policy,
+                        "If the bug relates to ArcGIS Online ingestion, ensure no datetime-like dtypes remain in outputs; convert to ISO 8601 strings (UTC) with dtype=object.",
+                        timestamp_output_rules,
 ]
 
 #--------------- constants for operation review prompt generation  ---------------
@@ -456,6 +478,8 @@ operation_review_requirement = [
                         "Geopandas.GeoSeries.intersects(other, align=True) returns a Series of dtype('bool') with value True for each aligned geometry that intersects other. other:GeoSeries or geometric object. ",
                         "Note geopandas.sjoin() returns all joined pairs, i.e., the return could be one-to-many. E.g., the intersection result of a polygon with two points inside it contains two rows; in each row, the polygon attribute is the same. If you need of extract the polygons intersecting with the points, please remember to remove the duplicated rows in the results.",
                         "If you need to make a map and the map size is not given, set the map size to 15*10 inches.",
+                        "Verify outputs do not contain pandas.Timestamp/numpy.datetime64; require ISO 8601 string (UTC) columns instead.",
+                        timestamp_output_rules,
                         ]
 
 #--------------- constants for assembly program review prompt generation  ---------------
@@ -479,7 +503,8 @@ assembly_review_requirement = [
                         "If using GeoPandas for spatial analysis, when doing overlay analysis, carefully think about use Geopandas.GeoSeries.intersects() or geopandas.sjoin(). ",
                         "Geopandas.GeoSeries.intersects(other, align=True) returns a Series of dtype('bool') with value True for each aligned geometry that intersects other. other:GeoSeries or geometric object. ",
                         "Note geopandas.sjoin() returns all joined pairs, i.e., the return could be one-to-many. E.g., the intersection result of a polygon with two points inside it contains two rows; in each row, the polygon attribute is the same. If you need of extract the polygons intersecting with the points, please remember to remove the duplicated rows in the results.",
-                        #
+                        "Verify the assembled program converts all datetime-like columns to ISO 8601 string (UTC) with dtype=object before returning.",
+                        timestamp_output_rules,
                         ]
 
 #--------------- constants for direct program review prompt generation  ---------------
@@ -507,6 +532,8 @@ direct_review_requirement = [
                         "Note geopandas.sjoin() returns all joined pairs, i.e., the return could be one-to-many. E.g., the intersection result of a polygon with two points inside it contains two rows; in each row, the polygon attribute is the same. If you need of extract the polygons intersecting with the points, please remember to remove the duplicated rows in the results.",
                         "FIPS or GEOID columns may be str type with leading zeros (digits: state: 2, county: 5, tract: 11, block group: 12), or integer type without leading zeros. Thus, when joining they, you can convert the integer colum to str type with leading zeros to ensure the success.",
                         "If you need to make a map and the map size is not given, set the map size to 15*10 inches.",
+                        "Confirm that final outputs avoid pandas.Timestamp/numpy.datetime64 and use ISO 8601 strings (UTC) with dtype=object.",
+                        timestamp_output_rules,
                         ]
 
 
