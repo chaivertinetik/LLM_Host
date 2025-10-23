@@ -9,91 +9,100 @@ import configparser
 
 
 
-# --- Robust ArcGIS/GeoJSON fetch policy (used by all prompts) ---
+# --- Robust ArcGIS/GeoJSON fetch policy helper --------------------------------
 arcgis_fetch_policy = r"""
-    When loading a URL with GeoPandas, if gpd.read_file(URL) fails OR the server returns non-GeoJSON (e.g., HTML, login, transfer-limit or error JSON), recover automatically:
+When loading a URL with GeoPandas, if gpd.read_file(URL) fails OR the server returns non-GeoJSON (HTML/login/error JSON),
+recover automatically:
 
-    1) Probe:
-    - GET the URL with requests (timeout=60). If Content-Type is not JSON/GeoJSON, or text starts with "<" or contains "<html" in the first 500 chars, treat as non-GeoJSON.
+1) Probe:
+- GET the URL with requests (timeout=60). If Content-Type is not JSON/GeoJSON, or text starts with "<" or contains "<html"
+  in the first 500 chars, treat as non-GeoJSON.
 
-    2) Fallback (same upstream URL):
-    - If the query has "f=geojson", re-try with "f=json".
-    - If no "f=" present, try as-is; if still non-JSON, append "f=json".
-    - Convert ArcGIS JSON to GeoJSON yourself:
-        • Point: {"type":"Point","coordinates":[x,y]}
-        • Polygon: {"type":"Polygon","coordinates": rings}
-        • Polyline: {"type":"MultiLineString","coordinates": paths}
-    - If response signals paging (e.g., exceededTransferLimit), paginate via resultOffset/resultRecordCount until complete.
-    - Use outSR=4326 in fallback so results are valid GeoJSON; set gdf.crs = "EPSG:4326".
+2) Fallback (same upstream URL):
+- If the query has "f=geojson", re-try with "f=json".
+- If no "f=" present, try as-is; if still non-JSON, append "f=json".
+- Convert ArcGIS JSON to GeoJSON yourself:
+    • Point:    {"type":"Point","coordinates":[x,y]}
+    • Polygon:  {"type":"Polygon","coordinates": rings}
+    • Polyline: {"type":"MultiLineString","coordinates": paths}
+- If response signals paging (e.g., exceededTransferLimit), paginate via resultOffset/resultRecordCount on layer /query endpoints until complete.
+- Use outSR=4326 in fallback so results are valid GeoJSON; set gdf.crs = "EPSG:4326".
 
-    3) Retries & diagnostics:
-    - Retry transient 5xx/429 with backoff (1s, 2s, 4s, up to 4 attempts).
-    - On failure, log first 400 chars of the body and Content-Type.
+3) Retries & diagnostics:
+- Retry transient 5xx/429 with backoff (1s, 2s, 4s, up to 4 attempts).
+- On failure, log first 400 chars of the body and Content-Type.
 
-    4) Contract:
-    - Always return a valid GeoDataFrame (possibly empty). Do not crash the program.
+4) Contract:
+- Always return a valid GeoDataFrame (possibly empty). Do not crash the program.
 
-    Reference helper the model may write when needed:
+Reference helper the model may write when needed:
 
-    def safe_read_arcgis(url: str):
-        import requests, geopandas as gpd
-        from shapely.geometry import shape
+def safe_read_arcgis(url: str):
+    import requests, geopandas as gpd
+    from shapely.geometry import shape
 
-        def _looks_like_html(text): 
-            t = text.lstrip().lower()
-            return t.startswith("<") or "<html" in t[:500]
+    def _looks_like_html(text):
+        t = text.lstrip().lower()
+        return t.startswith("<") or "<html" in t[:500]
 
-        try:
-            # First try the normal path (fast path)
-            return gpd.read_file(url)
-        except Exception:
-            pass
+    # Try fast path
+    try:
+        return gpd.read_file(url)
+    except Exception:
+        pass
 
-        # Probe
-        r = requests.get(url, timeout=60)
-        ct = r.headers.get("Content-Type", "").lower()
-        text = r.text
+    r = requests.get(url, timeout=60)
+    ct = r.headers.get("Content-Type", "").lower()
+    text = r.text
 
-        # Decide fallback URL
-        fu = url
-        if "json" not in ct or _looks_like_html(text):
-            if "f=geojson" in fu.lower():
-                fu = fu.replace("f=geojson", "f=json")
-            elif "f=" not in fu.lower():
-                fu = fu + ("&" if "?" in fu else "?") + "f=json"
+    fu = url
+    if "json" not in ct or _looks_like_html(text):
+        if "f=geojson" in fu.lower():
+            fu = fu.replace("f=geojson", "f=json")
+        elif "f=" not in fu.lower():
+            fu = fu + ("&" if "?" in fu else "?") + "f=json"
 
-        # Pull pages if needed
-        all_features = []
-        offset = 0
-        page_size = 2000
-        while True:
-            rr = requests.get(fu, params={"outSR": 4326, "resultOffset": offset, "resultRecordCount": page_size}, timeout=60)
-            ctt = rr.headers.get("Content-Type", "").lower()
-            if "json" not in ctt:
-                raise RuntimeError(f"Non-JSON from upstream (Content-Type={ctt}): {rr.text[:400]}")
-            data = rr.json()
-            if "error" in data:
-                raise RuntimeError(f"ArcGIS error: {data['error']}")
-            feats = data.get("features", [])
-            for f in feats:
-                attrs = f.get("attributes", {}) or {}
-                geom = f.get("geometry") or {}
-                if "x" in geom and "y" in geom:
-                    gj = {"type": "Point", "coordinates": [geom["x"], geom["y"]]}
-                elif "rings" in geom:
-                    gj = {"type": "Polygon", "coordinates": geom["rings"]}
-                elif "paths" in geom:
-                    gj = {"type": "MultiLineString", "coordinates": geom["paths"]}
-                else:
-                    continue
-                all_features.append({"type":"Feature","geometry":gj,"properties":attrs})
-            if not data.get("exceededTransferLimit"):
-                break
-            offset += page_size
+    # Only paginate if this looks like a Feature/MapServer layer query
+    paginate = "/query" in fu.lower()
 
-        gdf = gpd.GeoDataFrame.from_features(all_features, crs="EPSG:4326")
-        return gdf
-    """
+    all_features = []
+    offset = 0
+    page_size = 2000
+
+    while True:
+        params = {"outSR": 4326}
+        if paginate:
+            params.update({"resultOffset": offset, "resultRecordCount": page_size})
+
+        rr = requests.get(fu, params=params, timeout=60)
+        ctt = rr.headers.get("Content-Type", "").lower()
+        if "json" not in ctt:
+            raise RuntimeError(f"Non-JSON from upstream (Content-Type={ctt}): {rr.text[:400]}")
+        data = rr.json()
+        if "error" in data:
+            raise RuntimeError(f"ArcGIS error: {data['error']}")
+
+        feats = data.get("features", [])
+        for f in feats:
+            attrs = f.get("attributes") or {}
+            geom = f.get("geometry") or {}
+            if "x" in geom and "y" in geom:
+                gj = {"type": "Point", "coordinates": [geom["x"], geom["y"]]}
+            elif "rings" in geom:
+                gj = {"type": "Polygon", "coordinates": geom["rings"]}
+            elif "paths" in geom:
+                gj = {"type": "MultiLineString", "coordinates": geom["paths"]}
+            else:
+                continue
+            all_features.append({"type":"Feature","geometry":gj,"properties":attrs})
+
+        if not paginate or not data.get("exceededTransferLimit"):
+            break
+        offset += page_size
+
+    return gpd.GeoDataFrame.from_features(all_features, crs="EPSG:4326")
+"""
+
 
 # --- Data location priority policy (referenced by multiple prompt blocks) ---
 data_location_priority_rules = r"""
@@ -303,7 +312,10 @@ If joining FIPS or GEOID, need to fill the leading zeros (digits: state: 2, coun
  # "Show a progressbar (e.g., tqdm in Python) if loop more than 200 times, also add exception handling for loops to make sure the loop can run.",
 """
 
-
+operation_requirement += [
+    "When packaging any Python dict/list to JSON, ensure pandas.Timestamp and numpy scalars serialize (use a default handler or pre-convert to ISO8601).",
+    "If a request asks for 'show_tree_id', return a DataFrame/Series of the matching Tree_ID values and keep geometry unchanged unless spatial filters are requested.",
+]
 
 
 

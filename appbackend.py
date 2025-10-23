@@ -62,23 +62,41 @@ class ClearRequest(BaseModel):
 # --------------------- ARC GIS UPDATE ---------------------
 
 def _json_default(obj):
-    # numpy → python
-    if isinstance(obj, (np.integer,)):
-        return int(obj)
-    if isinstance(obj, (np.floating,)):
-        return float(obj)
-    if isinstance(obj, (np.bool_,)):
-        return bool(obj)
-    # datetime-like → ISO 8601
-    if isinstance(obj, (datetime.datetime, datetime.date)):
+    # numpy → python scalars
+    if isinstance(obj, (np.integer,)):   return int(obj)
+    if isinstance(obj, (np.floating,)):  return float(obj)
+    if isinstance(obj, (np.bool_,)):     return bool(obj)
+    # pandas / datetime → ISO8601
+    if isinstance(obj, (pd.Timestamp, datetime.datetime, datetime.date)):
+        # Strip tz to plain ISO8601 (ArcGIS is picky); adjust if you need tz-aware
         return obj.isoformat()
-    # pandas Timestamp/NaT
-    if isinstance(obj, pd.Timestamp):
-        return obj.isoformat()
-    if obj is pd.NaT:
-        return None
-    # safest fallback
+    # pandas NaT
+    try:
+        if obj is pd.NaT:
+            return None
+    except Exception:
+        pass
     return str(obj)
+
+def json_dumps_safe(obj, **kwargs) -> str:
+    """Always use this when serializing anything that might contain pandas/numpy/datetime."""
+    return _json.dumps(obj, default=_json_default, **kwargs)
+
+def dataframe_records_json_safe(df: pd.DataFrame) -> str:
+    if df is None or df.empty:
+        return "[]"
+    df2 = df.copy()
+    for col in df2.columns:
+        if pd.api.types.is_datetime64_any_dtype(df2[col]):
+            try:
+                # drop tz if present, then ISO
+                if getattr(df2[col].dt, "tz", None) is not None:
+                    df2[col] = df2[col].dt.tz_convert(None)
+                df2[col] = df2[col].dt.tz_localize(None).dt.isoformat()
+            except Exception:
+                df2[col] = df2[col].astype(str)
+    return json_dumps_safe(df2.to_dict(orient="records"))
+
 
 def _sanitize_value(v):
     # NaNs/NaT → None
@@ -510,7 +528,7 @@ def post_features_to_layer(gdf, target_url, project_name, batch_size=800):
 
     add_url = sanitise_add_url(target_url)
     headers = {"Content-Type": "application/x-www-form-urlencoded"}
-    allowed_fields = {"Health", "Tree_ID", "Species"}
+    allowed_fields = {"Health", "Tree_ID", "Species","Health_Level"}
 
     if gdf is None or gdf.empty:
         logger.warning("Nothing to push: input GeoDataFrame is None/empty.")
@@ -883,7 +901,7 @@ def to_gdf(maybe_gdf):
         # Try stringified GeoJSON
         if isinstance(maybe_gdf, str):
             logger.debug("Input is a string, attempting JSON load.")
-            s = s = maybe_gdf.strip()
+            s = maybe_gdf.strip()
             if not s:
                 logger.debug("Input string is empty after stripping.")
                 return None
