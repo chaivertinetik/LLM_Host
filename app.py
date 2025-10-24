@@ -94,8 +94,13 @@ async def process_request(request_data: RequestData):
             full_context = build_conversation_prompt(reasoning_prompt, history) 
             
             try:    
-                reasoning_response = agent.run(full_context)
-                
+                # reasoning_response = agent.run(full_context)
+                response = agent.invoke({
+                    "messages": [{"role": "user", "content": full_context}]
+                })
+
+
+                reasoning_response = response["messages"][-1]["content"]
                 combined_message = f"{message}\n\nAdditional Analysis:\n{reasoning_response}"
             except Exception as e: 
                 combined_message= message
@@ -150,7 +155,13 @@ async def process_request(request_data: RequestData):
             return {"status": "completed", "message": "Request not understood as a GIS task."}
 
     elif do_info: 
-        response = agent.run(full_context)
+        response = agent.invoke({
+                    "messages": [{"role": "user", "content": full_context}]
+        })
+
+
+                
+        # response = agent.run(full_context)
         if isinstance(response, dict):
             content = response.get("response", response)
         else:
