@@ -12,6 +12,9 @@ from google.oauth2.service_account import Credentials
 
 
 
+
+
+
 # --------------------- SETUP and INIT---------------------
 
 google_creds = os.environ.get("GOOGLE_CREDENTIALS")
@@ -40,4 +43,6 @@ db = firestore.Client(project="disco-parsec-444415-c4", credentials=credentials)
 parser = JsonOutputParser()
 rag_llm = ChatGoogleGenerativeAI(model="gemini-2.0-flash-001", temperature=0)
 hf_token = os.environ.get("HF_TOKEN")
-emd_model = SentenceTransformer('all-MiniLM-L6-v2', use_auth_token=hf_token)
+emd_model = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2",token=hf_token)
+
+# emd_model = SentenceTransformer('all-MiniLM-L6-v2', use_auth_token=hf_token)
