@@ -162,10 +162,19 @@ async def process_request(request_data: RequestData):
 
                 
         # response = agent.run(full_context)
-        if isinstance(response, dict):
-            content = response.get("response", response)
+        if isinstance(response, dict) and "messages" in response:
+            messages = response["messages"]
+            if messages and isinstance(messages[-1], dict) and "content" in messages[-1]:
+                content = messages[-1]["content"]
+            else:
+                content = str(response)
         else:
-            content = response
+            content = str(response)
+
+        # if isinstance(response, dict):
+        #     content = response["messages"][-1]["content"]
+        # else:
+        #     content = response
 
         history.append({'role': 'assistant', 'content': user_task})
         history.append({'role': 'assistant', 'content': content})

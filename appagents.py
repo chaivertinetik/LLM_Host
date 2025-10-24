@@ -17,6 +17,7 @@ from langgraph.prebuilt import create_react_agent
 # from langchain.agents.agent_types import AgentType
 # from langchain.prompts import PromptTemplate
 from langchain_core.language_models import LLM
+from langchain_core.messages import AIMessage
 from typing import List, Optional, Any 
 from pydantic import PrivateAttr
 from vertexai.generative_models import GenerativeModel
@@ -26,8 +27,9 @@ from LLM_Heroku_Kernel import Solution
 
 
 
-# --------------------- GIS CODE AGENT WRAPPER ---------------------
 
+# --------------------- GIS CODE AGENT WRAPPER ---------------------
+    
 class GeminiLLMWrapper(LLM):
     _gemini_llm: Any = PrivateAttr()
     _tools: Optional[List[Any]] = PrivateAttr(default=None)
@@ -36,9 +38,10 @@ class GeminiLLMWrapper(LLM):
         super().__init__(**kwargs)
         self._gemini_llm = gemini_llm
 
-    def _call(self, prompt: str, stop: Optional[List[str]] = None, **kwargs: Any) -> str:
-        # You can use self._tools if needed here
-        return self._gemini_llm.generate_content(prompt).text
+    def _call(self, prompt: str, stop=None, **kwargs: Any) -> str:
+        # Run the Gemini model
+        raw_response = self._gemini_llm.generate_content(prompt)
+        return AIMessage(content=raw_response.text)  
 
     def bind_tools(self, tools: List[Any]) -> "GeminiLLMWrapper":
         self._tools = tools
@@ -50,7 +53,7 @@ class GeminiLLMWrapper(LLM):
 
     @property
     def _identifying_params(self) -> dict:
-        return {"model": "gemini"}
+        return {"model": "gemini"}    
     
 # === Create Gemini model ===
 model = GenerativeModel("gemini-2.0-flash-001")
