@@ -244,7 +244,8 @@ operation_requirement = [
     "If using GeoPandas to load a zipped ESRI shapefile from a URL, the correct method is \"gpd.read_file(URL)\". DO NOT download and unzip the file.",
     # "Generate descriptions for input and output arguments.",
     "Ensure all comments and descriptions use # and are single line.",
-    "If the user asks about ash trees also look at the data fields containing 'Fraxinus excelsior', for example species called 'Fraxinus excelsior Altena', 'Fraxinus excelsior Pendula' ..should all be factored in when qureying ash trees, and be careful that the data is case sensitive.",
+    "If the user asks about ash trees also look for 'Fraxinus excelsior' while filtering, for example species called 'Fraxinus excelsior Altena', 'Fraxinus excelsior Pendula' ..should all be factored in when qureying ash trees, and be careful that the data is case sensitive.",
+    "A reliable approach to filter for ash trees is by: ash_trees_gdf = tree_points_gdf[tree_points_gdf['Species'].str.lower().str.contains('ash|fraxinus excelsior', na=False)]",
     "You can find neighbourhood info ('Cardiff East', 'Cardiff North'..) under 'neighbourhood' and 'name1' has specific locations like 'Castle Golf Course', 'Whitchurch High School', for wards (like 'Riverside', 'Cathays') look under 'ward', for areas based on their role ('civic spaces', 'green corridors', 'natural and semi-natural greenspaces', 'water') look under 'function_'.",
     "When accessing green spaces data and you want specific categories like 'Bowling Green', 'Religious Grounds' use the 'function_' column header and when accessing the building data and you need categories like 'Education', 'Emergency Service', and 'Religious Buildings' use the 'BUILDGTHEM' column header and for Streets/Roads use the 'name1' header for streets like Clumber Road East.",
     "You need to receive the data from the functions, DO NOT load in the function if other functions have loaded the data and returned it in advance.",
@@ -550,6 +551,7 @@ sampling_data_requirement = [
  
                         #
                         ]
+
 
 
 
