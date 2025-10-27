@@ -38,10 +38,11 @@ class GeminiLLMWrapper(LLM):
         super().__init__(**kwargs)
         self._gemini_llm = gemini_llm
 
-    def _call(self, prompt: str, stop=None, **kwargs: Any) -> str:
+    def _call(self, prompt: str, stop=None, **kwargs) -> str:
         # Run the Gemini model
         raw_response = self._gemini_llm.generate_content(prompt)
-        return AIMessage(content=raw_response.text)  
+        print("DEBUG type:", type(raw_response.text), "value:", raw_response.text)
+        return raw_response.text if isinstance(raw_response.text, str) else str(raw_response.text) 
 
     def bind_tools(self, tools: List[Any]) -> "GeminiLLMWrapper":
         self._tools = tools
