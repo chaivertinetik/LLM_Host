@@ -183,7 +183,8 @@ graph_requirement = [
                         'The first operations are data loading or collection, and the output of the last operation is the final answer to the task.'
                         'Operation nodes need to connect via output data nodes, DO NOT connect the operation node directly.',
                         'The node attributes include: 1) node_type (data or operation), 2) data_path (data node only, set to "" if not given ), and description. E.g., {‘name’: “County boundary”, “data_type”: “data”, “data_path”: “D:\Test\county.shp”,  “description”: “County boundary for the study area”}.',
-                        'If the user asks about the trees lost in a storm you need to compare the tree ids that survived before and after the storm from the two respective data sources',
+                        'If the query is about showing all the trees in the site, dont filter for ash trees, for example: Show me all the trees, should look for all the available data points and not just ash trees.',
+                        'If the user asks about the trees lost in a storm you need to compare the tree ids that survived before and after the storm from the two respective data sources.',
                         #'To calculate volume of wood use "Height" * "Shape__Area"',
                         'To calculate the volume of wood fit a Fit a regression species model using this allometric equation: log(DBH) = β0 + β1·log(height) + β2·log(crown area). Then use DBH to find basal area, Basal area = (π/4) × (DBH)^2 and volume = form factor (default:0.42) × basal area × tree height and display unit (cubic metre)', 
                         'The connection between a node and an operation node is an edge.', 
@@ -278,8 +279,7 @@ operation_requirement = [
     # "When joining tables, convert the involved columns to string type without leading zeros. ",
     # "When doing spatial joins, remove the duplicates in the results. Or please think about whether it needs to be removed.",
     # "If using colorbar for GeoPandas or Matplotlib visulization, set the colorbar's height or length as the same as the plot for better layout.",
-    "Graphs or maps need to show the unit, legend, or colorbar.",
-    "Keep the needed table columns for the further steps.",
+  
     "Remember the variable, column, and file names used in ancestor functions when using them, such as joining tables or calculating.",
     # "When crawl the webpage context to ChatGPT, using Beautifulsoup to crawl the text only, not all the HTML file.",
     "If using GeoPandas for spatial analysis, when doing overlay analysis, carefully think about use Geopandas.GeoSeries.intersects() or geopandas.sjoin().",
@@ -348,10 +348,9 @@ assembly_requirement = ['You can think step by step. ',
                     f"Please generate Python code with consistent indentation using 4 spaces per indentation level. Ensure that all code blocks, including functions, loops, and conditionals, are properly indented to reflect their logical structure. Avoid using tabs or inconsistent spacing.",
                     f"The final result of the assembly program should return a geodataframe that matches the criteria given by the user or the output summary if the user wants a text response and not a visual output.",
                     f"The geoJSON file has the following properties: 'Health' (either 'Healthy' or 'Unhealthy'), 'Tree_ID', 'Species' ('Ash', 'Field Maple', 'Oak'), 'SURVEY_DATE' (format: Wed, 11 Sep 2024 00:00:00 GMT), 'Height', 'Shape__Area', 'Shape__Length'.",
-                    f"Save final maps, if any. If use matplotlib, the function is: matplotlib.pyplot.savefig(*args, **kwargs).",
                     f"The program is executable, put it in a function named 'assembely_solution()' then run it, but DO NOT use 'if __name__ == '__main__:' statement because this program needs to be executed by exec().",
                     "The program should assign the final result by calling 'result = assembely_solution()' after defining the function, so the result is stored in a variable named 'result' in the global namespace.",
-                    "The result variable in most cases will store a geodataframe (becuase I want to export it as GeoJSON in my workflow) if the user wants to see trees based on a condition or if the user asks a question like what volume of trees were lost, the result variable should include the text response of whatever output the code generates (volume of trees in this case).",
+                    "The result variable will either be an output string or store a geodataframe (becuase I want to export it as GeoJSON in my workflow). For example if the user wants to see specific trees based on a condition or other map based geospatial queries (like show me the ash trees, or show me all the trees in the site) it should store the geodataframe else if the user asks a numeric or text question like what volume of trees were lost, how many ash trees are there, the result variable should include the text response of whatever output the code generates (volume of trees in this case or number of trees not the geodataframe).",
                     "When defining functions, do not set a default value for a parameter using a variable (like 'tree_gdf=tree_gdf') unless that variable is already defined at the time the function is defined. Instead, require the value to be passed when the function is called.",
                     "Use the built-in functions or attribute, if you do not remember, DO NOT make up fake ones, just use alternative methods.",
                     # "Drop rows with NaN cells, i.e., df.dropna(),  before using Pandas or GeoPandas columns for processing (e.g. join or calculation).",
@@ -551,6 +550,7 @@ sampling_data_requirement = [
  
                         #
                         ]
+
 
 
 
