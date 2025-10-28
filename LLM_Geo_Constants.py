@@ -253,7 +253,7 @@ operation_requirement = [
     "Use the latest Python modules and methods.",
     "The 'Health' of the tree indicates if they are healthy or unhealthy, and if the user asks for the specific Health_Level (data available for Ash trees) the numbers (1,2,3,4) indicate the finer level of how healthy the trees are. Also note level 1 trees are categorized as Healthy and 2,3,4 are Unhealthy.",
     "If the 'Health' is empty or doesn't have the right data, look for Health levels in the 'Condition' column: you can find 'ADB Class 1 100-76 crown remains', 'ADB Class 2 75-51 crown remains', 'ADB Class 3 50 -26 crown remains', 'ADB Class 4 25 - 0 crown remaining' which are level 1, level 2, level 3 and level 4 health trees. Level 1 is healthy and level 2-4 is unhealthy.",
-    "The python code can follow something like: healthy_trees = gdf[(gdf['Health'].notnull() & gdf['Health'].str.lower().str.contains('1|healthy', na=False)) | (gdf['Condition'].str.lower().str.contains('adb class 1 100-76 crown remains', na=False))]",
+    "The python code can follow something like: healthy_trees = gdf[(gdf['Health'].notnull() & gdf['Health'].str.lower().str.contains('1|healthy', na=False)) | (gdf['Condition'].notnull() & gdf['Condition'].str.lower().str.contains('adb class 1 100-76 crown remains', na=False))]",
     "When doing spatial analysis, convert the involved spatial layers into the same map projection, if they are not in the same projection.",
     # "DO NOT reproject or set spatial data(e.g., GeoPandas Dataframe) if only one layer involved.",
     "Map projection conversion is only conducted for spatial data layers such as GeoDataFrame. DataFrame loaded from a CSV file does not have map projection information.",
@@ -553,6 +553,7 @@ sampling_data_requirement = [
  
                         #
                         ]
+
 
 
 
