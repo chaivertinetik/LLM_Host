@@ -1424,6 +1424,191 @@ def _paginate_urls_for_aoi(layer_url: str, aoi: dict, out_fields: str = "*", whe
     return urls
 
 
+def _supports_distinct(layer_url: str) -> bool:
+    """Check if the layer supports returnDistinctValues."""
+    try:
+        meta = _session.get(_sanitise_layer_url(layer_url) + "?f=json", timeout=20).json()
+        return bool(meta.get("advancedQueryCapabilities", {}).get("supportsDistinct", False))
+    except Exception:
+        return False
+
+
+def _detect_numeric(values) -> bool:
+    """Heuristic: if >70% of non-null sample parse as float, treat as numeric."""
+    vals = [v for v in values if v is not None]
+    if not vals:
+        return False
+    sample = vals[: min(len(vals), 100)]
+    numeric = 0
+    for v in sample:
+        try:
+            float(v)
+            numeric += 1
+        except Exception:
+            pass
+    return (numeric / len(sample)) > 0.7
+
+
+def _distinct_values_via_service(
+    layer_url: str,
+    aoi: dict,
+    field: str,
+    where: str = "1=1",
+    max_rows: int = 200000
+) -> list[str]:
+    """
+    Use ArcGIS 'returnDistinctValues=true' on a single field, paging if supported.
+    Returns stringified unique values.
+    """
+    lyr = _sanitise_layer_url(layer_url)
+    wkid = fetch_crs(lyr) or 4326
+    aoi_proj = _reproject_aoi_to_wkid(aoi, wkid)
+
+    # layer caps & paging support
+    mrc = _get_layer_max_record_count(lyr)
+    page_size = max(1, min(mrc if isinstance(mrc, int) and mrc > 0 else 2000, 2000))
+    can_page = _supports_pagination(layer_url)
+
+    seen = set()
+    offset = 0
+    oid = _get_objectid_field(layer_url)
+
+    while True:
+        params = {
+            "where": where,
+            "geometry": _json.dumps(aoi_proj["geometry"], default=_json_default, separators=(",", ":")),
+            "geometryType": aoi_proj.get("geometryType", "esriGeometryPolygon"),
+            "spatialRel": "esriSpatialRelIntersects",
+            "returnDistinctValues": "true",
+            "outFields": field,
+            "orderByFields": field,  # stabilize scan
+            "f": "json",
+        }
+        if can_page:
+            params["resultRecordCount"] = page_size
+            params["resultOffset"] = offset
+
+        r = _session.post(f"{lyr}/query", data=params, timeout=40)
+        r.raise_for_status()
+        js = r.json()
+
+        feats = js.get("features") or []
+        if not isinstance(feats, list):
+            break
+
+        for feat in feats:
+            attrs = (feat.get("attributes") or {})
+            if field in attrs:
+                seen.add(str(attrs[field]))
+
+        if not can_page:
+            break
+
+        if len(feats) < page_size or len(seen) >= max_rows:
+            break
+        offset += page_size
+
+    return sorted(seen)
+
+
+def _sample_values_via_geojson(
+    layer_url: str,
+    aoi: dict,
+    field: str,
+    where: str = "1=1",
+    hard_cap: int = 500000
+) -> list[str]:
+    """
+    Fallback when distinct/paging not available: walk AOI-paginated GeoJSON URLs,
+    collect uniques from that one field. No cap for strings; numeric capped later.
+    """
+    uniques = set()
+    # Build page URLs; then override outFields to only the field
+    page_urls = _paginate_urls_for_aoi(layer_url, aoi, out_fields="*",
+                                       where=where)
+    # Force outFields=field on each page to keep payloads small
+    urls = []
+    for u in page_urls:
+        if re.search(r'(?<=[&?])outFields=', u):
+            u2 = re.sub(r'(?<=[&?])outFields=[^&]*', f"outFields={_q(field)}", u)
+        else:
+            sep = '&' if '?' in u else '?'
+            u2 = f"{u}{sep}outFields={_q(field)}"
+        urls.append(u2)
+
+    for u in urls:
+        try:
+            r = _session.get(u, timeout=60)
+            r.raise_for_status()
+            if "json" not in (r.headers.get("Content-Type") or "").lower():
+                continue
+            fc = r.json()
+            for feat in (fc.get("features") or []):
+                props = feat.get("properties") or feat.get("attributes") or {}
+                if field in props:
+                    uniques.add(str(props[field]))
+            if len(uniques) >= hard_cap:
+                break
+        except Exception:
+            continue
+
+    return sorted(uniques)
+
+
+def _extract_schema_for_layer(
+    project_name: str,
+    layer_url: str,
+    where: str = "1=1",
+    per_field_numeric_limit: int = 30
+) -> dict:
+    """
+    Returns { field_name: [unique_val_str, ...] } for AOI-filtered features.
+    - String-like fields: keep ALL unique values (no limit).
+    - Numeric-like fields: cap to `per_field_numeric_limit` values.
+    Skips geometry fields.
+    """
+    lyr = _sanitise_layer_url(layer_url)
+    wkid = fetch_crs(lyr) or 4326
+    aoi_proj = _reproject_aoi_to_wkid(get_project_aoi_geometry(project_name), wkid)
+
+    fields = _get_layer_columns(layer_url)
+    if not fields:
+        return {}
+
+    # drop obvious geometry/system fields
+    skip = {"shape", "geometry", "globalid", "objectid"}
+    fields = [f for f in fields if (f or "").lower() not in skip]
+
+    use_distinct = _supports_distinct(layer_url)
+    schema: dict[str, list[str]] = {}
+
+    for fld in fields:
+        try:
+            vals = (
+                _distinct_values_via_service(layer_url, aoi_proj, fld, where)
+                if use_distinct else
+                _sample_values_via_geojson(layer_url, aoi_proj, fld, where)
+            )
+        except Exception:
+            vals = []
+
+        # Numeric capping (strings remain unlimited)
+        if _detect_numeric(vals):
+            vals = vals[:per_field_numeric_limit]
+
+        schema[fld] = vals
+
+    return schema
+
+
+def _schema_string_for_prompt(schema: dict, max_total_chars: int | None = None) -> str:
+    """
+    Build the exact phrase you requested. If max_total_chars is None, do not truncate.
+    """
+    s = _json.dumps(schema, ensure_ascii=False)
+    if isinstance(max_total_chars, int) and max_total_chars > 0 and len(s) > max_total_chars:
+        s = s[: max_total_chars - 3] + "..."
+    return f"{s} is the schema and example of unique values from the geospatial data, please use this to constrain queries or code."
 
 def _get_layer_columns(layer_url: str, timeout: int = 20) -> list[str]:
     """
@@ -1541,11 +1726,19 @@ def make_project_data_locations(project_name: str, include_seasons: bool, attrs:
             _cols = _get_layer_columns(layer_url)
             _cols_str = _format_columns_inline(_cols)
     
+            # NEW: schema with unlimited strings + 30-cap numerics
+            _schema = _extract_schema_for_layer(project_name, layer_url, where="1=1", per_field_numeric_limit=30)
+            _schema_str = _schema_string_for_prompt(_schema, max_total_chars=None)  # no truncation
+    
             for idx, url in enumerate(page_urls, start=1):
                 suffix = f" (page {idx}/{len(page_urls)})" if len(page_urls) > 1 else ""
                 entry = f"{label}{suffix}: {url}"
-                if _cols_str and idx == 1:  # attach columns to first page line only
-                    entry += f"\n{_cols_str}"
+                if idx == 1:
+                    if _cols_str:
+                        entry += f"\n{_cols_str}"
+                    # attach schema text under the columns on first page
+                    entry += f"\n  schema: {_schema_str}"
+    
                 if insert_at is None or insert_at < 0:
                     data_locations.append(entry)
                 else:
@@ -1554,6 +1747,7 @@ def make_project_data_locations(project_name: str, include_seasons: bool, attrs:
                     insert_at += 1  # keep subsequent pages in order
         except Exception as ex:
             logger.error(f"Failed to add data location for {label_prefix}: {ex}")
+
 
 
 
