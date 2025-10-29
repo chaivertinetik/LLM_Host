@@ -1317,6 +1317,178 @@ def _load_extra_locations_yaml(path: str) -> Dict[str, Any]:
         # Be defensive: bad YAML should not break the app
         return {}
 
+def _supports_pagination(layer_url: str) -> bool:
+    try:
+        meta = _session.get(_sanitise_layer_url(layer_url) + "?f=json", timeout=20).json()
+        return bool(meta.get("advancedQueryCapabilities", {}).get("supportsPagination", False))
+    except Exception:
+        return False
+
+def _get_objectid_field(layer_url: str) -> str:
+    try:
+        meta = _session.get(_sanitise_layer_url(layer_url) + "?f=json", timeout=20).json()
+        # prefer objectIdField if present
+        if meta.get("objectIdField"):
+            return meta["objectIdField"]
+        # else scan fields
+        for f in meta.get("fields", []):
+            if f.get("type") == "esriFieldTypeOID":
+                return f.get("name")
+    except Exception:
+        pass
+    return "OBJECTID"
+
+def _count_features_in_aoi(layer_url: str, aoi: dict, where: str = "1=1", timeout: int = 30) -> int:
+    """Return AOI-filtered count using returnCountOnly=true (AOI already reprojected to layer CRS)."""
+    lyr = _sanitise_layer_url(layer_url)
+    aoi_proj = _reproject_aoi_to_wkid(aoi, fetch_crs(lyr) or 4326)
+    geometry = _json.dumps(aoi_proj["geometry"], default=_json_default, separators=(",", ":"))
+    params = {
+        "where": where,
+        "geometry": geometry,
+        "geometryType": aoi_proj.get("geometryType", "esriGeometryPolygon"),
+        "spatialRel": "esriSpatialRelIntersects",
+        "returnCountOnly": "true",
+        "f": "json",
+    }
+    try:
+        r = _session.post(f"{lyr}/query", data=params, timeout=timeout)
+        r.raise_for_status()
+        js = r.json()
+        return int(js.get("count", 0))
+    except Exception:
+        return 0
+
+def _paginate_urls_for_aoi(layer_url: str, aoi: dict, out_fields: str = "*", where: str = "1=1") -> list[str]:
+    """
+    Build one or many AOI-filtered URLs that together return ALL features.
+    Uses resultOffset/resultRecordCount if supported; else falls back to OBJECTID windows.
+    """
+    lyr = _sanitise_layer_url(layer_url)
+    wkid = fetch_crs(lyr) or 4326
+    aoi_proj = _reproject_aoi_to_wkid(aoi, wkid)
+
+    # layer caps
+    mrc = _get_layer_max_record_count(lyr)
+    page_size = max(1, min(mrc if isinstance(mrc, int) and mrc > 0 else 2000, 2000))
+
+    total = _count_features_in_aoi(layer_url, aoi_proj, where=where)
+    if total <= page_size:
+        # single URL (your current behavior) + stable order
+        base = _build_spatial_query_url(layer_url, aoi_proj, where=where, out_fields=out_fields)
+        return [f"{base}&orderByFields={_q(_get_objectid_field(layer_url) + ' ASC')}"]
+
+    urls: list[str] = []
+    if _supports_pagination(layer_url):
+        # resultOffset paging
+        oid = _get_objectid_field(layer_url)
+        for offset in range(0, total, page_size):
+            base = _build_spatial_query_url(layer_url, aoi_proj, where=where, out_fields=out_fields)
+            page = f"{base}&orderByFields={_q(oid + ' ASC')}&resultRecordCount={page_size}&resultOffset={offset}"
+            urls.append(page)
+        return urls
+
+    # Fallback: OBJECTID windowing (for very old services)
+    oid = _get_objectid_field(layer_url)
+    # get all OIDs (IDs only) and window locally
+    try:
+        # AOI-filtered OIDs
+        geom = _json.dumps(aoi_proj["geometry"], default=_json_default, separators=(",", ":"))
+        params = {
+            "where": where,
+            "geometry": geom,
+            "geometryType": aoi_proj.get("geometryType", "esriGeometryPolygon"),
+            "spatialRel": "esriSpatialRelIntersects",
+            "returnIdsOnly": "true",
+            "f": "json",
+        }
+        r = _session.post(f"{lyr}/query", data=params, timeout=40)
+        r.raise_for_status()
+        ids = r.json().get("objectIds") or []
+        ids = sorted(int(x) for x in ids)
+    except Exception:
+        ids = []
+
+    if not ids:
+        # fallback to single URL anyway
+        base = _build_spatial_query_url(layer_url, aoi_proj, where=where, out_fields=out_fields)
+        return [base]
+
+    # window by contiguous ranges of size page_size
+    for i in range(0, len(ids), page_size):
+        lo = ids[i]
+        hi = ids[min(i + page_size, len(ids)) - 1]
+        w = f"{where} AND {oid} BETWEEN {lo} AND {hi}"
+        base = _build_spatial_query_url(layer_url, aoi_proj, where=w, out_fields=out_fields)
+        urls.append(base)
+    return urls
+
+
+
+def _get_layer_columns(layer_url: str, timeout: int = 20) -> list[str]:
+    """
+    Return a list of column/field names for an ArcGIS Feature/MapServer layer.
+    Fast path: read metadata (fields[].name) from <layer_url>?f=json
+    Fallback: do a tiny GeoJSON query (1 record) and infer columns using GeoPandas.
+    Returns [] if not resolvable (e.g., ImageServer or non-feature endpoint).
+    """
+    try:
+        lu = _sanitise_layer_url(layer_url)
+    except Exception:
+        # Not a Feature/MapServer layer; no columns to show
+        return []
+
+    # --- Fast path: metadata fields[] ---
+    try:
+        r = _session.get(f"{lu}?f=json", timeout=timeout)
+        r.raise_for_status()
+        if "json" in (r.headers.get("Content-Type") or "").lower():
+            meta = r.json()
+            if isinstance(meta, dict) and isinstance(meta.get("fields"), list):
+                cols = [f.get("name") for f in meta["fields"] if isinstance(f, dict) and f.get("name")]
+                # Keep geometry indicator first if present (OBJECTID/GlobalID), then others sorted
+                # But avoid over-manipulation; just return in service order (usually stable & meaningful)
+                return cols or []
+    except Exception:
+        pass
+
+    # --- Fallback: 1-row GeoJSON read via GeoPandas ---
+    try:
+        # Minimal query that most ArcGIS layers accept
+        params = {
+            "where": "1=1",
+            "outFields": "*",
+            "f": "geojson",
+            "resultRecordCount": 1,
+            "outSR": 4326,
+        }
+        qurl = f"{lu}/query"
+        # Use requests to get a tiny FeatureCollection
+        rr = _session.get(qurl, params=params, timeout=timeout)
+        rr.raise_for_status()
+        if "json" not in (rr.headers.get("Content-Type") or "").lower():
+            return []
+        fc = rr.json()
+        if isinstance(fc, dict) and "features" in fc:
+            gdf = gpd.GeoDataFrame.from_features(fc)
+            return list(gdf.columns) if not gdf.empty else list((gdf.columns if hasattr(gdf, "columns") else []))
+    except Exception:
+        pass
+
+    return []
+
+
+def _format_columns_inline(cols: list[str], max_len: int = 600) -> str:
+    """
+    Return a single-line 'columns: a, b, c' string, trimmed if very long.
+    """
+    if not cols:
+        return ""
+    s = ", ".join(cols)
+    if len(s) > max_len:
+        s = s[: max_len - 3] + "..."
+    return f"  columns: {s}"
+
 def _iter_project_extra_entries(project_name: str, yaml_path: str) -> List[Dict[str, Any]]:
     """
     Merge default + project-specific entries. Later (project) entries come after defaults.
@@ -1359,21 +1531,31 @@ def make_project_data_locations(project_name: str, include_seasons: bool, attrs:
         if not layer_url:
             return
         try:
-            # AOI reprojected to THIS layer's CRS (no silent BNG/WGS84 forcing)
             aoi_layer_crs = get_aoi_in_layer_crs(project_name, layer_url)
-            logger.debug(f"[{label_prefix}] AOI geometry: {aoi_layer_crs.get('geometryType')}, inSR: {aoi_layer_crs.get('inSR')}")
-            url = _build_spatial_query_url(layer_url, aoi_layer_crs, out_fields='*')
             label = _label_for_layer(label_prefix, layer_url)
-            entry = f"{label}: {url}"
-            if insert_at is None or insert_at < 0:
-                data_locations.append(entry)
-            else:
-                # Bound the index safely
-                idx = min(insert_at, len(data_locations))
-                data_locations.insert(idx, entry)
-            logger.debug(f"Added data location: {entry}")
+    
+            # Build one or many URLs so ALL rows are retrievable
+            page_urls = _paginate_urls_for_aoi(layer_url, aoi_layer_crs, out_fields="*")
+    
+            # Columns once (no need to fetch for every page)
+            _cols = _get_layer_columns(layer_url)
+            _cols_str = _format_columns_inline(_cols)
+    
+            for idx, url in enumerate(page_urls, start=1):
+                suffix = f" (page {idx}/{len(page_urls)})" if len(page_urls) > 1 else ""
+                entry = f"{label}{suffix}: {url}"
+                if _cols_str and idx == 1:  # attach columns to first page line only
+                    entry += f"\n{_cols_str}"
+                if insert_at is None or insert_at < 0:
+                    data_locations.append(entry)
+                else:
+                    pos = min(insert_at, len(data_locations))
+                    data_locations.insert(pos, entry)
+                    insert_at += 1  # keep subsequent pages in order
         except Exception as ex:
             logger.error(f"Failed to add data location for {label_prefix}: {ex}")
+
+
 
     # Helper to add a raw, non-AOI URL (e.g., docs, tiles, WMS landing pages)
     def _add_raw(raw_url: str, label: str, insert_at: Optional[int] = None):
