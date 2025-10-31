@@ -266,6 +266,7 @@ operation_requirement = [
     "If the layer's CRS is projected (units in metres/feet), compute distances/areas directly in that CRS.",
     "If the layer's CRS is geographic (degrees, e.g., EPSG:4326), temporarily reproject to an appropriate local metric CRS ONLY for the numeric distance/area step, then reproject results back to the original CRS before output. Do not silently change the data CRS.",
     "Never force British National Grid or WGS84 unless the input layer is already using them.",
+    "Operate on full filtered results to preserve data completeness. Never use [0], .iloc[0], .head(1), or .sample(1) on filtered results unless a single item is explicitly requested or when the task requires processing a single record.", 
     "Always calculate distances between geometries in GeoPandas using .distance() after projecting the geometries to a projected CRS with metric units (e.g., EPSG:27700 or UTM).",
     "All spatial joins, overlays, and cross-layer operations must use layers that share the exact same CRS. Reproject one or both layers using .to_crs() as needed before performing the operation.",
     "Check the CRS of every GeoDataFrame before performing any spatial operation. If the CRS is geographic (e.g., EPSG:4326), reproject it to a metric-based CRS (e.g., EPSG:27700 or UTM). Never perform buffer, distance, or area calculations in a geographic CRS, as this will produce incorrect or empty results.",
@@ -553,6 +554,7 @@ sampling_data_requirement = [
  
                         #
                         ]
+
 
 
 
