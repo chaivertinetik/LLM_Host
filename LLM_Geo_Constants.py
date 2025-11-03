@@ -174,7 +174,7 @@ G.add_edge("load_tree_crown_shp", "tree_crown_gdf")
 """
 graph_requirement = [   
                         'Think step by step.',
-                        'When loading ArcGIS FeatureServer GeoJSON data, use a single request link that fetches all features possible—do not split requests into multiple nodes, pages, or resultOffset batches. If the GeoJSON link returns all features, load it in one step. Do not generate code to build or traverse paginated URLs, or divide loading into multiple nodes, unless specifically instructed due to API limits. Always prefer a single all-features GeoJSON request for simplicity and performance unless evidence shows you must paginate.',
+                        'When loading ArcGIS FeatureServer GeoJSON data, generate code that fetches the entire dataset via a single URL with all records included in the query. Use where=1=1&outFields=*&f=geojson or similar parameters to fetch all records as one GeoJSON response. Do not generate code that splits loading into multiple pages, URLs, or graph nodes by offset or pagination unless you detect an API flag exceededTransferLimit in the response. If this flag is set, implement pagination carefully and combine all pages internally without creating multiple nodes for each URL.',
                         'Steps and data (both input and output) form a graph stored in NetworkX. Disconnected components are NOT allowed.',
                         'Each step is a data process operation: the input can be data paths or variables, and the output can be data paths or variables.',
                         'There are two types of nodes: a) operation node, and b) data node (both input and output data). These nodes are also input nodes for the next operation node.',
@@ -554,6 +554,7 @@ sampling_data_requirement = [
  
                         #
                         ]
+
 
 
 
