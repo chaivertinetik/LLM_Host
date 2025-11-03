@@ -195,7 +195,6 @@ graph_requirement = [
                         'Ensure the location for saving the graph file is not commented out.',
                         'Put your reply into a Python code block, NO explanation or conversation outside the code block(enclosed by ```python and ```).',
                         'Note that GraphML writer does not support class dict or list as data values.',
-                        'You need spatial data (e.g., vector or raster) to make a map.',
                         #'Do not put the GraphML writing process as a step in the graph.',
                         'Keep the graph concise, DO NOT use too many operation nodes.',
                         'Ensure the code has **consistent 4-space indentation**, with no unexpected or extra indents. Avoid the use of tabs, as this can lead to indentation errors.',
@@ -353,7 +352,7 @@ assembly_requirement = ['You can think step by step. ',
                     f"The final result of the assembly program should return a geodataframe that matches the criteria given by the user or the output summary if the user wants a text response and not a visual output.",
                     f"The geoJSON file has the following properties: 'Health' (either 'Healthy' or 'Unhealthy'), 'Tree_ID', 'Species' ('Ash', 'Field Maple', 'Oak', 'Fraxinus excelsior Altena', '), 'SURVEY_DATE' (format: Wed, 11 Sep 2024 00:00:00 GMT), 'Height', 'Shape__Area', 'Shape__Length'.",
                     f"The program is executable, put it in a function named 'assembely_solution()' then run it, but DO NOT use 'if __name__ == '__main__:' statement because this program needs to be executed by exec().",
-                    "The program should assign the final result by calling 'result = assembely_solution()' after defining the function, so the result is stored in a variable named 'result' in the global namespace.",
+                    "The program should assign the final result by calling 'result = assembely_solution()' after defining the function, so the result is stored in a variable named 'result' in the global namespace. Ensure this variable isn't commented out.",
                     "The result variable will either be an output string or store a geodataframe (becuase I want to export it as GeoJSON in my workflow). For example if the user wants to see specific trees based on a condition or other map based geospatial queries (like show me the ash trees, or show me all the trees in the site) it should store the geodataframe else if the user asks a numeric or text question like what volume of trees were lost, how many ash trees are there, the result variable should include the text response of whatever output the code generates (volume of trees in this case or number of trees not the geodataframe).",
                     "When defining functions, do not set a default value for a parameter using a variable (like 'tree_gdf=tree_gdf') unless that variable is already defined at the time the function is defined. Instead, require the value to be passed when the function is called.",
                     "Use the built-in functions or attribute, if you do not remember, DO NOT make up fake ones, just use alternative methods.",
@@ -554,6 +553,7 @@ sampling_data_requirement = [
  
                         #
                         ]
+
 
 
 
