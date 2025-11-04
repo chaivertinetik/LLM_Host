@@ -174,7 +174,7 @@ G.add_edge("load_tree_crown_shp", "tree_crown_gdf")
 """
 graph_requirement = [   
                         'Think step by step.',
-                        'When loading ArcGIS FeatureServer GeoJSON data, generate code that fetches the entire dataset via a single URL with all records included in the query. Use where=1=1&outFields=*&f=geojson or similar parameters to fetch all records as one GeoJSON response. Do not generate code that splits loading into multiple pages, URLs, or graph nodes by offset or pagination unless you detect an API flag exceededTransferLimit in the response. If this flag is set, implement pagination carefully and combine all pages internally without creating multiple nodes for each URL.',
+                        'When loading ArcGIS FeatureServer GeoJSON data, generate code that initially attempts to fetch the entire dataset using a single query URL with parameters like where=1=1&outFields=*&f=geojson (no offsets or pagination). If the ArcGIS API response includes the "exceededTransferLimit": true flag, implement pagination internally within the same graph node by looping over multiple page requests asynchronously or sequentially to fetch all data pages and combine them into one unified dataset in memory. Do NOT create separate graph nodes or tasks for each page URL. Ensure all paginated data is handled transparently inside one loading operation before any processing steps and only one node or step is created for loading all pages.',
                         'Steps and data (both input and output) form a graph stored in NetworkX. Disconnected components are NOT allowed.',
                         'Each step is a data process operation: the input can be data paths or variables, and the output can be data paths or variables.',
                         'There are two types of nodes: a) operation node, and b) data node (both input and output data). These nodes are also input nodes for the next operation node.',
@@ -554,6 +554,7 @@ sampling_data_requirement = [
  
                         #
                         ]
+
 
 
 
