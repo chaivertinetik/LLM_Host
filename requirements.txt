@@ -52,6 +52,7 @@ earthengine-api
 sentence-transformers
 google-cloud-firestore
 statsmodels
+httpx[http2]
 
 
 
