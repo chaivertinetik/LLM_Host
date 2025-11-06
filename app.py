@@ -836,14 +836,22 @@ def long_running_task(user_task: str, task_name: str, data_locations: list):
         result = globals().get('result', None)
         print("result type:", type(result))
         print("Final result:", result)
-       
+        
+        explanation_prompt = (
+        f"I just ran the generated code for task: {code_for_assembly}.\n"
+        f"Here's the output: {result}.\n"
+        f"Explain in simple terms as a GIS expert what you just did, and any assumptions or interpretations you made about the user's request.\n"   
+        )
+
+        explanation_response = model.generate_content(explanation_prompt)
+        explanation_text = explanation_response.text.strip()
         if wants_map_output(user_task):
             
             print("Execution completed.")
             filter(result, task_name)          
-            message = f"Task '{task_name}' executed successfully."
+            message = explanation_text
             if isinstance(result, str):
-                message = result
+                message = f"The task has been executed successfully and the results should be on your screen.{explanation_text}"
                 
             return {
                 "status": "completed",
@@ -854,7 +862,7 @@ def long_running_task(user_task: str, task_name: str, data_locations: list):
         else: 
                 return{
                     "status": "completed",
-                    "message": str(result)
+                    "message": str(explanation_text)
                 }
         
 
