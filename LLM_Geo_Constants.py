@@ -13,7 +13,7 @@ import configparser
 graph_role = r'''A professional Geo-information scientist and programmer good at Python. You can read geoJSON files and depending on the task perform GIS operations. You have worked on Geographic information science more than 20 years, and know every detail and pitfall when processing spatial data and coding. You know well how to set up workflows for spatial analysis tasks. You have significant experence on graph theory, application, and implementation. You are also experienced on generating map using Matplotlib and GeoPandas.
 '''
 
-graph_task_prefix = r'The geoJSON file has the following properties like: "Health" (has either "Healthy","Unhealthy", or "1","2","3","4"), "Tree_ID", "Species" ("Ash", "Field Maple", "Oak", "Sitka Spruce", "Lodgepole Pine", "Japanese Larch"), "SURVEY_DATE" (format: Wed, 11 Sep 2024 00:00:00 GMT), "Height", "Shape__Area", "Shape__Length" and "Species_Conf" and "Health_Conf" are present only for 2025 data. The final goal is to return a GeoDataFrame containing the relevant data or text summary based on what the user wants. Generate a graph (data structure) only, whose nodes are (1) a series of consecutive steps and (2) data to solve this question: '
+graph_task_prefix = r'The geoJSON file has the following properties like: "Health" (has either "Healthy","Unhealthy"), "Health_Level" ("1","2","3","4"), "Tree_ID", "Species" ("Ash", "Field Maple", "Oak", "Sitka Spruce", "Lodgepole Pine", "Japanese Larch"), "SURVEY_DATE" (format: Wed, 11 Sep 2024 00:00:00 GMT), "Height", "Shape__Area", "Shape__Length" and "Species_Conf" and "Health_Conf" are present only for 2025 data. The final goal is to return a GeoDataFrame containing the relevant data or text summary based on what the user wants. Generate a graph (data structure) only, whose nodes are (1) a series of consecutive steps and (2) data to solve this question: '
 #update the task prefix to include the potential for text or show_tree_id based prompts and the tree height, area and find a way to give meta data to the prompt. 
 #For the demo case
 # graph_reply_exmaple = r"""
@@ -93,7 +93,7 @@ graph_requirement = [
 operation_role = r'''A professional Geo-information scientist and programmer good at Python. You can read geoJSON files and depending on the task perform GIS operations. You have worked on Geographic information science more than 20 years, and know every detail and pitfall when processing spatial data and coding. You know well how to design and implement a function that meet the interface between other functions. Yor program is always robust, considering the various data circumstances, such as column data types, avoiding mistakes when joining tables, and remove NAN cells before further processing. You have an good feeling of overview, meaning the functions in your program is coherent, and they connect to each other well, such as function names, parameters types, and the calling orders. You are also super experienced on generating maps using GeoPandas and Matplotlib.
 '''
 
-operation_task_prefix = r'The geoJSON file has the following properties like: "Health" (has either "Healthy","Unhealthy", or health levels "1","2","3","4"), "Tree_ID", "Species" ("Ash", "Field Maple", "Oak", "Sitka Spruce", "Lodgepole Pine", "Japanese Larch"), "SURVEY_DATE" (format: Wed, 11 Sep 2024 00:00:00 GMT), "Height", "Shape__Area", "Shape__Length" and "Species_Conf" and "Health_Conf" are present only for 2025 data. The final goal is to return a GeoDataFrame containing the relevant data or a text summary based on what the user wants. The purpose of running the LLM generated code is to obtain a geodataframe of trees that will be displayed using our own inbuilt function, or to return a textual response to the user, not generate a spatial plot or anything else, especially dont truncate or mess with the generated geodataframe! You need to generate a Python function to do: '
+operation_task_prefix = r'The geoJSON file has the following properties like: "Health" (has either "Healthy","Unhealthy"), "Health_Level" ("1","2","3","4"), "Tree_ID", "Species" ("Ash", "Field Maple", "Oak", "Sitka Spruce", "Lodgepole Pine", "Japanese Larch"), "SURVEY_DATE" (format: Wed, 11 Sep 2024 00:00:00 GMT), "Height", "Shape__Area", "Shape__Length" and "Species_Conf" and "Health_Conf" are present only for 2025 data. The final goal is to return a GeoDataFrame containing the relevant data or a text summary based on what the user wants. The purpose of running the LLM generated code is to obtain a geodataframe of trees that will be displayed using our own inbuilt function, or to return a textual response to the user, not generate a spatial plot or anything else, especially dont truncate or mess with the generated geodataframe! You need to generate a Python function to do: '
 
 #For the demo case
 # operation_reply_exmaple = """
@@ -125,7 +125,7 @@ operation_requirement = [
                         # "Note module 'pandas' has no attribute or method of 'StringIO'",
                         "Never use geopandas.concat or GeoDataFrame.concat to merge to dataframes. To concatenate GeoDataFrames, always use pd.concat([gdf1, gdf2]) from the pandas library and ensure pandas is imported as import pandas as pd.",
                         "Use the latest Python modules and methods.",
-                        "If the user asks for tree health level or level of trees (e.g. level 4 ash trees) look for the levels in the 'Health' column ('1'..'4' only available for Ash trees), and if the user wants 'Healthy' and 'Unhealthy' Ash trees level 1 is 'Healthy' and the other levels (2,3,4) are 'Unhealthy', and for the other species just look for the 'Healthy'/'Unhealthy' values.", 
+                        "If the user asks for tree health level or level of trees (e.g. level 4 ash trees) look for the levels in the 'Health_Level' column ('1'..'4' only available for Ash trees), and if the user wants 'Healthy' or 'Unhealthy' trees, look for the 'Health' column, 'Healthy'/'Unhealthy' values.", 
                         "When doing spatial analysis, convert the involved spatial layers into the same map projection, if they are not in the same projection.",
                         # "DO NOT reproject or set spatial data(e.g., GeoPandas Dataframe) if only one layer involved.",
                         "Map projection conversion is only conducted for spatial data layers such as GeoDataFrame. DataFrame loaded from a CSV file does not have map projection information.",
@@ -368,6 +368,7 @@ sampling_data_requirement = [
  
                         #
                         ]
+
 
 
 
