@@ -367,7 +367,7 @@ def try_llm_fix(code, error_message=None, max_attempts=2):
                 prompt = (
                     f"The following Python code produced the error: \n"
                     f"{error_message}\n"
-                    f"Please fix the code and output only the corrected Python code:\n{fixed_code}\n"
+                    f"Please fix the code (e.g., fixing unmatched parentheses and ensuring the code compiles) and output only the corrected Python code:\n{fixed_code}\n"
                 )
             else:
                 prompt = f"Fix the following Python code and output only the corrected code:\n{fixed_code}\n"
