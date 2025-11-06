@@ -44,6 +44,7 @@ _session.mount("http://", HTTPAdapter(max_retries=_retry))
 _session.mount("https://", HTTPAdapter(max_retries=_retry))
 
 YAML_DEFAULT_PATH = os.environ.get("EXTRA_DATA_LOCATIONS_YAML", "config/data_locations.yml")
+SEMAPHORE = asyncio.Semaphore(10)
 
 # --- simple print-based "logger" --------------------------------------------
 def _print_log(level, *args):
@@ -1034,162 +1035,164 @@ def _reproject_aoi_to_wkid(aoi: dict, target_wkid: int) -> dict:
 
 # --- Geometry helpers ---------------------------------------------------------
 
-# async def _fetch_page(client, layer_url, params):
-#     try:
-#         r = await client.get(f"{layer_url}/query", params=params, timeout=60)
-#         r.raise_for_status()
-#         content_type = r.headers.get("Content-Type", "")
-#         if "json" not in content_type:
-#             logger.error(f"Non-JSON response ({content_type}) for offset {params.get('resultOffset')}")
-#             raise RuntimeError("Non-JSON response when fetching page.")
-#         payload = r.json()
-#         if "error" in payload:
-#             err = payload.get("error", {})
-#             msg = err.get("message") or "Unknown ArcGIS error"
-#             logger.error(f"ArcGIS error for offset {params.get('resultOffset')}: {msg}")
-#             raise RuntimeError(f"ArcGIS error: {msg}")
-#         features = payload.get("features", [])
-#         if not isinstance(features, list):
-#             logger.error(f"Unexpected features structure for offset {params.get('resultOffset')}")
-#             raise RuntimeError("Unexpected response structure from service.")
-#         return features
-#     except Exception as e:
-#         logger.error(f"Exception fetching offset {params.get('resultOffset')}: {e}")
-#         raise
-
-# async def _fetch_all_pages(layer_url, out_wkid, page_size, total_features):
-#     async with httpx.AsyncClient() as client:
-#         tasks = []
-#         for offset in range(0, total_features, page_size):
-#             params = {
-#                 "where": "1=1",
-#                 "outFields": "*",
-#                 "f": "geojson",
-#                 "outSR": out_wkid,
-#                 "resultRecordCount": page_size,
-#                 "resultOffset": offset,
-#             }
-#             tasks.append(_fetch_page(client, layer_url, params))
-
-#         results = await asyncio.gather(*tasks, return_exceptions=True)
-
-#     all_features = []
-#     for idx, res in enumerate(results):
-#         if isinstance(res, Exception):
-#             logger.error(f"Failed to fetch page at offset {idx * page_size}: {res}")
-#             # You can decide whether to raise or continue on errors here
-#             continue
-#         all_features.extend(res)
-#     return all_features
-
-
-# def _get_total_feature_count(layer_url: str, timeout: int = 10) -> int:
-#     params = {
-#         "where": "1=1",
-#         "returnCountOnly": "true",
-#         "f": "json",
-#     }
-#     r = _session.get(f"{layer_url}/query", params=params, timeout=timeout)
-#     r.raise_for_status()
-#     data = r.json()
-#     return int(data.get("count", 0))
-
-# def gdf_from_layer_all_async(layer_url: str, out_wkid: int = 4326, timeout: int = 30) -> gpd.GeoDataFrame:
-#     """
-#     Async fetch all pages concurrently from an ArcGIS layer REST URL and combine into a GeoDataFrame.
-#     """
-#     logger.info(f"Starting async fetch of all features from {layer_url} with WKID {out_wkid}")
-#     layer_url = _sanitise_layer_url(layer_url)
-
-#     try:
-#         total_features = _get_total_feature_count(layer_url, timeout=timeout)
-#         logger.info(f"Total features to fetch: {total_features}")
-#     except Exception as e:
-#         logger.error(f"Failed to get total feature count: {e}")
-#         total_features = 0
-
-#     if total_features == 0:
-#         return gpd.GeoDataFrame(geometry=[], crs=f"EPSG:{out_wkid}")
-
-#     # Get max record count for page size (2000 capped)
-#     mrc = _get_layer_max_record_count(layer_url, timeout=timeout)
-#     page_size = min(mrc if isinstance(mrc, int) and mrc > 0 else 1000, 2000)
-
-#     features = asyncio.run(_fetch_all_pages(layer_url, out_wkid, page_size, total_features))
-
-#     if not features:
-#         logger.info("No features fetched. Returning empty GeoDataFrame.")
-#         return gpd.GeoDataFrame(geometry=[], crs=f"EPSG:{out_wkid}")
-
-#     gdf = gpd.GeoDataFrame.from_features(features, crs=f"EPSG:{out_wkid}")
-#     logger.info(f"Successfully created GeoDataFrame with {len(gdf)} features")
-#     return gdf
-    
-def _gdf_from_layer_all(layer_url: str, out_wkid: int = 4326, timeout: int = 30) -> gpd.GeoDataFrame:
-    """
-    Pulls *all* features from a layer as GeoJSON (handles pagination).
-    Returns an empty GDF if there are no features.
-    NOTE: Uses the provided out_wkid for outSR; used by AOI builder to keep native CRS.
-    """
-    logger.info(f"Fetching all features from {layer_url} with target WKID {out_wkid}")
-    layer_url = _sanitise_layer_url(layer_url)
-    mrc = _get_layer_max_record_count(layer_url, timeout=timeout)
-    page_size = min(mrc if isinstance(mrc, int) and mrc > 0 else 1000, 500)  # cap
-    features = []
-    offset = 0
-    while True:
-        params = {
-            "where": "1=1",
-            "outFields": "*",
-            "f": "geojson",
-            "outSR": out_wkid,             # honor requested out_wkid here
-            "resultOffset": offset,
-            "resultRecordCount": page_size,
-        }
-        logger.debug(f"Querying all features with offset={offset}, count={page_size}")
-        
+async def _fetch_page(client, layer_url, params):
+    async with SEMAPHORE:
         try:
-            r = _session.get(f"{layer_url}/query", params=params, timeout=timeout)
+            r = await client.get(f"{layer_url}/query", params=params, timeout=60)
             r.raise_for_status()
-            ctype = r.headers.get("Content-Type", "")
-            if "json" not in ctype:
-                logger.error(f"Non-JSON response fetching all features ({ctype}). First 200 chars: {r.text[:200]}")
-                raise RuntimeError("Non-JSON response when fetching all features.")
-            payload = r.json()
-        except requests.RequestException as e:
-            logger.error(f"Network/HTTP error fetching all features from {layer_url}: {e}")
+
+            content_type = r.headers.get("Content-Type", "")
+            if "json" not in content_type:
+                logger.error(f"Non-JSON response ({content_type}) for offset {params.get('resultOffset')}")
+                raise RuntimeError("Non-JSON response when fetching page.")
+            
+            body = await r.aread()  # async read body
+            payload = json.loads(body)  # decode json
+            
+            if "error" in payload:
+                err = payload.get("error", {})
+                msg = err.get("message") or "Unknown ArcGIS error"
+                logger.error(f"ArcGIS error for offset {params.get('resultOffset')}: {msg}")
+                raise RuntimeError(f"ArcGIS error: {msg}")
+            
+            features = payload.get("features", [])
+            if not isinstance(features, list):
+                logger.error(f"Unexpected features structure for offset {params.get('resultOffset')}")
+                raise RuntimeError("Unexpected response structure from service.")
+            
+            return features
+        
+        except Exception as e:
+            logger.error(f"Exception fetching offset {params.get('resultOffset')}: {e}")
             raise
-        except _json.JSONDecodeError as je:
-            logger.error(f"Non-JSON response fetching all features: {je}")
-            raise RuntimeError("Non-JSON response when fetching all features.") from je
-            
-        fc = payload.get("features", [])
+
+async def _fetch_all_pages(layer_url, out_wkid, page_size, total_features):
+    async with httpx.AsyncClient() as client:
+        tasks = []
+        for offset in range(0, total_features, page_size):
+            params = {
+                "where": "1=1",
+                "outFields": "*",
+                "f": "geojson",
+                "outSR": out_wkid,
+                "resultRecordCount": page_size,
+                "resultOffset": offset,
+            }
+            tasks.append(_fetch_page(client, layer_url, params))
         
-        if "error" in payload:
-            err = payload.get("error", {})
-            msg = err.get("message") or "Unexpected error in ArcGIS response."
-            logger.error(f"ArcGIS error in _gdf_from_layer_all for {layer_url}: {msg}")
-            raise RuntimeError(f"ArcGIS error: {msg}")
-            
-        if not isinstance(fc, list):
-            logger.error("Unexpected response structure: 'features' is not a list.")
-            raise RuntimeError("Unexpected response structure from service.")
-            
-        features.extend(fc)
-        logger.debug(f"Fetched {len(fc)} features in batch. Total: {len(features)}")
-        
-        if len(fc) < page_size:
-            logger.debug("Last page reached.")
-            break
-        offset += page_size
-        
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+    
+    all_features = []
+    for idx, res in enumerate(results):
+        if isinstance(res, Exception):
+            logger.error(f"Failed to fetch page at offset {idx * page_size}: {res}")
+            continue
+        all_features.extend(res)
+    return all_features
+
+def _get_total_feature_count(layer_url: str, timeout: int = 10) -> int:
+    params = {
+        "where": "1=1",
+        "returnCountOnly": "true",
+        "f": "json",
+    }
+    r = _session.get(f"{layer_url}/query", params=params, timeout=timeout)
+    r.raise_for_status()
+    data = r.json()
+    return int(data.get("count", 0))
+
+def gdf_from_layer_all_async(layer_url: str, out_wkid: int = 4326, timeout: int = 30) -> gpd.GeoDataFrame:
+    logger.info(f"Starting async fetch of all features from {layer_url} with WKID {out_wkid}")
+    layer_url = _sanitise_layer_url(layer_url)
+
+    try:
+        total_features = _get_total_feature_count(layer_url, timeout=timeout)
+        logger.info(f"Total features to fetch: {total_features}")
+    except Exception as e:
+        logger.error(f"Failed to get total feature count: {e}")
+        total_features = 0
+
+    if total_features == 0:
+        return gpd.GeoDataFrame(geometry=[], crs=f"EPSG:{out_wkid}")
+
+    mrc = _get_layer_max_record_count(layer_url, timeout=timeout)
+    page_size = min(mrc if isinstance(mrc, int) and mrc > 0 else 1000, 2000)
+
+    features = asyncio.run(_fetch_all_pages(layer_url, out_wkid, page_size, total_features))
+
     if not features:
-        logger.info("No features found in layer. Returning empty GDF.")
+        logger.info("No features fetched. Returning empty GeoDataFrame.")
         return gpd.GeoDataFrame(geometry=[], crs=f"EPSG:{out_wkid}")
 
     gdf = gpd.GeoDataFrame.from_features(features, crs=f"EPSG:{out_wkid}")
-    logger.info(f"Successfully created GDF with {len(gdf)} features, CRS EPSG:{out_wkid}.")
+    logger.info(f"Successfully created GeoDataFrame with {len(gdf)} features")
     return gdf
+    
+# def _gdf_from_layer_all(layer_url: str, out_wkid: int = 4326, timeout: int = 30) -> gpd.GeoDataFrame:
+#     """
+#     Pulls *all* features from a layer as GeoJSON (handles pagination).
+#     Returns an empty GDF if there are no features.
+#     NOTE: Uses the provided out_wkid for outSR; used by AOI builder to keep native CRS.
+#     """
+#     logger.info(f"Fetching all features from {layer_url} with target WKID {out_wkid}")
+#     layer_url = _sanitise_layer_url(layer_url)
+#     mrc = _get_layer_max_record_count(layer_url, timeout=timeout)
+#     page_size = min(mrc if isinstance(mrc, int) and mrc > 0 else 1000, 500)  # cap
+#     features = []
+#     offset = 0
+#     while True:
+#         params = {
+#             "where": "1=1",
+#             "outFields": "*",
+#             "f": "geojson",
+#             "outSR": out_wkid,             # honor requested out_wkid here
+#             "resultOffset": offset,
+#             "resultRecordCount": page_size,
+#         }
+#         logger.debug(f"Querying all features with offset={offset}, count={page_size}")
+        
+#         try:
+#             r = _session.get(f"{layer_url}/query", params=params, timeout=timeout)
+#             r.raise_for_status()
+#             ctype = r.headers.get("Content-Type", "")
+#             if "json" not in ctype:
+#                 logger.error(f"Non-JSON response fetching all features ({ctype}). First 200 chars: {r.text[:200]}")
+#                 raise RuntimeError("Non-JSON response when fetching all features.")
+#             payload = r.json()
+#         except requests.RequestException as e:
+#             logger.error(f"Network/HTTP error fetching all features from {layer_url}: {e}")
+#             raise
+#         except _json.JSONDecodeError as je:
+#             logger.error(f"Non-JSON response fetching all features: {je}")
+#             raise RuntimeError("Non-JSON response when fetching all features.") from je
+            
+#         fc = payload.get("features", [])
+        
+#         if "error" in payload:
+#             err = payload.get("error", {})
+#             msg = err.get("message") or "Unexpected error in ArcGIS response."
+#             logger.error(f"ArcGIS error in _gdf_from_layer_all for {layer_url}: {msg}")
+#             raise RuntimeError(f"ArcGIS error: {msg}")
+            
+#         if not isinstance(fc, list):
+#             logger.error("Unexpected response structure: 'features' is not a list.")
+#             raise RuntimeError("Unexpected response structure from service.")
+            
+#         features.extend(fc)
+#         logger.debug(f"Fetched {len(fc)} features in batch. Total: {len(features)}")
+        
+#         if len(fc) < page_size:
+#             logger.debug("Last page reached.")
+#             break
+#         offset += page_size
+        
+#     if not features:
+#         logger.info("No features found in layer. Returning empty GDF.")
+#         return gpd.GeoDataFrame(geometry=[], crs=f"EPSG:{out_wkid}")
+
+#     gdf = gpd.GeoDataFrame.from_features(features, crs=f"EPSG:{out_wkid}")
+#     logger.info(f"Successfully created GDF with {len(gdf)} features, CRS EPSG:{out_wkid}.")
+#     return gdf
 
 def _rings_from_shapely(geom) -> list[list[list[float]]]:
     logger.debug(f"Converting Shapely geometry type {geom.geom_type} to Esri 'rings'.")
@@ -1271,7 +1274,7 @@ def get_project_aoi_geometry(project_name: str):
         try:
             layer_url = _sanitise_layer_url(chat_input_url)
             wkid = fetch_crs(layer_url) or 4326
-            gdf = _gdf_from_layer_all(layer_url, out_wkid=wkid)
+            gdf = _gdf_from_layer_all_async(layer_url, out_wkid=wkid)
 
             # Keep only polygonal geometries
             if not gdf.empty:
