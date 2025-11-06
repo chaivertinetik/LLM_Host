@@ -840,7 +840,7 @@ def long_running_task(user_task: str, task_name: str, data_locations: list):
         explanation_prompt = (
         f"I just ran the generated code for task: {code_for_assembly}.\n"
         f"Here's the output: {result}.\n"
-        f"Explain in simple terms as a GIS expert what you just did, and any assumptions or interpretations you made about the user's request.\n"   
+        f"Explain in simple terms as a GIS expert what you just did, and any assumptions or interpretations you made about the user's request. This should be packaged in a single paragraph and dont be technical u need to give an overview on the geosptial steps you just took in a very non technical friendly way!\n"   
         )
 
         explanation_response = model.generate_content(explanation_prompt)
