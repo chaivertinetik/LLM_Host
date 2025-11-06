@@ -143,7 +143,7 @@ operation_requirement = [
                         # "When doing spatial joins, remove the duplicates in the results. Or please think about whether it needs to be removed.",
                         # "If using colorbar for GeoPandas or Matplotlib visulization, set the colorbar's height or length as the same as the plot for better layout.",
                         "Keep the needed table columns for the further steps.",
-                        "If the user asks about a disease like ash dieback, it means the same thing as unhealthy ash tree (i.e. 'Unhealthy', '2','3','4' in the 'Health' column).",
+                        "If the user asks about a disease like ash dieback, it means the same thing as unhealthy ash tree (i.e. 'Unhealthy' in the 'Health' column OR '2','3','4' in the 'Health_Level' column).",
                         "Remember the variable, column, and file names used in ancestor functions when using them, such as joining tables or calculating.",                        
                         # "When crawl the webpage context to ChatGPT, using Beautifulsoup to crawl the text only, not all the HTML file.",
                         "If using GeoPandas for spatial analysis, when doing overlay analysis, carefully think about use Geopandas.GeoSeries.intersects() or geopandas.sjoin(). ",
@@ -368,6 +368,7 @@ sampling_data_requirement = [
  
                         #
                         ]
+
 
 
 
