@@ -65,13 +65,13 @@ graph_requirement = [
                         'Add all nodes and edges, including node attributes to a NetworkX instance, DO NOT change the attribute names.',
                         'DO NOT generate code to implement the steps.',
                         'Ensure all outputs are valid for nx.write_graphml() and follow safe serialization conventions, the LLM shouldnt produce a dict-based node that breaks GraphML saving.',
+                        'GraphML serialization requires node attributes to be simple data types, so avoid using complex objects like lists or dicts or convert them to strings if no other choice. When generating code for graph nodes and attributes in GraphML, ensure that no functions are created, this is essential because the final code will be de-indented for execution and any functions inside will break formatting and cause runtime errors.',
                         'Dont filter for the Species_Conf, Health_Conf columns unless the prompt has asked for them (like what are the confidence scores), becuase these values are empty for some sites.',
                         'Join the attribute to the vector layer via a common attribute if necessary.',
                         #'Ensure the python code generated has no indentation errors and is properly indented.',
                         'Ensure the location for saving the graph file is not commented out.',
                         'Put your reply into a Python code block, NO explanation or conversation outside the code block(enclosed by ```python and ```).',
                         'Note that GraphML writer does not support class dict or list as data values.',
-                        'You need spatial data (e.g., vector or raster) to make a map.',
                         #'Do not put the GraphML writing process as a step in the graph.',
                         'Keep the graph concise, DO NOT use too many operation nodes.',
                         'Ensure the code has **consistent 4-space indentation**, with no unexpected or extra indents. Avoid the use of tabs, as this can lead to indentation errors.',
@@ -368,6 +368,7 @@ sampling_data_requirement = [
  
                         #
                         ]
+
 
 
 
