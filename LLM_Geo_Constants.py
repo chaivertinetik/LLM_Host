@@ -182,7 +182,7 @@ assembly_requirement = ['You can think step by step. ',
                     f"Ensure all comments and descriptions use # and are single line.",
                     f"Please generate Python code with consistent indentation using 4 spaces per indentation level. Ensure that all code blocks, including functions, loops, and conditionals, are properly indented to reflect their logical structure. Avoid using tabs or inconsistent spacing.",
                     f"The final result of the assembly program should return a geodataframe that matches the criteria given by the user or the output summary if the user wants a text response and not a visual output.",
-                    f"The geoJSON file has the following properties: 'Health' (either 'Healthy' or 'Unhealthy'), 'Tree_ID', 'Species' ('Ash', 'Field Maple', 'Oak'), 'Species_Conf', 'Health_Conf', 'SURVEY_DATE' (format: Wed, 11 Sep 2024 00:00:00 GMT), 'Height', 'Shape__Area', 'Shape__Length'.",
+                    f"The geoJSON file has the following properties: 'Health' (either 'Healthy' or 'Unhealthy'), 'Health_Level' ('1','2','3','4'), 'Tree_ID', 'Species' ('Ash', 'Field Maple', 'Oak'), 'Species_Conf', 'Health_Conf', 'SURVEY_DATE' (format: Wed, 11 Sep 2024 00:00:00 GMT), 'Height', 'Shape__Area', 'Shape__Length'.",
                     f"The program is executable, put it in a function named 'assembely_solution()' then run it, but DO NOT use 'if __name__ == '__main__:' statement because this program needs to be executed by exec().",
                     "The program should assign the final result by calling 'result = assembely_solution()' after defining the function, so the result is stored in a variable named 'result' in the global namespace.",
                     "The result variable in most cases will store a geodataframe (becuase I want to export it as GeoJSON in my workflow) if the user wants to see trees based on a condition or if the user asks a question like what volume of trees were lost, the result variable should include the text response of whatever output the code generates (volume of trees in this case).",
@@ -368,6 +368,7 @@ sampling_data_requirement = [
  
                         #
                         ]
+
 
 
 
