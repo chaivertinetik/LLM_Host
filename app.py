@@ -838,9 +838,9 @@ def long_running_task(user_task: str, task_name: str, data_locations: list):
         print("Final result:", result)
         
         explanation_prompt = (
-        f"I just ran the generated code for task: {code_for_assembly}.\n"
+        f"For the task: {user_task}, I just ran the generated code: {code_for_assembly}.\n"
         f"Here's the output: {result}.\n"
-        f"Explain in simple terms as a GIS expert what you just did, and any assumptions or interpretations you made about the user's request. This should be packaged within two lines at most, and dont be technical you need to explain what you just did in a very non technical friendly way!\n"   
+        f"Explain in simple terms (one or two lines max) as a GIS expert what geospatial task was performed to obtain this result. Do not mention or describe any code or programming; just summarize the GIS action you took in a simple friendly way and what the result means for the user's query.\n"   
         )
 
         explanation_response = model.generate_content(explanation_prompt)
@@ -862,7 +862,7 @@ def long_running_task(user_task: str, task_name: str, data_locations: list):
         else: 
                 return{
                     "status": "completed",
-                    "message": str(explanation_text)
+                    "message": f"{result}{explanation_text}"
                 }
         
 
