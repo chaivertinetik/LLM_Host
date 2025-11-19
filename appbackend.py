@@ -750,9 +750,9 @@ def _reproject_for_layer(gdf, target_layer_url):
 
 # --- Main filter() with CRS normalisation ------------------------------------
 
+    
 def filter(gdf_or_fids, project_name):
     print(f"Starting filter function for project: {project_name}")
-    
     try:
         attrs = get_project_urls(project_name)
         tree_crowns_url = get_attr(attrs, "TREE_CROWNS")
@@ -765,7 +765,7 @@ def filter(gdf_or_fids, project_name):
         if gdf_direct is not None and not gdf_direct.empty:
             logger.info(f"Operating in GDF mode (direct push) with {len(gdf_direct)} features.")
             logger.debug(f"Direct GDF CRS: {gdf_direct.crs}, Geometry types: {gdf_direct.geom_type.unique()}")
-
+            gdf_direct = _drop_timestamp_columns(gdf_direct)
             # Split by geometry type
             groups = {
                 "point":   gdf_direct[gdf_direct.geom_type.isin(["Point", "MultiPoint"])],
@@ -835,7 +835,7 @@ def filter(gdf_or_fids, project_name):
         if gdf_to_push.empty:
             logger.warning("No matching IDs found after filtering source crowns.")
             return
-
+        gdf_to_push = _drop_timestamp_columns(gdf_to_push)
         logger.info(f"Found {len(gdf_to_push)} matching features to push.")
 
         # Split & push
@@ -873,6 +873,21 @@ def filter(gdf_or_fids, project_name):
 
 
 # --- Helpers ---------------------------------------------------------------
+
+def _drop_timestamp_columns(gdf):
+    """Drop any timestamp/datetime columns from a GeoDataFrame."""
+    if gdf is None or gdf.empty:
+        return gdf
+    ts_cols = [
+        col for col in gdf.columns
+        if pd.api.types.is_datetime64_any_dtype(gdf[col])
+        # if you want to be extra strict, include timezone-aware:
+        # or isinstance(gdf[col].dtype, pd.DatetimeTZDtype)
+    ]
+    if ts_cols:
+        logger.info(f"Dropping timestamp columns: {ts_cols}")
+        gdf = gdf.drop(columns=ts_cols)
+    return gdf
 
 def get_attr(attrs: dict, key: str):
     logger.debug(f"Getting attribute '{key}'. Available keys: {list(attrs.keys())}")
