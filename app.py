@@ -862,7 +862,7 @@ def long_running_task(user_task: str, task_name: str, data_locations: list):
         else: 
                 return{
                     "status": "completed",
-                    "message": f"{result}{explanation_text}"
+                    "message": f"{result}. {explanation_text}"
                 }
         
 
