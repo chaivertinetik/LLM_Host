@@ -1870,13 +1870,30 @@ def make_project_data_locations(project_name: str, include_seasons: bool, attrs:
         """
         Returns True if the FeatureServer/MapServer layer has >0 features.
         Uses returnCountOnly for efficiency.
+        Automatically ensures '/query' endpoint is used.
         """
+        import requests
+        # Ensure URL ends with /query
+        query_url = url.rstrip("/")
+        if not query_url.lower().endswith("/query"):
+            query_url = f"{query_url}/query"
+        params = {
+            "f": "json",
+            "where": "1=1",
+            "returnCountOnly": "true"
+        }
         try:
-            params = {"f": "json", "where": "1=1", "returnCountOnly": "true"}
-            r = requests.get(url, params=params, timeout=30)
+            r = requests.get(query_url, params=params, timeout=30)
             r.raise_for_status()
             js = r.json()
-            return js.get("count", 0) > 0
+            # ArcGIS error response?
+            if "error" in js:
+                return False
+            # Proper count response?
+            count = js.get("count")
+            if isinstance(count, int):
+                return count > 0
+            return False
         except Exception:
             return False
 
