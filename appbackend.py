@@ -19,6 +19,8 @@ from shapely.ops import transform as _shp_transform
 import os
 from functools import lru_cache
 from typing import Any, Dict, List, Optional, Union
+from pandas.api.types import is_datetime64_any_dtype, is_datetime64tz_dtype
+
 
 try:
     import yaml  # PyYAML
@@ -875,19 +877,45 @@ def filter(gdf_or_fids, project_name):
 # --- Helpers ---------------------------------------------------------------
 
 def _drop_timestamp_columns(gdf):
-    """Drop any timestamp/datetime columns from a GeoDataFrame."""
+    """
+    Drop ALL types of timestamp/datetime columns from a GeoDataFrame.
+    Handles:
+      - datetime64[ns]
+      - datetime64[ns, tz]
+      - object columns containing datetime/timestamp values
+    """
     if gdf is None or gdf.empty:
         return gdf
-    ts_cols = [
-        col for col in gdf.columns
-        if pd.api.types.is_datetime64_any_dtype(gdf[col])
-        # if you want to be extra strict, include timezone-aware:
-        # or isinstance(gdf[col].dtype, pd.DatetimeTZDtype)
-    ]
+    ts_cols = []
+    for col in gdf.columns:
+        s = gdf[col]
+        # --- Case 1: Regular datetime64 dtype ---
+        if is_datetime64_any_dtype(s):
+            ts_cols.append(col)
+            continue
+        # --- Case 2: timezone-aware datetime ---
+        if is_datetime64tz_dtype(s):
+            ts_cols.append(col)
+            continue
+        # --- Case 3: object columns that contain datetimes ---
+        if s.dtype == object:
+            # Check first non-null sample
+            sample = s.dropna().head(5)
+            if len(sample) > 0:
+                if any(
+                    isinstance(v, (pd.Timestamp, datetime.datetime, datetime.date, np.datetime64))
+                    for v in sample
+                ):
+                    ts_cols.append(col)
+                    continue
     if ts_cols:
-        logger.info(f"Dropping timestamp columns: {ts_cols}")
+        try:
+            logger.info(f"Dropping timestamp columns: {ts_cols}")
+        except:
+            print("Dropping timestamp columns:", ts_cols)
         gdf = gdf.drop(columns=ts_cols)
     return gdf
+
 
 def get_attr(attrs: dict, key: str):
     logger.debug(f"Getting attribute '{key}'. Available keys: {list(attrs.keys())}")
