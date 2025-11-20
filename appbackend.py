@@ -1827,6 +1827,12 @@ def make_project_data_locations(project_name: str, include_seasons: bool, attrs:
         if not layer_url:
             return
         try:
+            if not _layer_has_features(layer_url):
+                logger.info(f"Skipping empty layer: {layer_url}")
+                return
+        except Exception as ex:
+            pass
+        try:
             aoi_layer_crs = get_aoi_in_layer_crs(project_name, layer_url)
             label = _label_for_layer(label_prefix, layer_url)
     
@@ -1860,7 +1866,19 @@ def make_project_data_locations(project_name: str, include_seasons: bool, attrs:
             logger.error(f"Failed to add data location for {label_prefix}: {ex}")
 
 
-
+    def _layer_has_features(url: str) -> bool:
+        """
+        Returns True if the FeatureServer/MapServer layer has >0 features.
+        Uses returnCountOnly for efficiency.
+        """
+        try:
+            params = {"f": "json", "where": "1=1", "returnCountOnly": "true"}
+            r = requests.get(url, params=params, timeout=30)
+            r.raise_for_status()
+            js = r.json()
+            return js.get("count", 0) > 0
+        except Exception:
+            return False
 
     # Helper to add a raw, non-AOI URL (e.g., docs, tiles, WMS landing pages)
     def _add_raw(raw_url: str, label: str, insert_at: Optional[int] = None):
