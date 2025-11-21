@@ -315,6 +315,7 @@ operation_requirement = [
     "When loading remote spatial data from ArcGIS FeatureServer/MapServer or URLs using 'f=geojson', follow the Robust ArcGIS/GeoJSON fetch policy and implement/use a helper like safe_read_arcgis(url) when gpd.read_file(url) fails.",
     "Prefer gpd.read_file(url) first; on exception or non-GeoJSON, call safe_read_arcgis(url) and continue with the returned GeoDataFrame.",
     "When loading layers, always prioritize project-local entries from config/data_locations.yml and project index attrs; use national context layers strictly as fallbacks when no local equivalent exists.",
+    "If the user asks about which trees that are a hazardous, use their height information to determine: a) If height of tree > distance to road = hazardous b) Height of tree < distance to road = non-haardous.",
     arcgis_fetch_policy
 ]
 
