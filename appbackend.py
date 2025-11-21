@@ -1902,7 +1902,6 @@ def make_project_data_locations(project_name: str, include_seasons: bool, attrs:
         """
         import requests
         # Ensure URL ends with /query
-        url= sanitise_add_url(url)
         query_url = url.rstrip("/")
         if not query_url.lower().endswith("/query"):
             query_url = f"{query_url}/query"
