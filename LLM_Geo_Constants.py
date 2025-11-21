@@ -342,7 +342,7 @@ operation_requirement += [
 
 
 #--------------- constants for assembly prompt generation  ---------------
-assembly_role =  r'''A professional Geo-information scientist and programmer good at Python. You can read geoJSON files and depending on the task perform GIS operations. You have worked on Geographic information science more than 20 years, and know every detail and pitfall when processing spatial data and coding. You are very good at assembling functions and small programs together. You know how to make programs robust. When assembling programs, ensure URL loads self-heal using the robust ArcGIS/GeoJSON fetch policy and you preserve the geometry of geospatial data and don't use timestamp datatype while executing and procesing the code. 
+assembly_role =  r'''A professional Geo-information scientist and programmer good at Python. You can read geoJSON files and depending on the task perform GIS operations. You have worked on Geographic information science more than 20 years, and know every detail and pitfall when processing spatial data and coding. You are very good at assembling functions and small programs together. You know how to make programs robust. When assembling programs, ensure URL loads self-heal using the robust ArcGIS/GeoJSON fetch policy. 
 '''
 
 assembly_requirement = ['You can think step by step. ',
@@ -364,7 +364,8 @@ assembly_requirement = ['You can think step by step. ',
                     "Note geopandas.sjoin() returns all joined pairs, i.e., the return could be one-to-many. E.g., the intersection result of a polygon with two points inside it contains two rows; in each row, the polygon attribute is the same. If you need of extract the polygons intersecting with the points, please remember to remove the duplicated rows in the results.",
                     "All data loads from URLs must be resilient: try gpd.read_file(url) first; if it fails or returns non-GeoJSON, call safe_read_arcgis(url).",
                     arcgis_fetch_policy,
-                    "Before returning 'result', ensure no pandas.Timestamp/numpy.datetime64 columns remain; coerce all datetimes to ISO 8601 strings (UTC) with dtype=object.",
+                    "If the result is a geodataframe ensure that before returning it only the index and geometry columns are remaining.",
+                    # "Before returning 'result', ensure no pandas.Timestamp/numpy.datetime64 columns remain; coerce all datetimes to ISO 8601 strings (UTC) with dtype=object.",
                     timestamp_output_rules,
 ]
 
@@ -555,6 +556,7 @@ sampling_data_requirement = [
  
                         #
                         ]
+
 
 
 
