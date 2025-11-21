@@ -156,7 +156,8 @@ operation_requirement = [
                         "Pandas library has no attribute or method 'StringIO', so 'pd.compat.StringIO' is wrong, you need to use 'io.StringIO' instead.",
                         "Before using Pandas or GeoPandas columns for further processing (e.g. join or calculation), drop recoreds with NaN cells in those columns, e.g., df.dropna(subset=['XX', 'YY']).",
                         "When read FIPS or GEOID columns from CSV files, read those columns as str or int, never as float.",
-                        "FIPS or GEOID columns may be str type with leading zeros (digits: state: 2, county: 5, tract: 11, block group: 12), or integer type without leading zeros. Thus, when joining they, you can convert the integer column to str type with leading zeros to ensure the success."
+                        "FIPS or GEOID columns may be str type with leading zeros (digits: state: 2, county: 5, tract: 11, block group: 12), or integer type without leading zeros. Thus, when joining they, you can convert the integer column to str type with leading zeros to ensure the success.",
+                        "If the user asks about which trees that are a hazardous, use their height information to determine: a) If height of tree > distance to road = hazardous b) Height of tree < distance to road = non-haardous." 
                         
                         ]
 # other requirements prone to errors, not used for now
@@ -368,6 +369,7 @@ sampling_data_requirement = [
  
                         #
                         ]
+
 
 
 
