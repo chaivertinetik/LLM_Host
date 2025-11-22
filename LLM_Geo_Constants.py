@@ -185,7 +185,7 @@ graph_requirement = [
                         'Operation nodes need to connect via output data nodes, DO NOT connect the operation node directly.',
                         'The node attributes include: 1) node_type (data or operation), 2) data_path (data node only, set to "" if not given ), and description. E.g., {‘name’: “County boundary”, “data_type”: “data”, “data_path”: “D:\Test\county.shp”,  “description”: “County boundary for the study area”}.',
                         'If the query is about showing all the trees in the site, dont filter for ash trees, for example: Show me all the trees, should look for all the available data points and not just ash trees.',
-                        'If the query asks for something like show me the tallest ash tree, that means they want a visual result so the final output should be a geodataframe that will be sent to the map on ArcGIS, don't generate a textual summary in this case, but if the user asks for what the height of the tallest tree is then the result should be a textual summary containing that value (string).'
+                        'If the query asks for something like show me the tallest ash tree, that means they want a visual result so the final output should be a geodataframe that will be sent to the map on ArcGIS, don't generate a textual summary in this case, but if the user asks for what the height of the tallest tree is then the result should be a textual summary containing that value (string).',
                         'If the user asks about the trees lost in a storm you need to compare the tree ids that survived before and after the storm from the two respective data sources.',
                         #'To calculate volume of wood use "Height" * "Shape__Area"',
                         'To calculate the volume of wood fit a Fit a regression species model using this allometric equation: log(DBH) = β0 + β1·log(height) + β2·log(crown area). Then use DBH to find basal area, Basal area = (π/4) × (DBH)^2 and volume = form factor (default:0.42) × basal area × tree height and display unit (cubic metre)', 
@@ -354,7 +354,7 @@ assembly_requirement = ['You can think step by step. ',
                     f"Ensure all comments and descriptions use # and are single line.",
                     f"Please generate Python code with consistent indentation using 4 spaces per indentation level. Ensure that all code blocks, including functions, loops, and conditionals, are properly indented to reflect their logical structure. Avoid using tabs or inconsistent spacing.",
                     f"The final result of the assembly program should return a geodataframe that matches the criteria given by the user or the output summary if the user wants a text response and not a visual output.",
-                    'If the query asks for something like show me the tallest ash tree, that means they want a visual result so the final output should be a geodataframe that will be sent to the map on ArcGIS, don't generate a textual summary in this case, but if the user asks for what the height of the tallest tree is then the result should be a textual summary containing that value (string).'
+                    f"If the query asks for something like show me the tallest ash tree, that means they want a visual result so the final output should be a geodataframe that will be sent to the map on ArcGIS, don't generate a textual summary in this case, but if the user asks for what the height of the tallest tree is then the result should be a textual summary containing that value (string).",
                     f"The geoJSON file has the following properties: 'Health' (either 'Healthy' or 'Unhealthy'), 'Tree_ID', 'Species' ('Ash', 'Field Maple', 'Oak', 'Fraxinus excelsior Altena', '), 'SURVEY_DATE' (format: Wed, 11 Sep 2024 00:00:00 GMT), 'Height', 'Shape__Area', 'Shape__Length'.",
                     f"The program is executable, put it in a function named 'assembely_solution()' then run it, but DO NOT use 'if __name__ == '__main__:' statement because this program needs to be executed by exec().",
                     "The program should assign the final result by calling 'result = assembely_solution()' after defining the function, so the result is stored in a variable named 'result' in the global namespace. Ensure this variable isn't commented out.",
@@ -559,6 +559,7 @@ sampling_data_requirement = [
  
                         #
                         ]
+
 
 
 
