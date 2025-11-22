@@ -135,7 +135,7 @@ data_location_priority_rules = r"""
 # carefully change these prompt parts!   
 
 #--------------- constants for graph generation  ---------------
-graph_role = r'''A professional Geo-information scientist and programmer good at Python. You can read geoJSON files and depending on the task perform GIS operations. You have worked on Geographic information science more than 20 years, and know every detail and pitfall when processing spatial data and coding. You know well how to set up workflows for spatial analysis tasks. You have significant experence on graph theory, application, and implementation. You are also experienced on generating map using Matplotlib and GeoPandas.
+graph_role = r'''A professional Geo-information scientist and programmer good at Python. You can read geoJSON files and depending on the task perform GIS operations. You have worked on Geographic information science more than 20 years, and know every detail and pitfall when processing spatial data and coding. You know well how to set up workflows for spatial analysis tasks. You have significant experence on graph theory, application, and implementation. You are also experienced on generating map using Matplotlib and GeoPandas. Also ensure the final result is either a geodataframe (for map queries, like show me the tallest ash tree) or a string (for text queries like what is the height of the tallest tree). 
 '''
 
 graph_task_prefix = r'The geoJSON file has the following properties like: "Health" (either "Healthy" or "Unhealthy"), "Health_Level" ("1","2","3","4"), "Tree_ID", "Species" ("Ash", "Field Maple", "Oak", "Fraxinus excelsior Altena", "Fraxinus excelsior Pendula"... etc), "SURVEY_DATE" (format: Wed, 11 Sep 2024 00:00:00 GMT), "Height", "Shape__Area", "Shape__Length" and the final goal is to return a GeoDataFrame containing the relevant data or text summary based on what the user wants. Generate a graph (data structure) only, whose nodes are (1) a series of consecutive steps and (2) data to solve this question: '
@@ -185,6 +185,7 @@ graph_requirement = [
                         'Operation nodes need to connect via output data nodes, DO NOT connect the operation node directly.',
                         'The node attributes include: 1) node_type (data or operation), 2) data_path (data node only, set to "" if not given ), and description. E.g., {‘name’: “County boundary”, “data_type”: “data”, “data_path”: “D:\Test\county.shp”,  “description”: “County boundary for the study area”}.',
                         'If the query is about showing all the trees in the site, dont filter for ash trees, for example: Show me all the trees, should look for all the available data points and not just ash trees.',
+                        'If the query asks for something like show me the tallest ash tree, that means they want a visual result so the final output should be a geodataframe that will be sent to the map on ArcGIS, don't generate a textual summary in this case, but if the user asks for what the height of the tallest tree is then the result should be a textual summary containing that value (string).'
                         'If the user asks about the trees lost in a storm you need to compare the tree ids that survived before and after the storm from the two respective data sources.',
                         #'To calculate volume of wood use "Height" * "Shape__Area"',
                         'To calculate the volume of wood fit a Fit a regression species model using this allometric equation: log(DBH) = β0 + β1·log(height) + β2·log(crown area). Then use DBH to find basal area, Basal area = (π/4) × (DBH)^2 and volume = form factor (default:0.42) × basal area × tree height and display unit (cubic metre)', 
@@ -245,6 +246,7 @@ operation_requirement = [
     # "Generate descriptions for input and output arguments.",
     "Ensure all comments and descriptions use # and are single line.",
     "If the user asks about ash trees also look for other 'Fraxinus' while filtering, for example species called 'Fraxinus excelsior Altena', 'Fraxinus excelsior Pendula' ..should all be factored in when qureying ash trees, and be careful that the data is case sensitive.",
+    'If the query asks for something like show me the tallest ash tree, that means they want a visual result so the final output should be a geodataframe that will be sent to the map on ArcGIS, don't generate a textual summary in this case, but if the user asks for what the height of the tallest tree is then the result should be a textual summary containing that value (string).'
     "A reliable approach to filter for ash trees is by: ash_trees_gdf = tree_points_gdf[tree_points_gdf['Species'].str.lower().str.contains('ash|fraxinus', na=False, regex=True)] and ensure regex=True",
     "You can find neighbourhood info ('Cardiff East', 'Cardiff North'..) under 'neighbourhood' and 'name1' has specific locations like 'Castle Golf Course', 'Whitchurch High School', for wards (like 'Riverside', 'Cathays') look under 'ward', for areas based on their role ('civic spaces', 'green corridors', 'natural and semi-natural greenspaces', 'water') look under 'function_'.",
     "When accessing green spaces data and you want specific categories like 'Bowling Green', 'Religious Grounds' use the 'function_' column header and when accessing the building data and you need categories like 'Education', 'Emergency Service', and 'Religious Buildings' use the 'BUILDGTHEM' column header and for Streets/Roads use the 'name1' header for streets like Clumber Road East.",
@@ -342,7 +344,7 @@ operation_requirement += [
 
 
 #--------------- constants for assembly prompt generation  ---------------
-assembly_role =  r'''A professional Geo-information scientist and programmer good at Python. You can read geoJSON files and depending on the task perform GIS operations. You have worked on Geographic information science more than 20 years, and know every detail and pitfall when processing spatial data and coding. You are very good at assembling functions and small programs together. You know how to make programs robust. When assembling programs, ensure URL loads self-heal using the robust ArcGIS/GeoJSON fetch policy. Also ensure the final result is either a geodataframe (for map queries, like show me the tallest ash tree) or a string (for text queries like what is the height of the tallest tree). 
+assembly_role =  r'''A professional Geo-information scientist and programmer good at Python. You can read geoJSON files and depending on the task perform GIS operations. You have worked on Geographic information science more than 20 years, and know every detail and pitfall when processing spatial data and coding. You are very good at assembling functions and small programs together. You know how to make programs robust. When assembling programs, ensure URL loads self-heal using the robust ArcGIS/GeoJSON fetch policy. Also ensure the final result is either a geodataframe (for map queries, like show me the tallest ash tree) or a string (for text queries like what is the height of the tallest tree). Do NOT produce a string when the user expects a GeoDataFrame, and vice versa. 
 '''
 
 assembly_requirement = ['You can think step by step. ',
@@ -352,10 +354,11 @@ assembly_requirement = ['You can think step by step. ',
                     f"Ensure all comments and descriptions use # and are single line.",
                     f"Please generate Python code with consistent indentation using 4 spaces per indentation level. Ensure that all code blocks, including functions, loops, and conditionals, are properly indented to reflect their logical structure. Avoid using tabs or inconsistent spacing.",
                     f"The final result of the assembly program should return a geodataframe that matches the criteria given by the user or the output summary if the user wants a text response and not a visual output.",
+                    'If the query asks for something like show me the tallest ash tree, that means they want a visual result so the final output should be a geodataframe that will be sent to the map on ArcGIS, don't generate a textual summary in this case, but if the user asks for what the height of the tallest tree is then the result should be a textual summary containing that value (string).'
                     f"The geoJSON file has the following properties: 'Health' (either 'Healthy' or 'Unhealthy'), 'Tree_ID', 'Species' ('Ash', 'Field Maple', 'Oak', 'Fraxinus excelsior Altena', '), 'SURVEY_DATE' (format: Wed, 11 Sep 2024 00:00:00 GMT), 'Height', 'Shape__Area', 'Shape__Length'.",
                     f"The program is executable, put it in a function named 'assembely_solution()' then run it, but DO NOT use 'if __name__ == '__main__:' statement because this program needs to be executed by exec().",
                     "The program should assign the final result by calling 'result = assembely_solution()' after defining the function, so the result is stored in a variable named 'result' in the global namespace. Ensure this variable isn't commented out.",
-                    "The result variable will either be an output string or store a geodataframe (becuase I want to export it as GeoJSON in my workflow). For example if the user wants to see specific trees based on a condition or other map based geospatial queries (like show me the ash trees, or show me all the trees in the site) it should store the geodataframe else if the user asks a numeric or text question like what volume of trees were lost, how many ash trees are there, the result variable should include the text response of whatever output the code generates (volume of trees in this case or number of trees not the geodataframe).",
+                    "The result variable will either be an output string or store a geodataframe (becuase I want to export it as GeoJSON in my workflow). For example if the user wants to see specific trees based on a condition or other map based geospatial queries (like show me the ash trees, or show me all the trees in the site) it should store the geodataframe else if the user asks a numeric or text question like what volume of trees were lost, how many ash trees are there, the result variable should include the text response of whatever output the code generates (in this case number of trees).",
                     "When defining functions, do not set a default value for a parameter using a variable (like 'tree_gdf=tree_gdf') unless that variable is already defined at the time the function is defined. Instead, require the value to be passed when the function is called.",
                     "Use the built-in functions or attribute, if you do not remember, DO NOT make up fake ones, just use alternative methods.",
                     # "Drop rows with NaN cells, i.e., df.dropna(),  before using Pandas or GeoPandas columns for processing (e.g. join or calculation).",
@@ -364,7 +367,7 @@ assembly_requirement = ['You can think step by step. ',
                     "Note geopandas.sjoin() returns all joined pairs, i.e., the return could be one-to-many. E.g., the intersection result of a polygon with two points inside it contains two rows; in each row, the polygon attribute is the same. If you need of extract the polygons intersecting with the points, please remember to remove the duplicated rows in the results.",
                     "All data loads from URLs must be resilient: try gpd.read_file(url) first; if it fails or returns non-GeoJSON, call safe_read_arcgis(url).",
                     arcgis_fetch_policy,
-                    "If the result is a geodataframe ensure that before returning it only the index and geometry columns are remaining.",
+                    "If the result is a geodataframe ensure that before returning it only the index (important to preserve as it is used by arcgis to filter which tree to show on the map) and geometry columns are remaining, because the other columns face problems during serialization.",
                     # "Before returning 'result', ensure no pandas.Timestamp/numpy.datetime64 columns remain; coerce all datetimes to ISO 8601 strings (UTC) with dtype=object.",
                     timestamp_output_rules,
 ]
@@ -556,6 +559,7 @@ sampling_data_requirement = [
  
                         #
                         ]
+
 
 
 
