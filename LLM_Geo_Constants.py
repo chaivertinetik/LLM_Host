@@ -181,7 +181,7 @@ graph_requirement = [
                         'The input of each operation is the output of the previous operations, except the those need to load data from a path or need to collect data.',
                         'You need to carefully name the output data node, making they human readable but not to long.',
                         'The data and operation form a graph.',
-                        'The first operations are data loading or collection, and the output of the last operation is the final answer to the task.'
+                        'The first operations are data loading or collection, and the output of the last operation is the final answer to the task.',
                         'Operation nodes need to connect via output data nodes, DO NOT connect the operation node directly.',
                         'The node attributes include: 1) node_type (data or operation), 2) data_path (data node only, set to "" if not given ), and description. E.g., {‘name’: “County boundary”, “data_type”: “data”, “data_path”: “D:\Test\county.shp”,  “description”: “County boundary for the study area”}.',
                         'If the query is about showing all the trees in the site, dont filter for ash trees, for example: Show me all the trees, should look for all the available data points and not just ash trees.',
@@ -246,7 +246,7 @@ operation_requirement = [
     # "Generate descriptions for input and output arguments.",
     "Ensure all comments and descriptions use # and are single line.",
     "If the user asks about ash trees also look for other 'Fraxinus' while filtering, for example species called 'Fraxinus excelsior Altena', 'Fraxinus excelsior Pendula' ..should all be factored in when qureying ash trees, and be careful that the data is case sensitive.",
-    'If the query asks for something like show me the tallest ash tree, that means they want a visual result so the final output should be a geodataframe that will be sent to the map on ArcGIS, don't generate a textual summary in this case, but if the user asks for what the height of the tallest tree is then the result should be a textual summary containing that value (string).'
+    "If the query asks for something like show me the tallest ash tree, that means they want a visual result so the final output should be a geodataframe that will be sent to the map on ArcGIS, don't generate a textual summary in this case, but if the user asks for what the height of the tallest tree is then the result should be a textual summary containing that value (string).",
     "A reliable approach to filter for ash trees is by: ash_trees_gdf = tree_points_gdf[tree_points_gdf['Species'].str.lower().str.contains('ash|fraxinus', na=False, regex=True)] and ensure regex=True",
     "You can find neighbourhood info ('Cardiff East', 'Cardiff North'..) under 'neighbourhood' and 'name1' has specific locations like 'Castle Golf Course', 'Whitchurch High School', for wards (like 'Riverside', 'Cathays') look under 'ward', for areas based on their role ('civic spaces', 'green corridors', 'natural and semi-natural greenspaces', 'water') look under 'function_'.",
     "When accessing green spaces data and you want specific categories like 'Bowling Green', 'Religious Grounds' use the 'function_' column header and when accessing the building data and you need categories like 'Education', 'Emergency Service', and 'Religious Buildings' use the 'BUILDGTHEM' column header and for Streets/Roads use the 'name1' header for streets like Clumber Road East.",
@@ -559,6 +559,7 @@ sampling_data_requirement = [
  
                         #
                         ]
+
 
 
 
