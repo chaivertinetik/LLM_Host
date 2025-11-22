@@ -20,6 +20,7 @@ import requests
 import geopandas as gpd
 import json
 from shapely.geometry import mapping
+from shapely.geometry.base import BaseGeometry
 from fastapi import FastAPI, BackgroundTasks, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from typing import Dict
