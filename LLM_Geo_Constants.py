@@ -201,7 +201,8 @@ graph_requirement = [
                         'Keep the graph concise, DO NOT use too many operation nodes.',
                         'Ensure the code has **consistent 4-space indentation**, with no unexpected or extra indents. Avoid the use of tabs, as this can lead to indentation errors.',
                         'All lines should be properly aligned according to Python’s syntax rules.',
-                        'Specifically, the first four lines should not have any unintended indentation. Ensure that all code blocks, especially those with comments or function calls, are properly aligned and contain no extraneous spaces or tabs.'
+                        'Specifically, the first four lines should not have any unintended indentation. Ensure that all code blocks, especially those with comments or function calls, are properly aligned and contain no extraneous spaces or tabs.',
+                        'When loading data from ArcGIS FeatureServer URLs, always preserve and use the COMPLETE URL string including all query parameters (where, geometry, outFields, f=geojson, etc). Do NOT truncate or simplify the URL to just the base endpoint. The full URL should be stored as the data_path in the node and used exactly as provided in the data locations.'
                         # 'Keep the graph concise, DO NOT over-split task into too many small steps, especially for simple problems. For example, data loading and data transformation/preprocessing should be in one operation node.',
 
                          ]
@@ -559,6 +560,7 @@ sampling_data_requirement = [
  
                         #
                         ]
+
 
 
 
