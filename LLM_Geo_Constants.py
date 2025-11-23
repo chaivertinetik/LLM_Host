@@ -354,6 +354,8 @@ assembly_requirement = ['You can think step by step. ',
                     f"Put your reply in a code block(enclosed by ```python and ```), NO explanation or conversation outside the code block.",  
                     f"Ensure all comments and descriptions use # and are single line.",
                     f"Please generate Python code with consistent indentation using 4 spaces per indentation level. Ensure that all code blocks, including functions, loops, and conditionals, are properly indented to reflect their logical structure. Avoid using tabs or inconsistent spacing.",
+                    f"ALWAYS verify that all parentheses and brackets are matched in generated Python code.",
+                    f"ALWAYS make sure every code block (if, for, while, etc.) has correct opening and closing indentation, and no unmatched braces, brackets, or parentheses.",
                     f"The final result of the assembly program should return a geodataframe that matches the criteria given by the user or the output summary if the user wants a text response and not a visual output.",
                     f"If the query asks for something like show me the tallest ash tree, that means they want a visual result so the final output should be a geodataframe that will be sent to the map on ArcGIS, dont generate a textual summary in this case, but if the user asks for what the height of the tallest tree is then the result should be a textual summary containing that value (string).",
                     f"The geoJSON file has the following properties: 'Health' (either 'Healthy' or 'Unhealthy'), 'Tree_ID', 'Species' ('Ash', 'Field Maple', 'Oak', 'Fraxinus excelsior Altena', '), 'SURVEY_DATE' (format: Wed, 11 Sep 2024 00:00:00 GMT), 'Height', 'Shape__Area', 'Shape__Length'.",
@@ -560,6 +562,7 @@ sampling_data_requirement = [
  
                         #
                         ]
+
 
 
 
