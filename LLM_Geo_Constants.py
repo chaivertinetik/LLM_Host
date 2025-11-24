@@ -254,7 +254,7 @@ operation_requirement = [
     "You need to receive the data from the functions, DO NOT load in the function if other functions have loaded the data and returned it in advance.",
     # "Note module 'pandas' has no attribute or method of 'StringIO'",
     "Use the latest Python modules and methods.",
-    "The 'Health' of the tree indicates if they are healthy or unhealthy, and if the user asks for the specific Health_Level (data available for Ash trees) the numbers (1,2,3,4) indicate the finer level of how healthy the trees are. Also note level 1 trees are categorized as Healthy and 2,3,4 are Unhealthy.",
+    "The 'Health' of the tree indicates if they are healthy or unhealthy, and if the user asks for the specific 'Health_Level' (data available for Ash trees) the numbers (1,2,3,4) indicate the finer level of how healthy the trees are. Also note level 1 trees are categorized as Healthy and 2,3,4 are Unhealthy. If the user asks for tree health level or level of trees (e.g. level 4 ash trees) look for the levels in the 'Health_Level' column ('1'..'4' only available for Ash trees), and if the user wants 'Healthy' or 'Unhealthy' trees, look for the 'Health' column, for example if the user asks for healthy ash trees, filter 'Ash' species that have 'Healthy' values under 'Health'. But for Cardiff look under 'Condition' for Health and Health Levels.",
     "If the 'Health' column doesn't exist in the schema, for example for the site Cardiff look for Health levels in the 'Condition' column: you can find 'ADB Class 1 100-76 crown remains', 'ADB Class 2 75-51 crown remains', 'ADB Class 3 50 -26 crown remains', 'ADB Class 4 25 - 0 crown remaining' which are level 1, level 2, level 3 and level 4 health trees. Level 1 is healthy and level 2-4 is unhealthy. Can you ensure the Health filtering is done in an if-else block because if the 'Health' column is missing it leads to a keyerror and isnt able to get data from the 'Condition' column.",
     "The python code can follow something like: healthy_trees = gdf[(gdf['Health'].notnull() & gdf['Health'].str.lower().str.contains('1|healthy', na=False)) | (gdf['Condition'].notnull() & gdf['Condition'].str.lower().str.contains('adb class 1 100-76 crown remains', na=False, regex=True))] and ensure regex=True",
     "When doing spatial analysis, convert the involved spatial layers into the same map projection, if they are not in the same projection.",
@@ -564,6 +564,7 @@ sampling_data_requirement = [
  
                         #
                         ]
+
 
 
 
