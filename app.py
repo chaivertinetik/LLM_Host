@@ -54,24 +54,23 @@ async def process_request(request_data: RequestData):
     if re.search(r"\b(clear|reset|cleanup|clean|wipe)\b", user_task):
         return await trigger_cleanup(task_name)
        
-    
     history = load_history(session_id, max_turns=10)
     full_context = build_conversation_prompt(user_task, history) 
     if not is_geospatial_task(full_context):
         history.append({'role': 'user', 'content': user_task})
         history.append({'role': 'assistant', 'content': "Not programmed to do that."})
         save_history(session_id, history)
-        prompt_options = prompt_suggetions(task_name, message) 
+
+        prompt_options = prompt_suggetions(task_name, message)
         print(prompt_options)
+
         return {
             "status": "completed",
-            "message": "I haven't been programmed to do that"
+            "message": "I haven't been programmed to do that",
+            "prompt_options": prompt_options,
         }
-    # Generate a unique job ID
-    # job_id = str(uuid.uuid4())
-    # job_status[job_id] = {"status": "queued", "message": "Task is queued for processing"}
-    
-    do_gis_op= want_gis_task(user_task)
+
+    do_gis_op = want_gis_task(user_task)
     do_info = wants_additional_info(user_task)
     
     if do_gis_op and do_info:
@@ -83,31 +82,30 @@ async def process_request(request_data: RequestData):
                 data_locations = make_project_data_locations(task_name, include_seasons=True, attrs=attrs)
             else:
                 data_locations = make_project_data_locations(task_name, include_seasons=False, attrs=attrs)
-            # background_tasks.add_task(long_running_task, job_id, user_task, task_name, data_locations)
+
             result = long_running_task(user_task, task_name, data_locations)
             message = result.get("message") if isinstance(result, dict) else str(result)
             reasoning_prompt = (
-                    f"User asked: {user_task}\n"
-                    f"Batch task results summary: {message}\n"
-                    "Use the GIS tools (soil, climate, tree health, etc.) to answer the user's question."
+                f"User asked: {user_task}\n"
+                f"Batch task results summary: {message}\n"
+                "Use the GIS tools (soil, climate, tree health, etc.) to answer the user's question."
             )
             full_context = build_conversation_prompt(reasoning_prompt, history) 
             
             try:    
-                # reasoning_response = agent.run(full_context)
                 response = agent.invoke({
                     "messages": [{"role": "user", "content": full_context}]
                 })
-
-
                 reasoning_response = response["messages"][-1]["content"]
                 combined_message = f"{message}\n\nAdditional Analysis:\n{reasoning_response}"
-            except Exception as e: 
-                combined_message= message
+            except Exception:
+                combined_message = message
+
             history.append({'role': 'user', 'content': user_task})
             history.append({'role': 'assistant', 'content': combined_message})
             save_history(session_id, history)
-            prompt_options = prompt_suggetions(task_name, message) 
+
+            prompt_options = prompt_suggetions(task_name, message)
             print(prompt_options)
             
             return {
@@ -116,14 +114,18 @@ async def process_request(request_data: RequestData):
                 "response": {
                     "role": "assistant",
                     "content": result.get("tree_ids") if isinstance(result, dict) and "tree_ids" in result else message
-                }
+                },
+                "prompt_options": prompt_options,
             }
-        
-        # return {"status": "success", "job_id": job_id, "message": "Processing started..."}
-        except Exception as e:
-            return {"status": "completed", "message": "Request not understood as a task requiring GIS operations or information."}
+
+        except Exception:
+            return {
+                "status": "completed",
+                "message": "Request not understood as a task requiring GIS operations or information.",
+                "prompt_options": [],
+            }
+
     elif do_gis_op: 
-        
         try:
             attrs = get_project_urls(task_name)
             tree_crowns_url = get_attr(attrs, "TREE_CROWNS")
@@ -132,36 +134,40 @@ async def process_request(request_data: RequestData):
                 data_locations = make_project_data_locations(task_name, include_seasons=True, attrs=attrs)
             else:
                 data_locations = make_project_data_locations(task_name, include_seasons=False, attrs=attrs)
-            # background_tasks.add_task(long_running_task, job_id, user_task, task_name, data_locations)
+
             result = long_running_task(user_task, task_name, data_locations)
             message = result.get("message") if isinstance(result, dict) else str(result)
             
             history.append({'role': 'assistant', 'content': user_task})
             history.append({'role': 'assistant', 'content': message})
             save_history(session_id, history)
-            prompt_options = prompt_suggetions(task_name, message) 
-            print(prompt_options) 
+
+            prompt_options = prompt_suggetions(task_name, message)
+            print(prompt_options)
+
             return { 
                 "status": "completed",
                 "message": message,
                 "response": {
                     "role": "assistant",
                     "content": result.get("tree_ids") if isinstance(result, dict) and "tree_ids" in result else message
-                }
+                },
+                "prompt_options": prompt_options,
             }
-        except Exception as e:
+        except Exception:
             save_history(session_id, history)
-            prompt_options = prompt_suggetions(task_name, message) 
-            return {"status": "completed", "message": "Request not understood as a GIS task."}
+            prompt_options = prompt_suggetions(task_name, message)
+            return {
+                "status": "completed",
+                "message": "Request not understood as a GIS task.",
+                "prompt_options": prompt_options,
+            }
 
     elif do_info: 
         response = agent.invoke({
-                    "messages": [{"role": "user", "content": full_context}]
+            "messages": [{"role": "user", "content": full_context}]
         })
 
-
-                
-        # response = agent.run(full_context)
         if isinstance(response, dict) and "messages" in response:
             messages = response["messages"]
             if messages and isinstance(messages[-1], dict) and "content" in messages[-1]:
@@ -171,27 +177,24 @@ async def process_request(request_data: RequestData):
         else:
             content = str(response)
 
-        # if isinstance(response, dict):
-        #     content = response["messages"][-1]["content"]
-        # else:
-        #     content = response
-
         history.append({'role': 'assistant', 'content': user_task})
         history.append({'role': 'assistant', 'content': content})
         save_history(session_id, history)
+
         prompt_options = prompt_suggetions(task_name, content)
         print(prompt_options)
 
-        return {"status": "completed", "response": content}
-        # history.append({'role': 'assistant', 'content': user_task})
-        # history.append({'role': 'assistant', 'content': response.get("response")})
-        # save_history(session_id, history)
-        # prompt_options = prompt_suggetions(task_name, response.get("response")) 
-        # print(prompt_options)
-        
-        # return {"status": "completed", "response": response.get("response")}
+        return {
+            "status": "completed",
+            "response": content,
+            "prompt_options": prompt_options,
+        }
     
-    return {"status": "completed", "message": "Request not understood as a task requiring geospatial data."}
+    return {
+        "status": "completed",
+        "message": "Request not understood as a task requiring geospatial data.",
+        "prompt_options": [],
+    }
 
 @app.get("/status/{job_id}")
 async def get_status(job_id: str):
