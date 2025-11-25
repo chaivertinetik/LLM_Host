@@ -876,7 +876,7 @@ def long_running_task(user_task: str, task_name: str, data_locations: list):
         print(f"Error during execution: {e}")
         #job_status[job_id] = {"status": "failed", "message": str(e)}
         # return f"Error during execution: {str(e)}"
-        return f"Error during execution: The server seems to be down."
+        return f"Error during execution: The server seems to be down. {e}"
 
 #, background_tasks: BackgroundTasks
 @app.post("/process")
