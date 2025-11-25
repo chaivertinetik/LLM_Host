@@ -852,12 +852,13 @@ def long_running_task(user_task: str, task_name: str, data_locations: list):
         explanation_response = model.generate_content(explanation_prompt)
         explanation_text = explanation_response.text.strip()
         if wants_map_output(user_task):
-            
             print("Execution completed.")
-            filter(result, task_name)          
-            message = explanation_text
             if isinstance(result, str):
                 message = f"The task has been executed successfully and the results should be on your screen.{explanation_text}"
+            else: 
+                filter(result, task_name)          
+                message = explanation_text
+            
                 
             return {
                 "status": "completed",
