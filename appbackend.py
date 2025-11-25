@@ -1200,14 +1200,14 @@ def _gdf_from_layer_all(layer_url: str, out_wkid: int = 4326, timeout: int = 30)
             ctype = r.headers.get("Content-Type", "")
             if "json" not in ctype:
                 logger.error(f"Non-JSON response fetching all features ({ctype}). First 200 chars: {r.text[:200]}")
-                raise RuntimeError("Non-JSON response when fetching all features.")
+                pass
             payload = r.json()
         except requests.RequestException as e:
             logger.error(f"Network/HTTP error fetching all features from {layer_url}: {e}")
             raise
         except _json.JSONDecodeError as je:
             logger.error(f"Non-JSON response fetching all features: {je}")
-            raise RuntimeError("Non-JSON response when fetching all features.") from je
+            pass
             
         fc = payload.get("features", [])
         
@@ -1215,11 +1215,11 @@ def _gdf_from_layer_all(layer_url: str, out_wkid: int = 4326, timeout: int = 30)
             err = payload.get("error", {})
             msg = err.get("message") or "Unexpected error in ArcGIS response."
             logger.error(f"ArcGIS error in _gdf_from_layer_all for {layer_url}: {msg}")
-            raise RuntimeError(f"ArcGIS error: {msg}")
+            pass
             
         if not isinstance(fc, list):
             logger.error("Unexpected response structure: 'features' is not a list.")
-            raise RuntimeError("Unexpected response structure from service.")
+            pass
             
         features.extend(fc)
         logger.debug(f"Fetched {len(fc)} features in batch. Total: {len(features)}")
@@ -1362,18 +1362,18 @@ def get_project_aoi_geometry(project_name: str):
         r.raise_for_status()
         if "json" not in r.headers.get("Content-Type", ""):
             logger.error(f"Non-JSON ORTHOMOSAIC metadata: {r.headers.get('Content-Type')} … {r.text[:200]}")
-            raise RuntimeError("Non-JSON ORTHOMOSAIC metadata")
+            pass
 
         meta = r.json()
         
         if "error" in meta:
              logger.error(f"ArcGIS Error getting metadata from ORTHOMOSAIC: {meta['error']}")
-             raise RuntimeError(f"ORTHOMOSAIC service error: {meta['error']['message']}")
+             pass
 
         extent = meta.get("extent") or meta.get("fullExtent")
         if not extent:
             logger.error("ORTHOMOSAIC service does not expose an extent.")
-            raise RuntimeError("ORTHOMOSAIC service does not expose an extent.")
+            raise print("ORTHOMOSAIC service does not expose an extent.")
 
         sr = extent.get("spatialReference") or meta.get("spatialReference") or {}
         wkid = sr.get("wkid") or fetch_crs(base) or 4326
@@ -1850,6 +1850,53 @@ def make_project_data_locations(project_name: str, include_seasons: bool, attrs:
     tree_crowns_url = get_attr(attrs, "TREE_CROWNS")
     data_locations: list[str] = []
 
+    def _get_last_updated_string(layer_url: str) -> Optional[str]:
+        """
+        Try to get a human-readable 'last updated' timestamp for a layer.
+
+        Uses the ArcGIS REST layer metadata:
+          - editingInfo.lastEditDate (preferred)
+          - lastEditDate at the top level (fallback)
+
+        Returns a string like '2025-11-25 14:32 UTC' or None if not available.
+        """
+        import requests
+        import datetime as _dt
+
+        # Strip any /query off the URL so we hit the layer metadata endpoint
+        base_url = layer_url.rstrip("/")
+        if base_url.lower().endswith("/query"):
+            base_url = base_url[: base_url.lower().rfind("/query")]
+
+        params = {"f": "json"}
+        try:
+            r = requests.get(base_url, params=params, timeout=30)
+            r.raise_for_status()
+            js = r.json()
+        except Exception:
+            return None
+
+        # Prefer editingInfo.lastEditDate
+        ts = None
+        editing_info = js.get("editingInfo") or {}
+        ts = editing_info.get("lastEditDate") or js.get("lastEditDate")
+
+        if ts is None:
+            return None
+
+        # ArcGIS usually stores this as epoch millis; if it's already a string, just return
+        if isinstance(ts, (int, float)):
+            try:
+                dt = _dt.datetime.utcfromtimestamp(ts / 1000.0)
+                return dt.strftime("%Y-%m-%d %H:%M UTC")
+            except Exception:
+                return None
+        elif isinstance(ts, str):
+            # Best effort: return string as-is
+            return ts
+
+        return None
+
     # Helper to add a layer with correct label + AOI in that layer's CRS
     def _add(layer_url: str, label_prefix: str, insert_at: Optional[int] = None):
         if not layer_url:
@@ -1874,6 +1921,9 @@ def make_project_data_locations(project_name: str, include_seasons: bool, attrs:
             # NEW: schema with unlimited strings + 30-cap numerics
             _schema = _extract_schema_for_layer(project_name, layer_url, where="1=1", per_field_numeric_limit=30)
             _schema_str = _schema_string_for_prompt(_schema, max_total_chars=None)  # no truncation
+
+            # NEW: last updated date from layer metadata
+            _last_updated = _get_last_updated_string(layer_url)
     
             for idx, url in enumerate(page_urls, start=1):
                 suffix = f" (page {idx}/{len(page_urls)})" if len(page_urls) > 1 else ""
@@ -1883,6 +1933,9 @@ def make_project_data_locations(project_name: str, include_seasons: bool, attrs:
                         entry += f"\n{_cols_str}"
                     # attach schema text under the columns on first page
                     entry += f"\n  schema: {_schema_str}"
+                    # attach last updated under the schema (if available)
+                    if _last_updated:
+                        entry += f"\n  last_updated: {_last_updated}"
     
                 if insert_at is None or insert_at < 0:
                     data_locations.append(entry)
@@ -1892,6 +1945,7 @@ def make_project_data_locations(project_name: str, include_seasons: bool, attrs:
                     insert_at += 1  # keep subsequent pages in order
         except Exception as ex:
             logger.error(f"Failed to add data location for {label_prefix}: {ex}")
+
 
 
     def _layer_has_features(url: str) -> bool:
@@ -1953,7 +2007,7 @@ def make_project_data_locations(project_name: str, include_seasons: bool, attrs:
         # Categories
         if any(k in lbl for k in ["building", "buildings"]) or "openmap_local_buildings" in u:
             base = "buildings"
-        elif any(k in lbl for k in ["road", "street"]) or "openroads" in u:
+        elif any(k in lbl for k in ["road"]) or "openroads" in u:
             base = "roads"
         elif any(k in lbl for k in ["green space", "greenspace", "open space", "park"]) or "open_greenspace" in u:
             base = "greenspace"
@@ -1978,7 +2032,7 @@ def make_project_data_locations(project_name: str, include_seasons: bool, attrs:
             low = line.lower()
             if base == "buildings" and ("building" in low or "buildings" in low):
                 return True
-            if base == "roads" and ("road" in low or "street" in low):
+            if base == "roads" and ("road" in low):
                 return True
             if base == "greenspace" and any(k in low for k in ["green space", "greenspace", "open space", "park"]):
                 return True
@@ -1997,7 +2051,7 @@ def make_project_data_locations(project_name: str, include_seasons: bool, attrs:
         _add(tree_crowns_url, "Tree crowns")
 
     # Optional seasonal layers — each uses AOI in its OWN CRS and correct geometry label
-    if include_seasons:
+    if include_seasons and project_name.__contains__("TT_"):
         logger.info("Including seasonal crown layers.")
         try:
             attrs_summer = get_project_urls("TT_GCW1_Summer")
