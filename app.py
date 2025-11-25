@@ -121,7 +121,8 @@ async def trigger_cleanup(task_name):
             "response": delete_response.text
         }
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Cleanup failed: {str(e)}")
+        print("During cleanup:", e)
+        # raise HTTPException(status_code=500, detail=f"Cleanup failed: {str(e)}")
        
 @app.post("/clear")
 async def clear_state():
@@ -218,7 +219,7 @@ def shapely_to_arcgis_geometry(geom):
     NOTE: Caller must ensure geometry already in EPSG:4326.
     """
     if geom.is_empty:
-        raise ValueError("Empty geometry cannot be posted")
+        print("Empty geometry cannot be posted")
 
     if geom.geom_type == "Polygon":
         coords = mapping(geom)["coordinates"]  # (exterior, holes...)
@@ -233,7 +234,7 @@ def shapely_to_arcgis_geometry(geom):
                 rings.append(ring)
         return {"rings": rings, "spatialReference": {"wkid": 4326}}
 
-    raise ValueError(f"Unsupported geometry type for posting: {geom.geom_type}")
+    print(f"Unsupported geometry type for posting: {geom.geom_type}")
 
 
 
@@ -249,7 +250,7 @@ def get_project_urls(project_name):
     data = response.json()
 
     if not data.get("features"):
-        raise ValueError(f"No project found with the name '{project_name}'.")
+        print(f"No project found with the name '{project_name}'.")
 
     attributes = data["features"][0]["attributes"]
     return attributes.get("TREE_CROWNS"), attributes.get("CHAT_OUTPUT")
@@ -263,7 +264,7 @@ def get_project_urls(project_name):
 
 #         wkid = metadata.get("extent", {}).get("spatialReference", {}).get("wkid")
 #         if not wkid:
-#             raise ValueError("Could not determine CRS from service metadata.")
+#             print("Could not determine CRS from service metadata.")
 
 #         query_url = f"{service_url}/0/query?where=1%3D1&outFields=*&f=geojson&outSR={wkid}"
 #         response = requests.get(query_url, timeout=10)
@@ -341,7 +342,7 @@ def _sanitise_layer_url(url: str) -> str:
     Returns the canonical layer URL ending with /<layerId> (no /query).
     """
     if not isinstance(url, str) or not url.strip():
-        raise ValueError("URL must be a non-empty string")
+        print("URL must be a non-empty string")
 
     u = url.strip().rstrip("/")
 
@@ -351,7 +352,7 @@ def _sanitise_layer_url(url: str) -> str:
     # Match MapServer or FeatureServer, with optional layer id
     m = re.search(r"(.*?/(?:FeatureServer|MapServer))(?:/(\d+))?$", u, flags=re.IGNORECASE)
     if not m:
-        raise ValueError(f"Not a valid ArcGIS service URL: {url}")
+        print(f"Not a valid ArcGIS service URL: {url}")
 
     base, layer = m.groups()
     if layer is None:
@@ -475,7 +476,7 @@ def sanitise_add_url(target_url: str) -> str:
     # Regex to detect if URL ends with /FeatureServer or /FeatureServer/<layerId>
     match = re.search(r"(.*?/FeatureServer)(?:/(\d+))?$", target_url)
     if not match:
-        raise ValueError(f"Invalid FeatureServer URL: {target_url}")
+        print(f"Invalid FeatureServer URL: {target_url}")
 
     base, layer = match.groups()
     if layer is None:
@@ -519,7 +520,7 @@ def sanitise_delete_urls(target_url: str):
     target_url = target_url.rstrip("/")
     m = re.search(r"(.*?/FeatureServer)(?:/(\d+))?$", target_url)
     if not m:
-        raise ValueError(f"Invalid FeatureServer URL: {target_url}")
+        print(f"Invalid FeatureServer URL: {target_url}")
     base, layer = m.groups()
     layer = layer or "0"
     return f"{base}/{layer}/query", f"{base}/{layer}/deleteFeatures"
@@ -638,7 +639,7 @@ def filter(FIDS, project_name):
 
     tree_crowns_url, chat_output_url = get_project_urls(project_name)
     if not tree_crowns_url or not chat_output_url:
-        raise ValueError("Required URLs missing in Project Index.")
+        print("Required URLs missing in Project Index.")
 
     # Try to interpret FIDS as geospatial first
     # We'll assume any bare geometry coming from the LLM is already in 4326 unless we can detect otherwise.
@@ -649,19 +650,19 @@ def filter(FIDS, project_name):
         ids = ensure_list(FIDS)
         ids = [i for i in ids if i is not None]
         if len(ids) == 0:
-            raise ValueError("No valid IDs or geometries provided to filter().")
+            print("No valid IDs or geometries provided to filter().")
 
         # Fetch crowns and filter by Tree_ID
         crowns_gdf = extract_geojson(tree_crowns_url)
         if crowns_gdf is None or crowns_gdf.empty:
-            raise ValueError("Tree crowns layer returned no data.")
+            print("Tree crowns layer returned no data.")
         if "Tree_ID" not in crowns_gdf.columns:
-            raise ValueError("Column 'Tree_ID' not found in crowns layer.")
+            print("Column 'Tree_ID' not found in crowns layer.")
 
         crowns_gdf["Tree_ID"] = pd.to_numeric(crowns_gdf["Tree_ID"], errors="coerce")
         ids_num = pd.to_numeric(pd.Series(ids), errors="coerce").dropna().astype(int).tolist()
         if len(ids_num) == 0:
-            raise ValueError("No numeric IDs could be parsed from FIDS.")
+            print("No numeric IDs could be parsed from FIDS.")
 
         post_gdf = crowns_gdf[crowns_gdf["Tree_ID"].isin(ids_num)].copy()
 
@@ -940,7 +941,8 @@ async def process_request(request_data: RequestData):
         }
     # return {"status": "success", "job_id": job_id, "message": "Processing started..."}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        print("Error is: ", e)
+        # raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/status/{job_id}")
 async def get_status(job_id: str):
