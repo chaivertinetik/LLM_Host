@@ -162,7 +162,7 @@ def is_geospatial_task(prompt: str) -> bool:
     return answer.startswith("yes")
     
 def wants_map_output_keyword(prompt: str) -> bool:
-    keywords = ["show", "display", "highlight", "visualize", "which trees", "what trees"]
+    keywords = ["show", "display", "highlight", "visualize"]
     prompt_lower = prompt.lower()
     return any(kw in prompt_lower for kw in keywords)
 
@@ -176,7 +176,7 @@ def wants_map_output_genai(prompt: str) -> bool:
 
     model = GenerativeModel("gemini-2.0-flash-001")
     system_prompt = (
-        "Decide if the user's input is asking for a map, list, or visual display of spatial features. "
+        "Decide if the user's input is asking for a map or visual display of spatial features. "
         "Return only 'yes' or 'no'. Examples:\n"
         "- 'Show all healthy trees' -> yes\n"
         "- 'Map the lost trees' -> yes\n"
@@ -186,8 +186,12 @@ def wants_map_output_genai(prompt: str) -> bool:
         "- 'Which trees are missing?' -> yes\n"
         "- 'How much volume was lost?' -> no\n"
         "- 'What is the total number of trees?' -> no\n"
+        "- 'Which species were labeled as unhealthy' -> no\n"
+        "- 'What trees are diseased in this site' -> no\n"
+        "- 'Show me what trees are diseased in this site' -> yes\n"
         "- 'Show level 1 trees' -> yes\n"
         "- 'Summarize changes between surveys' -> no"
+        
         
     )
     full_prompt = f"{system_prompt}\n\nUser input: {prompt}\nAnswer:"
