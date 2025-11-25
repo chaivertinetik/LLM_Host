@@ -942,6 +942,10 @@ async def process_request(request_data: RequestData):
     # return {"status": "success", "job_id": job_id, "message": "Processing started..."}
     except Exception as e:
         print("Error is: ", e)
+        return {
+            "status": "completed",
+            "message": "Gemini seems to be down, come back in a bit."
+        }
         # raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/status/{job_id}")
