@@ -6,8 +6,11 @@ import uvicorn
 import os 
 from pydantic import BaseModel
 from typing import Dict
-from credentials import db, parser, rag_llm, emd_model
-from appagents import agent, llm, load_history, save_history, build_conversation_prompt, wants_map_output_keyword, wants_map_output_genai, wants_map_output, is_geospatial_task, clean_indentation, wants_additional_info_keyword, wants_additional_info_genai, wants_additional_info, wants_gis_task_genai, want_gis_task, prompt_suggetions, try_llm_fix, long_running_task, get_geospatial_context_tool, get_zoning_info, get_climate_info, check_tree_health, assess_tree_benefit, check_soil_suitability, get_geospatial_context, cosine_similarity, retrieve_rag_chunks, rag_tree_grants_tool, rag_tree_info_tool
+#from credentials import db, parser, rag_llm, emd_model
+from credentials import db, emd_model
+from vertexai.generative_models import GenerativeModel
+#from appagents import agent, llm, load_history, save_history, build_conversation_prompt, wants_map_output_keyword, wants_map_output_genai, wants_map_output, is_geospatial_task, clean_indentation, wants_additional_info_keyword, wants_additional_info_genai, wants_additional_info, wants_gis_task_genai, want_gis_task, prompt_suggetions, try_llm_fix, long_running_task, get_geospatial_context_tool, get_zoning_info, get_climate_info, check_tree_health, assess_tree_benefit, check_soil_suitability, get_geospatial_context, cosine_similarity, retrieve_rag_chunks, rag_tree_grants_tool, rag_tree_info_tool
+from appagents import load_history, save_history, build_conversation_prompt, wants_map_output_keyword, wants_map_output_genai, wants_map_output, is_geospatial_task, clean_indentation, wants_additional_info_keyword, wants_additional_info_genai, wants_additional_info, wants_gis_task_genai, want_gis_task, prompt_suggetions, try_llm_fix, long_running_task
 from appbackend import trigger_cleanup, ClearRequest, get_project_urls, get_attr, make_project_data_locations
 from fastapi import FastAPI, BackgroundTasks, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -92,11 +95,15 @@ async def process_request(request_data: RequestData):
             )
             full_context = build_conversation_prompt(reasoning_prompt, history) 
             
-            try:    
-                response = agent.invoke({
-                    "messages": [{"role": "user", "content": full_context}]
-                })
-                reasoning_response = response["messages"][-1]["content"]
+            try: 
+                model = GenerativeModel("gemini-2.0-flash-001")
+                geospatial_prompt = f"The user is asking about geospatial or forestry information: {user_task}. Answer their query in simple terms (two or three lines max) as a GIS expert in a simple friendly way. They may ask for assistance for things like how to remove ash trees safely or other diseases and pest infestations. Pull from trusted geospatial resources and respond within these constraints as a geospatial expert in a friendly way."
+                reasoning_response = model.generate_content(geospatial_prompt).text.strip()
+                #patching out agent invoke 
+                # response = agent.invoke({
+                #     "messages": [{"role": "user", "content": full_context}]
+                # })
+                # reasoning_response = response["messages"][-1]["content"]
                 combined_message = f"{message}\n\nAdditional Analysis:\n{reasoning_response}"
             except Exception:
                 combined_message = message
@@ -164,19 +171,22 @@ async def process_request(request_data: RequestData):
             }
 
     elif do_info: 
-        response = agent.invoke({
-            "messages": [{"role": "user", "content": full_context}]
-        })
+        # response = agent.invoke({
+        #     "messages": [{"role": "user", "content": full_context}]
+        # })
 
-        if isinstance(response, dict) and "messages" in response:
-            messages = response["messages"]
-            if messages and isinstance(messages[-1], dict) and "content" in messages[-1]:
-                content = messages[-1]["content"]
-            else:
-                content = str(response)
-        else:
-            content = str(response)
-
+        # if isinstance(response, dict) and "messages" in response:
+        #     messages = response["messages"]
+        #     if messages and isinstance(messages[-1], dict) and "content" in messages[-1]:
+        #         content = messages[-1]["content"]
+        #     else:
+        #         content = str(response)
+        # else:
+        #     content = str(response)
+        model = GenerativeModel("gemini-2.0-flash-001")
+        geospatial_prompt = f"The user is asking about geospatial or forestry information: {user_task}. Answer their query in simple terms (two or three lines max) as a GIS expert in a simple friendly way. They may ask for assistance for things like how to remove ash trees safely or other diseases and pest infestations. Pull from trusted geospatial resources and respond within these constraints as a geospatial expert in a friendly way."
+        response = model.generate_content(geospatial_prompt).text.strip()
+        content = str(response)
         history.append({'role': 'assistant', 'content': user_task})
         history.append({'role': 'assistant', 'content': content})
         save_history(session_id, history)

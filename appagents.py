@@ -1,4 +1,5 @@
-from credentials import db, emd_model, parser, rag_llm
+#from credentials import db, emd_model, parser, rag_llm
+from credentials import db, emd_model
 import torch
 import vertexai
 import json 
@@ -12,12 +13,15 @@ import numpy as np
 from google.oauth2 import service_account
 from sentence_transformers import util
 # from langchain.agents import Tool
-from langchain_core.tools import Tool
-from langgraph.prebuilt import create_react_agent
+
 # from langchain.agents.agent_types import AgentType
 # from langchain.prompts import PromptTemplate
-from langchain_core.language_models import LLM
-from langchain_core.messages import AIMessage
+
+#Lang Graph and Google earth patched out
+# from langchain_core.tools import Tool
+# from langgraph.prebuilt import create_react_agent
+# from langchain_core.language_models import LLM
+# from langchain_core.messages import AIMessage
 from typing import List, Optional, Any 
 from pydantic import PrivateAttr
 from vertexai.generative_models import GenerativeModel
@@ -30,35 +34,35 @@ from LLM_Heroku_Kernel import Solution
 
 # --------------------- GIS CODE AGENT WRAPPER ---------------------
     
-class GeminiLLMWrapper(LLM):
-    _gemini_llm: Any = PrivateAttr()
-    _tools: Optional[List[Any]] = PrivateAttr(default=None)
+# class GeminiLLMWrapper(LLM):
+#     _gemini_llm: Any = PrivateAttr()
+#     _tools: Optional[List[Any]] = PrivateAttr(default=None)
 
-    def __init__(self, gemini_llm, **kwargs):
-        super().__init__(**kwargs)
-        self._gemini_llm = gemini_llm
+#     def __init__(self, gemini_llm, **kwargs):
+#         super().__init__(**kwargs)
+#         self._gemini_llm = gemini_llm
 
-    def _call(self, prompt: str, stop=None, **kwargs) -> str:
-        # Run the Gemini model
-        raw_response = self._gemini_llm.generate_content(prompt)
-        print("DEBUG type:", type(raw_response.text), "value:", raw_response.text)
-        return raw_response.text if isinstance(raw_response.text, str) else str(raw_response.text) 
+#     def _call(self, prompt: str, stop=None, **kwargs) -> str:
+#         # Run the Gemini model
+#         raw_response = self._gemini_llm.generate_content(prompt)
+#         print("DEBUG type:", type(raw_response.text), "value:", raw_response.text)
+#         return raw_response.text if isinstance(raw_response.text, str) else str(raw_response.text) 
 
-    def bind_tools(self, tools: List[Any]) -> "GeminiLLMWrapper":
-        self._tools = tools
-        return self
+#     def bind_tools(self, tools: List[Any]) -> "GeminiLLMWrapper":
+#         self._tools = tools
+#         return self
 
-    @property
-    def _llm_type(self) -> str:
-        return "gemini"
+#     @property
+#     def _llm_type(self) -> str:
+#         return "gemini"
 
-    @property
-    def _identifying_params(self) -> dict:
-        return {"model": "gemini"}    
+#     @property
+#     def _identifying_params(self) -> dict:
+#         return {"model": "gemini"}    
     
-# === Create Gemini model ===
+# # === Create Gemini model ===
 model = GenerativeModel("gemini-2.0-flash-001")
-llm = GeminiLLMWrapper(gemini_llm=model)
+# llm = GeminiLLMWrapper(gemini_llm=model)
 #------------------------------------------- Firestore to store and retrieve old prompts ------------------------------------------------------
 
 #Temporary : need to revert to the collections-> with documents version and fix the datetime serialization error 
@@ -602,250 +606,240 @@ def long_running_task(user_task: str, task_name: str, data_locations: list):
 
 
 # === Simulated tools ===
-def get_geospatial_context_tool(coords: str) -> str:
-    #dynamically get based on map 
-    
-    lat, lon = map(float, coords.split(","))
-    context = get_geospatial_context(lat, lon)  # Your GEE function
-    return json.dumps(context)
-    
-def get_zoning_info(coords: str = "40.7128,-74.0060") -> str:
-    # Since zoning isn't directly in Earth Engine data, we use land cover and forest loss as proxy
-    context_json = get_geospatial_context_tool(coords)
-    context = json.loads(context_json)
 
-    land_cover = context.get("Land Cover Class (ESA)", "Unknown")
-    forest_loss_year = context.get("Forest Loss Year (avg)", "N/A")
+#Google earth tools patching out for build time 
+# def get_geospatial_context_tool(coords: str) -> str:
+#     #dynamically get based on map 
     
-    zoning_msg = f"Land cover class: {land_cover}."
-    if forest_loss_year != 'N/A':
-        zoning_msg += f" Recent forest loss observed, average year: {forest_loss_year}."
-    zoning_msg += " Tree planting recommended in reforestation or conservation zones."
-
-def get_climate_info(coords: str = "40.7128,-74.0060") -> str:
+#     lat, lon = map(float, coords.split(","))
+#     context = get_geospatial_context(lat, lon)  # Your GEE function
+#     return json.dumps(context)
     
-    context_json = get_geospatial_context_tool(coords)
-    context = json.loads(context_json)
+# def get_zoning_info(coords: str = "40.7128,-74.0060") -> str:
+#     # Since zoning isn't directly in Earth Engine data, we use land cover and forest loss as proxy
+#     context_json = get_geospatial_context_tool(coords)
+#     context = json.loads(context_json)
+
+#     land_cover = context.get("Land Cover Class (ESA)", "Unknown")
+#     forest_loss_year = context.get("Forest Loss Year (avg)", "N/A")
     
-    precipitation = context.get("Precipitation (mm)", 0)
-    temperature = context.get("Temperature (°C)", 0)
-    ndvi = context.get("NDVI (mean)", 0)
+#     zoning_msg = f"Land cover class: {land_cover}."
+#     if forest_loss_year != 'N/A':
+#         zoning_msg += f" Recent forest loss observed, average year: {forest_loss_year}."
+#     zoning_msg += " Tree planting recommended in reforestation or conservation zones."
 
-    flood_risk = "High" if precipitation > 1000 else "Moderate" if precipitation > 500 else "Low"
-    sea_level_rise_estimate_m = 1.2  # Placeholder: for real, integrate NOAA data externally
+# def get_climate_info(coords: str = "40.7128,-74.0060") -> str:
+    
+#     context_json = get_geospatial_context_tool(coords)
+#     context = json.loads(context_json)
+    
+#     precipitation = context.get("Precipitation (mm)", 0)
+#     temperature = context.get("Temperature (°C)", 0)
+#     ndvi = context.get("NDVI (mean)", 0)
 
-    climate_msg = (f"Climate summary at {coords}:\n"
-                   f"Precipitation: {precipitation} mm (Flood Risk: {flood_risk})\n"
-                   f"Mean Temperature: {temperature} °C\n"
-                   f"Vegetation Health (NDVI): {ndvi}\n"
-                   f"Estimated sea-level rise: {sea_level_rise_estimate_m} m over next decades")
+#     flood_risk = "High" if precipitation > 1000 else "Moderate" if precipitation > 500 else "Low"
+#     sea_level_rise_estimate_m = 1.2  # Placeholder: for real, integrate NOAA data externally
+
+#     climate_msg = (f"Climate summary at {coords}:\n"
+#                    f"Precipitation: {precipitation} mm (Flood Risk: {flood_risk})\n"
+#                    f"Mean Temperature: {temperature} °C\n"
+#                    f"Vegetation Health (NDVI): {ndvi}\n"
+#                    f"Estimated sea-level rise: {sea_level_rise_estimate_m} m over next decades")
                    
-    return climate_msg
+#     return climate_msg
 
     
-def check_tree_health(coords: str = "40.7128,-74.0060")  -> dict:
-    ee_result = get_geospatial_context_tool(coords)
-    context = json.loads(ee_result)
-    health_comment = "Healthy canopy" if context["NDVI (mean)"] > 0.5 else "Canopy thinning or stress"
-    drought_comment = "Low drought stress" if context["Soil Moisture (m3/m3)"] > 0.25 else "Signs of drought stress"
-    return {
-        "Location": coords,
-        "Canopy NDVI": context["NDVI (mean)"],
-        "Soil Moisture": context["Soil Moisture (m3/m3)"],
-        "Health Assessment": f"{health_comment}; {drought_comment}",
-        "Forestry Recommendation": (
-            "Monitor for canopy decline; consider supplemental watering and replace non-native stressed species."
-        )
-    }
+# def check_tree_health(coords: str = "40.7128,-74.0060")  -> dict:
+#     ee_result = get_geospatial_context_tool(coords)
+#     context = json.loads(ee_result)
+#     health_comment = "Healthy canopy" if context["NDVI (mean)"] > 0.5 else "Canopy thinning or stress"
+#     drought_comment = "Low drought stress" if context["Soil Moisture (m3/m3)"] > 0.25 else "Signs of drought stress"
+#     return {
+#         "Location": coords,
+#         "Canopy NDVI": context["NDVI (mean)"],
+#         "Soil Moisture": context["Soil Moisture (m3/m3)"],
+#         "Health Assessment": f"{health_comment}; {drought_comment}",
+#         "Forestry Recommendation": (
+#             "Monitor for canopy decline; consider supplemental watering and replace non-native stressed species."
+#         )
+#     }
 
-def assess_tree_benefit(coords: str = "40.7128,-74.0060") -> dict:
-    # Example: Logic grounded in context
-    geo = json.loads(get_geospatial_context_tool(coords))
-    benefit = "Excellent for carbon capture" if geo["NDVI (mean)"] > 0.7 and geo["Precipitation (mm)"] > 600 else "Moderate"
-    cooling = "Substantial cooling from mature canopy" if geo["Land Cover Class (ESA)"] == "Forest" else "Potential cooling with reforestation"
-    return {
-        "Location": coords,
-        "Carbon Capture Potential": benefit,
-        "Shade/Cooling Impact": cooling,
-        "Reference Data": geo
-    }
+# def assess_tree_benefit(coords: str = "40.7128,-74.0060") -> dict:
+#     # Example: Logic grounded in context
+#     geo = json.loads(get_geospatial_context_tool(coords))
+#     benefit = "Excellent for carbon capture" if geo["NDVI (mean)"] > 0.7 and geo["Precipitation (mm)"] > 600 else "Moderate"
+#     cooling = "Substantial cooling from mature canopy" if geo["Land Cover Class (ESA)"] == "Forest" else "Potential cooling with reforestation"
+#     return {
+#         "Location": coords,
+#         "Carbon Capture Potential": benefit,
+#         "Shade/Cooling Impact": cooling,
+#         "Reference Data": geo
+#     }
 
-def check_soil_suitability(coords: str) -> str:
-    context_json = get_geospatial_context_tool(coords)
-    context = json.loads(context_json)
+# def check_soil_suitability(coords: str) -> str:
+#     context_json = get_geospatial_context_tool(coords)
+#     context = json.loads(context_json)
     
-    # Use soil moisture, elevation or land cover info as proxy for soil suitability
-    soil_moisture = context.get("Soil Moisture (m3/m3)", None)
-    elevation = context.get("Elevation (m)", None)
-    land_cover = context.get("Land Cover Class (ESA)", "Unknown")
+#     # Use soil moisture, elevation or land cover info as proxy for soil suitability
+#     soil_moisture = context.get("Soil Moisture (m3/m3)", None)
+#     elevation = context.get("Elevation (m)", None)
+#     land_cover = context.get("Land Cover Class (ESA)", "Unknown")
 
-    # Simplified interpretation rules (expand or replace with richer logic)
-    if soil_moisture is not None and 0.2 <= soil_moisture <= 0.4:
-        moisture_msg = "Suitable soil moisture for native tree species growth."
-    else:
-        moisture_msg = "Soil moisture outside ideal range; irrigation or species choice recommended."
+#     # Simplified interpretation rules (expand or replace with richer logic)
+#     if soil_moisture is not None and 0.2 <= soil_moisture <= 0.4:
+#         moisture_msg = "Suitable soil moisture for native tree species growth."
+#     else:
+#         moisture_msg = "Soil moisture outside ideal range; irrigation or species choice recommended."
 
-    return (f"Soil suitability at {coords}:\n"
-            f"{moisture_msg}\n"
-            f"Elevation: {elevation} m\n"
-            f"Land Cover Type: {land_cover}")
+#     return (f"Soil suitability at {coords}:\n"
+#             f"{moisture_msg}\n"
+#             f"Elevation: {elevation} m\n"
+#             f"Land Cover Type: {land_cover}")
 
-def get_geospatial_context(lat=40.7128, lon=-74.0060):
-    point = ee.Geometry.Point([lon, lat])
-    year = datetime.date.today().year
-    today = datetime.date.today()
+# def get_geospatial_context(lat=40.7128, lon=-74.0060):
+#     point = ee.Geometry.Point([lon, lat])
+#     year = datetime.date.today().year
+#     today = datetime.date.today()
 
-    # Try using current year
-    try_start = ee.Date.fromYMD(year, 1, 1)
-    try_end = ee.Date.fromYMD(year, today.month, today.day)
+#     # Try using current year
+#     try_start = ee.Date.fromYMD(year, 1, 1)
+#     try_end = ee.Date.fromYMD(year, today.month, today.day)
 
-    # Fallback default year
-    fallback_start = ee.Date('2023-01-01')
-    fallback_end = ee.Date('2023-12-31')
+#     # Fallback default year
+#     fallback_start = ee.Date('2023-01-01')
+#     fallback_end = ee.Date('2023-12-31')
     
-    def fetch(collection_id, selector, start, end, scale):
-        try:
-            coll = ee.ImageCollection(collection_id) \
-                .filterDate(start, end) \
-                .filterBounds(point) \
-                .select(selector)
-            return coll.mean().reduceRegion(
-                reducer=ee.Reducer.mean(),
-                geometry=point,
-                scale=scale
-            ).getInfo()
-        except:
-            return {}
+#     def fetch(collection_id, selector, start, end, scale):
+#         try:
+#             coll = ee.ImageCollection(collection_id) \
+#                 .filterDate(start, end) \
+#                 .filterBounds(point) \
+#                 .select(selector)
+#             return coll.mean().reduceRegion(
+#                 reducer=ee.Reducer.mean(),
+#                 geometry=point,
+#                 scale=scale
+#             ).getInfo()
+#         except:
+#             return {}
 
-    # Fetch NDVI (MODIS)
-    ndvi = fetch('MODIS/006/MOD13Q1', 'NDVI', try_start, try_end, 250) or \
-           fetch('MODIS/006/MOD13Q1', 'NDVI', fallback_start, fallback_end, 250)
+#     # Fetch NDVI (MODIS)
+#     ndvi = fetch('MODIS/006/MOD13Q1', 'NDVI', try_start, try_end, 250) or \
+#            fetch('MODIS/006/MOD13Q1', 'NDVI', fallback_start, fallback_end, 250)
 
-    # Fetch Precipitation (CHIRPS)
-    precip = fetch('UCSB-CHG/CHIRPS/DAILY', 'precipitation', try_start, try_end, 5000) or \
-             fetch('UCSB-CHG/CHIRPS/DAILY', 'precipitation', fallback_start, fallback_end, 5000)
+#     # Fetch Precipitation (CHIRPS)
+#     precip = fetch('UCSB-CHG/CHIRPS/DAILY', 'precipitation', try_start, try_end, 5000) or \
+#              fetch('UCSB-CHG/CHIRPS/DAILY', 'precipitation', fallback_start, fallback_end, 5000)
 
-    # Fetch Temperature (ERA5-Land)
-    temp = fetch('ECMWF/ERA5_LAND/DAILY_AGGR', 'temperature_2m', try_start, try_end, 1000) or \
-           fetch('ECMWF/ERA5_LAND/DAILY_AGGR', 'temperature_2m', fallback_start, fallback_end, 1000)
+#     # Fetch Temperature (ERA5-Land)
+#     temp = fetch('ECMWF/ERA5_LAND/DAILY_AGGR', 'temperature_2m', try_start, try_end, 1000) or \
+#            fetch('ECMWF/ERA5_LAND/DAILY_AGGR', 'temperature_2m', fallback_start, fallback_end, 1000)
 
-    # Land use from ESA (static - 2020)
-    landcover = ee.Image('ESA/WorldCover/v100/2020').sample(point, 10).first().getInfo()
+#     # Land use from ESA (static - 2020)
+#     landcover = ee.Image('ESA/WorldCover/v100/2020').sample(point, 10).first().getInfo()
 
-    # Soil Moisture from SMAP (daily 10km)
-    soil = fetch('NASA_USDA/HSL/SMAP10KM_soil_moisture', 'ssm', try_start, try_end, 10000) or \
-           fetch('NASA_USDA/HSL/SMAP10KM_soil_moisture', 'ssm', fallback_start, fallback_end, 10000)
+#     # Soil Moisture from SMAP (daily 10km)
+#     soil = fetch('NASA_USDA/HSL/SMAP10KM_soil_moisture', 'ssm', try_start, try_end, 10000) or \
+#            fetch('NASA_USDA/HSL/SMAP10KM_soil_moisture', 'ssm', fallback_start, fallback_end, 10000)
 
-    # Forest loss (Hansen 2000–2022)
-    forest = ee.Image('UMD/hansen/global_forest_change_2023_v1_11')
-    forest_loss = forest.select('lossyear').reduceRegion(
-        reducer=ee.Reducer.mean(),
-        geometry=point,
-        scale=30
-    ).getInfo()
+#     # Forest loss (Hansen 2000–2022)
+#     forest = ee.Image('UMD/hansen/global_forest_change_2023_v1_11')
+#     forest_loss = forest.select('lossyear').reduceRegion(
+#         reducer=ee.Reducer.mean(),
+#         geometry=point,
+#         scale=30
+#     ).getInfo()
 
-    # Elevation (SRTM, static)
-    elevation = ee.Image('USGS/SRTMGL1_003').sample(point, 30).first().getInfo()
+#     # Elevation (SRTM, static)
+#     elevation = ee.Image('USGS/SRTMGL1_003').sample(point, 30).first().getInfo()
 
-    # Assemble response
-    return {
-        "Latitude": lat,
-        "Longitude": lon,
-        "NDVI (mean)": round(ndvi.get('NDVI', 0) / 10000.0, 3),
-        "Precipitation (mm)": round(precip.get('precipitation', 0), 2),
-        "Temperature (°C)": round(temp.get('temperature_2m', 273.15) - 273.15, 2),
-        "Soil Moisture (m3/m3)": round(soil.get('ssm', 0), 3),
-        "Forest Loss Year (avg)": forest_loss.get('lossyear', 'N/A'),
-        "Land Cover Class (ESA)": landcover.get('map', 'N/A'),
-        "Elevation (m)": elevation.get('elevation', 'N/A')
-    }
+#     # Assemble response
+#     return {
+#         "Latitude": lat,
+#         "Longitude": lon,
+#         "NDVI (mean)": round(ndvi.get('NDVI', 0) / 10000.0, 3),
+#         "Precipitation (mm)": round(precip.get('precipitation', 0), 2),
+#         "Temperature (°C)": round(temp.get('temperature_2m', 273.15) - 273.15, 2),
+#         "Soil Moisture (m3/m3)": round(soil.get('ssm', 0), 3),
+#         "Forest Loss Year (avg)": forest_loss.get('lossyear', 'N/A'),
+#         "Land Cover Class (ESA)": landcover.get('map', 'N/A'),
+#         "Elevation (m)": elevation.get('elevation', 'N/A')
+#     }
 
-def cosine_similarity(a, b):
-    """Calculate cosine similarity between two vectors."""
-    return np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b))
+# def cosine_similarity(a, b):
+#     """Calculate cosine similarity between two vectors."""
+#     return np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b))
 
-def retrieve_rag_chunks(collection_name, query, top_k=5):
-    """
-    Retrieve top K most semantically similar chunks from the specified
-    subcollection under knowledge_chunks/root document in Firestore.
-    """
-    root_ref = db.collection("knowledge_chunks").document("root")
-    chunks_ref = root_ref.collection(collection_name).stream()
+# def retrieve_rag_chunks(collection_name, query, top_k=5):
+#     """
+#     Retrieve top K most semantically similar chunks from the specified
+#     subcollection under knowledge_chunks/root document in Firestore.
+#     """
+#     root_ref = db.collection("knowledge_chunks").document("root")
+#     chunks_ref = root_ref.collection(collection_name).stream()
 
-    query_emb = emd_model.encode([query])[0]
+#     query_emb = emd_model.encode([query])[0]
 
-    scored_chunks = []
-    for doc in chunks_ref:
-        chunk = doc.to_dict()
-        emb = chunk.get("embedding", None)
-        if emb is not None:
-            # Convert embedding list to numpy array
-            emb_np = np.array(emb)
-            sim = cosine_similarity(query_emb, emb_np)
-            scored_chunks.append((sim, chunk))
+#     scored_chunks = []
+#     for doc in chunks_ref:
+#         chunk = doc.to_dict()
+#         emb = chunk.get("embedding", None)
+#         if emb is not None:
+#             # Convert embedding list to numpy array
+#             emb_np = np.array(emb)
+#             sim = cosine_similarity(query_emb, emb_np)
+#             scored_chunks.append((sim, chunk))
 
-    # Sort chunks by descending similarity
-    scored_chunks.sort(key=lambda x: x[0], reverse=True)
+#     # Sort chunks by descending similarity
+#     scored_chunks.sort(key=lambda x: x[0], reverse=True)
 
-    # Return only the content field of top_k documents
-    top_contents = [chunk["content"] for _, chunk in scored_chunks[:top_k]]
+#     # Return only the content field of top_k documents
+#     top_contents = [chunk["content"] for _, chunk in scored_chunks[:top_k]]
 
-    return top_contents
+#     return top_contents
 
-def prompt_template(query: str, context: str, format_instructions: str) -> str:
-    prompt = (
-        "Use the following forestry data extracted from documents:\n"
-        f"{context}\n\n"
-        "Answer the query with geospatial reasoning:\n"
-        f"{query}\n\n"
-        f"{format_instructions}\n"
-        "Return only valid JSON."
-    )
-    return prompt
-    
-# prompt_template = PromptTemplate(
-#     input_variables=["query", "context", "format_instructions"],
-#     template=(
+# def prompt_template(query: str, context: str, format_instructions: str) -> str:
+#     prompt = (
 #         "Use the following forestry data extracted from documents:\n"
-#         "{context}\n\n"
+#         f"{context}\n\n"
 #         "Answer the query with geospatial reasoning:\n"
-#         "{query}\n\n"
-#         "{format_instructions}\n"
+#         f"{query}\n\n"
+#         f"{format_instructions}\n"
 #         "Return only valid JSON."
 #     )
-# )
+#     return prompt
+    
+# def rag_tree_grants_tool(query: str) -> str:
+#     chunks = retrieve_rag_chunks("tree_grants", query)
+#     if not chunks:
+#         return json.dumps({"result": [], "message": "No relevant tree grants data found."})
+#     context_text = "\n".join(chunks)
+#     format_instructions=parser.get_format_instructions()
+#     prompt = prompt_template(query, context_text, format_instructions)
+#     # prompt = prompt_template.format(
+#     #     query=query,
+#     #     context=context_text,
+#     #     format_instructions=parser.get_format_instructions()
+#     # )
+#     response = rag_llm.invoke(prompt)
+#     parsed = parser.parse(response.content)
+#     return json.dumps(parsed)
 
-def rag_tree_grants_tool(query: str) -> str:
-    chunks = retrieve_rag_chunks("tree_grants", query)
-    if not chunks:
-        return json.dumps({"result": [], "message": "No relevant tree grants data found."})
-    context_text = "\n".join(chunks)
-    format_instructions=parser.get_format_instructions()
-    prompt = prompt_template(query, context_text, format_instructions)
-    # prompt = prompt_template.format(
-    #     query=query,
-    #     context=context_text,
-    #     format_instructions=parser.get_format_instructions()
-    # )
-    response = rag_llm.invoke(prompt)
-    parsed = parser.parse(response.content)
-    return json.dumps(parsed)
-
-def rag_tree_info_tool(query: str) -> str:
-    chunks = retrieve_rag_chunks("tree_info", query)
-    if not chunks:
-        return json.dumps({"result": [], "message": "No relevant tree info data found."})
-    context_text = "\n".join(chunks)
-    format_instructions=parser.get_format_instructions()
-    prompt = prompt_template(query, context_text, format_instructions)
-    # prompt = prompt_template.format(
-    #     query=query,
-    #     context=context_text,
-    #     format_instructions=parser.get_format_instructions()
-    # )
-    response = rag_llm.invoke(prompt)
-    parsed = parser.parse(response.content)
-    return json.dumps(parsed)
+# def rag_tree_info_tool(query: str) -> str:
+#     chunks = retrieve_rag_chunks("tree_info", query)
+#     if not chunks:
+#         return json.dumps({"result": [], "message": "No relevant tree info data found."})
+#     context_text = "\n".join(chunks)
+#     format_instructions=parser.get_format_instructions()
+#     prompt = prompt_template(query, context_text, format_instructions)
+#     # prompt = prompt_template.format(
+#     #     query=query,
+#     #     context=context_text,
+#     #     format_instructions=parser.get_format_instructions()
+#     # )
+#     response = rag_llm.invoke(prompt)
+#     parsed = parser.parse(response.content)
+#     return json.dumps(parsed)
 
 
 
@@ -875,32 +869,34 @@ def rag_tree_info_tool(query: str) -> str:
 #     description="Executes advanced GIS batch processing tasks using the Solution pipeline."
 # )
 
-tools = [
-    Tool(name="ZoningLookup", func=get_zoning_info, description="Provides zoning-related land cover and forest loss info as proxy to guide tree planting recommendations."),
-    Tool(name="ClimateLookUp", func=get_climate_info, description="Returns precipitation, temperature, vegetation health (NDVI), flood risk, and sea level rise estimates for forestry planning."),
-    Tool(name="CheckTreeHealth", func=check_tree_health, description="Assess how healthy the trees are using the canopy cover and soil."),
-    Tool(name="SoilSuitabilityCheck",func=check_soil_suitability,description="Analyzes soil moisture, elevation, and land cover to evaluate suitability for native tree species planting."), 
-    Tool(name="TreeBenefitAssessment", func=assess_tree_benefit, description="Estimates carbon capture potential and cooling benefits based on NDVI, precipitation, and land cover data."),
-    Tool(
-        name="RAGTreeGrants",
-        func=rag_tree_grants_tool,
-        description="Retrieves recent tree grant and licensing information based on the users query."
-    ),
 
-    Tool(
-        name="RAGTreeInfo",
-        func=rag_tree_info_tool,
-        description="Retrieves additional forestry and tree information from based on UK forestry records and rules."
-    )
-    # gis_batch_tool
-]
+#Patching out the google earth tools to boost build time. 
+# tools = [
+#     Tool(name="ZoningLookup", func=get_zoning_info, description="Provides zoning-related land cover and forest loss info as proxy to guide tree planting recommendations."),
+#     Tool(name="ClimateLookUp", func=get_climate_info, description="Returns precipitation, temperature, vegetation health (NDVI), flood risk, and sea level rise estimates for forestry planning."),
+#     Tool(name="CheckTreeHealth", func=check_tree_health, description="Assess how healthy the trees are using the canopy cover and soil."),
+#     Tool(name="SoilSuitabilityCheck",func=check_soil_suitability,description="Analyzes soil moisture, elevation, and land cover to evaluate suitability for native tree species planting."), 
+#     Tool(name="TreeBenefitAssessment", func=assess_tree_benefit, description="Estimates carbon capture potential and cooling benefits based on NDVI, precipitation, and land cover data."),
+#     Tool(
+#         name="RAGTreeGrants",
+#         func=rag_tree_grants_tool,
+#         description="Retrieves recent tree grant and licensing information based on the users query."
+#     ),
+
+#     Tool(
+#         name="RAGTreeInfo",
+#         func=rag_tree_info_tool,
+#         description="Retrieves additional forestry and tree information from based on UK forestry records and rules."
+#     )
+#     # gis_batch_tool
+# ]
 
 # --------------------- Initialize agent with tools and LangChain LLM ---------------------
 
-agent = create_react_agent(
-    model=llm.bind_tools(tools),
-    tools=tools
-)
+# agent = create_react_agent(
+#     model=llm.bind_tools(tools),
+#     tools=tools
+# )
 
 
 

@@ -4,8 +4,9 @@ import vertexai
 import ee
 from google.oauth2 import service_account
 from google.cloud import firestore
-from langchain_core.output_parsers import JsonOutputParser
-from langchain_google_genai import ChatGoogleGenerativeAI
+#Langchain temp patched out 
+# from langchain_core.output_parsers import JsonOutputParser
+# from langchain_google_genai import ChatGoogleGenerativeAI
 from sentence_transformers import SentenceTransformer
 from flask_cors import CORS
 from google.oauth2.service_account import Credentials
@@ -40,8 +41,9 @@ with open(key_path, 'w') as f:
 earth_credentials= ee.ServiceAccountCredentials(SERVICE_ACCOUNT, key_path)
 ee.Initialize(earth_credentials, project='disco-parsec-444415-c4')
 db = firestore.Client(project="disco-parsec-444415-c4", credentials=credentials)
-parser = JsonOutputParser()
-rag_llm = ChatGoogleGenerativeAI(model="gemini-2.0-flash-001", temperature=0)
+#google earth patch out 
+# parser = JsonOutputParser()
+# rag_llm = ChatGoogleGenerativeAI(model="gemini-2.0-flash-001", temperature=0)
 hf_token = os.environ.get("HF_TOKEN")
 emd_model = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2",token=hf_token)
 
