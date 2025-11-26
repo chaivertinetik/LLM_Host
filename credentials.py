@@ -32,7 +32,7 @@ vertexai.init(
     location="us-central1",
     credentials=credentials
 )
-#testing earth engine service 
+
 SERVICE_ACCOUNT= 'earthengine@disco-parsec-444415-c4.iam.gserviceaccount.com'
 key_path = '/tmp/earthengine-key.json'
 with open(key_path, 'w') as f:
@@ -40,9 +40,8 @@ with open(key_path, 'w') as f:
 earth_credentials= ee.ServiceAccountCredentials(SERVICE_ACCOUNT, key_path)
 ee.Initialize(earth_credentials, project='disco-parsec-444415-c4')
 db = firestore.Client(project="disco-parsec-444415-c4", credentials=credentials)
-#google earth patch out 
-# parser = JsonOutputParser()
-# rag_llm = ChatGoogleGenerativeAI(model="gemini-2.0-flash-001", temperature=0)
+parser = JsonOutputParser()
+rag_llm = ChatGoogleGenerativeAI(model="gemini-2.0-flash-001", temperature=0)
 hf_token = os.environ.get("HF_TOKEN")
 emd_model = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2",token=hf_token)
 
