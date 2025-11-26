@@ -44,12 +44,11 @@ uvicorn
 pydantic
 black
 autopep8
-#patch out langchain and earth 
-# langchain
-# langchain-core
-# langchain-google-genai
-# langchain-community
-# earthengine-api
+langchain
+langchain-core
+langchain-google-genai
+langchain-community
+earthengine-api
 sentence-transformers
 google-cloud-firestore
 statsmodels

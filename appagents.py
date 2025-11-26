@@ -94,6 +94,12 @@ def build_conversation_prompt(new_user_prompt: str,
 
 # --------------------- ERDO LLM main functions ---------------------
 
+def geospatial_helper(prompt: str):
+    
+    geospatial_prompt = f"The user is asking about geospatial or forestry information: {prompt}. Answer their query in simple terms (two or three lines max) as a GIS expert in a simple friendly way. They may ask for assistance for things like how to remove ash trees safely or other diseases and pest infestations. Pull from trusted geospatial resources and respond within these constraints as a geospatial expert in a friendly way."
+    response = model.generate_content(geospatial_prompt).text.strip()
+    return str(response)
+
 def wants_map_output_keyword(prompt: str) -> bool:
     keywords = ["show", "display", "highlight", "visualize"]
     prompt_lower = prompt.lower()

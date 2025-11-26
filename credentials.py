@@ -4,9 +4,8 @@ import vertexai
 import ee
 from google.oauth2 import service_account
 from google.cloud import firestore
-#Langchain temp patched out 
-# from langchain_core.output_parsers import JsonOutputParser
-# from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_core.output_parsers import JsonOutputParser
+from langchain_google_genai import ChatGoogleGenerativeAI
 from sentence_transformers import SentenceTransformer
 from flask_cors import CORS
 from google.oauth2.service_account import Credentials
