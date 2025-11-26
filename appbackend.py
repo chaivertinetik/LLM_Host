@@ -1841,112 +1841,257 @@ def _iter_project_extra_entries(project_name: str, yaml_path: str) -> List[Dict[
 
     return _norm(default_list) + _norm(proj_list)
 
+
+# Where to store per-project data_locations caches (override via env if needed)
+DATA_LOCATIONS_CACHE_DIR = os.environ.get("DATA_LOCATIONS_CACHE_DIR", "data_locations")
+
+
+def _get_layer_last_edit_metadata(layer_url: str):
+    """
+    Return (last_edit_epoch_ms, display_string) for a FeatureServer/MapServer/ImageServer.
+
+    Uses:
+      - editingInfo.lastEditDate (preferred)
+      - lastEditDate at the top level (fallback)
+
+    If no timestamp is available, returns (None, None).
+    """
+    import datetime as _dt
+
+    if not layer_url:
+        return None, None
+
+    # Strip any trailing /query etc. so we hit the metadata endpoint
+    base_url = layer_url.rstrip("/")
+    if base_url.lower().endswith("/query"):
+        base_url = base_url[: base_url.lower().rfind("/query")]
+
+    params = {"f": "json"}
+    try:
+        r = _session.get(base_url, params=params, timeout=30)
+        r.raise_for_status()
+        js = r.json()
+    except Exception:
+        return None, None
+
+    ts = None
+    editing_info = js.get("editingInfo") or {}
+    ts = editing_info.get("lastEditDate") or js.get("lastEditDate")
+
+    if ts is None:
+        return None, None
+
+    # ArcGIS normally stores epoch millis
+    if isinstance(ts, (int, float)):
+        epoch_ms = int(ts)
+        try:
+            dt = _dt.datetime.utcfromtimestamp(epoch_ms / 1000.0)
+            display = dt.strftime("%Y-%m-%d %H:%M UTC")
+        except Exception:
+            display = None
+        return epoch_ms, display
+
+    # If it's already a string, we can only use it as display; no stable epoch
+    if isinstance(ts, str):
+        return None, ts
+
+    return None, None
+
+
+
+
+
 def make_project_data_locations(project_name: str, include_seasons: bool, attrs: dict) -> list[str]:
     logger.info(f"Building data locations for project '{project_name}' (include_seasons={include_seasons}).")
     # Always refresh from the project index (keeps behaviour consistent with your original)
     attrs = get_project_urls(project_name)
 
+    # -----------------------------------------------------------------
+    # NEW: load per-project cache and compute AOI metadata
+    # -----------------------------------------------------------------
+    os.makedirs(DATA_LOCATIONS_CACHE_DIR, exist_ok=True)
+    cache_path = os.path.join(DATA_LOCATIONS_CACHE_DIR, f"{project_name}.json")
+
+    cached: dict[str, Any] = {}
+    try:
+        if os.path.exists(cache_path):
+            with open(cache_path, "r", encoding="utf-8") as f:
+                cached = _json.load(f) or {}
+    except Exception as ex:
+        logger.warning(f"Failed to read data_locations cache for '{project_name}': {ex}")
+        cached = {}
+
+    # AOI source = prefer CHAT_INPUT, else ORTHOMOSAIC (same logic as your AOI builder in spirit)
+    aoi_source_url = (get_attr(attrs, "CHAT_INPUT") or get_attr(attrs, "ORTHOMOSAIC") or "").strip() or None
+    aoi_last_ms, aoi_last_display = _get_layer_last_edit_metadata(aoi_source_url) if aoi_source_url else (None, None)
+
+    cached_aoi = cached.get("aoi") or {}
+    prev_aoi_url = cached_aoi.get("source_url")
+    prev_aoi_last = cached_aoi.get("last_updated")
+
+    # Only treat AOI as unchanged if we actually have a timestamp to compare
+    aoi_unchanged = (
+    # Case 1: AOI is tied to a layer/raster and we have a timestamp
+    (
+        aoi_source_url
+        and aoi_last_ms is not None
+        and prev_aoi_url == aoi_source_url
+        and prev_aoi_last == aoi_last_ms
+    )
+    # Case 2: AOI is not tied to any layer (None both times) → treat as stable
+    or (
+        aoi_source_url is None
+        and cached_aoi.get("source_url") is None
+    )
+)
+
+    # Previous per-layer cache (may be empty)
+    previous_layer_cache: dict[str, Any] = cached.get("layers") or {}
+    new_layer_cache: dict[str, Any] = {}
+
     # Core project layer
     tree_crowns_url = get_attr(attrs, "TREE_CROWNS")
     data_locations: list[str] = []
 
-    def _get_last_updated_string(layer_url: str) -> Optional[str]:
-        """
-        Try to get a human-readable 'last updated' timestamp for a layer.
+    # -----------------------------------------------------------------
+    # Helper: caching-aware label + AOI URLs builder
+    # -----------------------------------------------------------------
 
-        Uses the ArcGIS REST layer metadata:
-          - editingInfo.lastEditDate (preferred)
-          - lastEditDate at the top level (fallback)
-
-        Returns a string like '2025-11-25 14:32 UTC' or None if not available.
-        """
-        import requests
-        import datetime as _dt
-
-        # Strip any /query off the URL so we hit the layer metadata endpoint
-        base_url = layer_url.rstrip("/")
-        if base_url.lower().endswith("/query"):
-            base_url = base_url[: base_url.lower().rfind("/query")]
-
-        params = {"f": "json"}
-        try:
-            r = requests.get(base_url, params=params, timeout=30)
-            r.raise_for_status()
-            js = r.json()
-        except Exception:
-            return None
-
-        # Prefer editingInfo.lastEditDate
-        ts = None
-        editing_info = js.get("editingInfo") or {}
-        ts = editing_info.get("lastEditDate") or js.get("lastEditDate")
-
-        if ts is None:
-            return None
-
-        # ArcGIS usually stores this as epoch millis; if it's already a string, just return
-        if isinstance(ts, (int, float)):
-            try:
-                dt = _dt.datetime.utcfromtimestamp(ts / 1000.0)
-                return dt.strftime("%Y-%m-%d %H:%M UTC")
-            except Exception:
-                return None
-        elif isinstance(ts, str):
-            # Best effort: return string as-is
-            return ts
-
-        return None
-
-    # Helper to add a layer with correct label + AOI in that layer's CRS
     def _add(layer_url: str, label_prefix: str, insert_at: Optional[int] = None):
         if not layer_url:
             return
+
+        # Normalise to a stable key (label + sanitised URL)
+        try:
+            norm_url = _sanitise_layer_url(layer_url)
+        except Exception:
+            norm_url = layer_url.strip()
+        layer_key = f"{label_prefix}|{norm_url}"
+
+        # Current layer last-edit metadata
+        layer_last_ms, layer_last_display = _get_layer_last_edit_metadata(layer_url)
+
+        # Previous cache entry for this layer (if any)
+        cached_entry = previous_layer_cache.get(layer_key) if isinstance(previous_layer_cache, dict) else None
+        prev_layer_last = cached_entry.get("last_updated") if cached_entry else None
+
+        # Has the layer itself changed since last cache?
+        layer_changed = (
+            cached_entry is not None
+            and layer_last_ms is not None
+            and prev_layer_last is not None
+            and layer_last_ms != prev_layer_last
+        )
+        is_new_layer = cached_entry is None
+        layer_updated_flag = bool(layer_changed or is_new_layer)
+
+        # Can we safely reuse cache?
+        #   - cache exists
+        #   - AOI unchanged (decided outside this function)
+        #   - layer has a stable last_edit timestamp
+        #   - timestamp matches cached one
+        can_use_cache = (
+            cached_entry is not None
+            and aoi_unchanged
+            and layer_last_ms is not None
+            and prev_layer_last == layer_last_ms
+        )
+
+        if can_use_cache:
+            logger.info(f"Reusing cached data_locations for '{label_prefix}' ({layer_url}).")
+            entries = cached_entry.get("entries") or []
+
+            # Reinsert entries respecting insert_at semantics
+            nonlocal data_locations
+            for entry in entries:
+                if insert_at is None or insert_at < 0:
+                    data_locations.append(entry)
+                else:
+                    pos = min(insert_at, len(data_locations))
+                    data_locations.insert(pos, entry)
+                    insert_at += 1
+
+            # AOI + layer unchanged → is_updated = False
+            new_layer_cache[layer_key] = {
+                "layer_url": layer_url,
+                "label_prefix": label_prefix,
+                "last_updated": layer_last_ms,
+                "last_updated_display": layer_last_display,
+                "is_updated": False,
+                "entries": entries,
+            }
+            return
+
+        # FALLBACK: build fresh entries (original behaviour)
         try:
             if not _layer_has_features(layer_url):
                 logger.info(f"Skipping empty layer: {layer_url}")
                 return
-        except Exception as ex:
+        except Exception:
+            # If the empty-layer check fails, we just continue and try anyway
             pass
+
         try:
+            # AOI in the layer's CRS
             aoi_layer_crs = get_aoi_in_layer_crs(project_name, layer_url)
             label = _label_for_layer(label_prefix, layer_url)
-    
+
             # Build one or many URLs so ALL rows are retrievable
             page_urls = _paginate_urls_for_aoi(layer_url, aoi_layer_crs, out_fields="*")
-    
+
             # Columns once (no need to fetch for every page)
             _cols = _get_layer_columns(layer_url)
             _cols_str = _format_columns_inline(_cols)
-    
-            # NEW: schema with unlimited strings + 30-cap numerics
+
+            # Schema with unlimited strings + 30-cap numerics
             _schema = _extract_schema_for_layer(project_name, layer_url, where="1=1", per_field_numeric_limit=30)
             _schema_str = _schema_string_for_prompt(_schema, max_total_chars=None)  # no truncation
 
-            # NEW: last updated date from layer metadata
-            _last_updated = _get_last_updated_string(layer_url)
-    
+            # Human-readable last updated (may be None)
+            _last_updated_str = layer_last_display
+
+            # Collect entries for this layer for caching
+            layer_entries: list[str] = []
+
+            nonlocal data_locations
             for idx, url in enumerate(page_urls, start=1):
                 suffix = f" (page {idx}/{len(page_urls)})" if len(page_urls) > 1 else ""
                 entry = f"{label}{suffix}: {url}"
                 if idx == 1:
                     if _cols_str:
                         entry += f"\n{_cols_str}"
-                    # attach schema text under the columns on first page
+                    # schema text
                     entry += f"\n  schema: {_schema_str}"
-                    # attach last updated under the schema (if available)
-                    if _last_updated:
-                        entry += f"\n  last_updated: {_last_updated}"
-    
+                    # last updated text
+                    if _last_updated_str:
+                        entry += f"\n  last_updated: {_last_updated_str}"
+
+                # Insert into main list honouring insert_at
                 if insert_at is None or insert_at < 0:
                     data_locations.append(entry)
                 else:
                     pos = min(insert_at, len(data_locations))
                     data_locations.insert(pos, entry)
-                    insert_at += 1  # keep subsequent pages in order
+                    insert_at += 1
+
+                layer_entries.append(entry)
+
+            # Store freshly built entries in cache, including update flag
+            new_layer_cache[layer_key] = {
+                "layer_url": layer_url,
+                "label_prefix": label_prefix,
+                "last_updated": layer_last_ms,
+                "last_updated_display": layer_last_display,
+                # True if:
+                #   - layer did not exist in previous cache (new), OR
+                #   - lastEditDate changed since previous run.
+                # If only AOI changed but layer didn't, this stays False.
+                "is_updated": layer_updated_flag,
+                "entries": layer_entries,
+            }
+
         except Exception as ex:
             logger.error(f"Failed to add data location for {label_prefix}: {ex}")
-
-
 
     def _layer_has_features(url: str) -> bool:
         """
@@ -2024,9 +2169,7 @@ def make_project_data_locations(project_name: str, include_seasons: bool, attrs:
 
         return f"{base}::{'national' if is_national else 'local'}"
 
-    # Track which base categories have already been added (prefer first-come, i.e., local with higher priority)
     def _category_already_present(category_key: str) -> bool:
-        # We compare only the base (before ::), so later nationals are skipped if a local exists
         base = category_key.split("::", 1)[0]
         for line in data_locations:
             low = line.lower()
@@ -2050,7 +2193,7 @@ def make_project_data_locations(project_name: str, include_seasons: bool, attrs:
     if tree_crowns_url:
         _add(tree_crowns_url, "Tree crowns")
 
-    # Optional seasonal layers — each uses AOI in its OWN CRS and correct geometry label
+    # Optional seasonal layers — unchanged from your original
     if include_seasons and project_name.__contains__("TT_"):
         logger.info("Including seasonal crown layers.")
         try:
@@ -2074,35 +2217,27 @@ def make_project_data_locations(project_name: str, include_seasons: bool, attrs:
         except Exception as e:
             logger.error(f"Error including seasonal data locations: {e}")
 
-    # -----------------------------------------------------------------
-    # NEW: Append/insert project-specific extras from YAML with PRIORITY & DE-DUP
-    # -----------------------------------------------------------------
-    extras = _iter_project_extra_entries(project_name, YAML_DEFAULT_PATH)  # pulls default + project blocks
+    # --- YAML extras (unchanged logic, now calling _add/_add_raw) -------------
+    extras = _iter_project_extra_entries(project_name, YAML_DEFAULT_PATH)
 
-    # Compute explicit or inferred priority
     def _infer_priority(item: dict) -> int:
         if isinstance(item.get("priority"), int):
             return item["priority"]
         lbl = (item.get("label") or "")
-        # heuristic: project-specific/local if label mentions project name or doesn't say 'National'
         if project_name.lower() in lbl.lower() or "national" not in lbl.lower():
             return 10
         return 100
 
-    # Attach computed priorities
     for it in extras:
         it["__priority"] = _infer_priority(it)
 
-    # Sort: lower priority number first (locals before nationals)
     extras.sort(key=lambda d: d.get("__priority", 50))
 
-    # Add extras in sorted order, skipping later items whose category already exists
     for item in extras:
         label: str = item.get("label")
         aoifilter: bool = bool(item.get("aoifilter", True))
         insert_at: Optional[int] = item.get("insert_at", None)
 
-        # Source resolution: use_attr takes precedence if provided, else url
         layer_url: Optional[str] = None
         if item.get("use_attr"):
             try:
@@ -2123,8 +2258,6 @@ def make_project_data_locations(project_name: str, include_seasons: bool, attrs:
         cat_key = _infer_category(label, layer_url)
         base_key = cat_key.split("::", 1)[0]
         if _category_already_present(cat_key):
-            # If a category is already represented (likely by a local, given sorting),
-            # skip adding later (usually national) duplicates.
             logger.info(f"Skipping '{label}' ({base_key}) because a {base_key} layer already exists (local preferred).")
             continue
 
@@ -2137,12 +2270,34 @@ def make_project_data_locations(project_name: str, include_seasons: bool, attrs:
             logger.error(f"Failed to apply YAML extra '{label}': {ex}")
 
     # -----------------------------------------------------------------
+    # NEW: write combined cache back to disk
+    # -----------------------------------------------------------------
+    try:
+        cache_obj = {
+            "version": 1,
+            "project": project_name,
+            "cached_at": datetime.datetime.utcnow().isoformat() + "Z",
+            "aoi": {
+                "source_url": aoi_source_url,
+                "last_updated": aoi_last_ms,
+                "last_updated_display": aoi_last_display,
+            },
+            "layers": new_layer_cache,
+            # Optional: keep a copy of the fully combined list for inspection
+            "full_list": data_locations,
+        }
+        with open(cache_path, "w", encoding="utf-8") as f:
+            _json.dump(cache_obj, f, default=_json_default, indent=2)
+        logger.info(f"Wrote data_locations cache for '{project_name}' to {cache_path}")
+    except Exception as ex:
+        logger.warning(f"Failed to write data_locations cache for '{project_name}': {ex}")
 
     logger.info(f"Final list of {len(data_locations)} data locations generated.")
     for loc in data_locations:
         logger.debug(f"  - {loc}")
 
     return data_locations
+
 
 
 
@@ -2170,3 +2325,5 @@ def _label_for_layer(prefix: str, layer_url: str) -> str:
     else:
         kind = "Features"
     return f"{kind} geoJSON: {prefix}"
+
+
