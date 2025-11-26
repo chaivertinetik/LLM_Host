@@ -1956,8 +1956,9 @@ def make_project_data_locations(project_name: str, include_seasons: bool, attrs:
     # -----------------------------------------------------------------
     # Helper: caching-aware label + AOI URLs builder
     # -----------------------------------------------------------------
-
+    
     def _add(layer_url: str, label_prefix: str, insert_at: Optional[int] = None):
+        nonlocal data_locations       
         if not layer_url:
             return
 
@@ -1971,11 +1972,11 @@ def make_project_data_locations(project_name: str, include_seasons: bool, attrs:
         # Current layer last-edit metadata
         layer_last_ms, layer_last_display = _get_layer_last_edit_metadata(layer_url)
 
-        # Previous cache entry for this layer (if any)
+        # Previous cache entry for this layer (if exists)
         cached_entry = previous_layer_cache.get(layer_key) if isinstance(previous_layer_cache, dict) else None
         prev_layer_last = cached_entry.get("last_updated") if cached_entry else None
 
-        # Has the layer itself changed since last cache?
+        # Detect change in this layer only
         layer_changed = (
             cached_entry is not None
             and layer_last_ms is not None
@@ -1985,11 +1986,7 @@ def make_project_data_locations(project_name: str, include_seasons: bool, attrs:
         is_new_layer = cached_entry is None
         layer_updated_flag = bool(layer_changed or is_new_layer)
 
-        # Can we safely reuse cache?
-        #   - cache exists
-        #   - AOI unchanged (decided outside this function)
-        #   - layer has a stable last_edit timestamp
-        #   - timestamp matches cached one
+        # Determine whether cached entries can be reused
         can_use_cache = (
             cached_entry is not None
             and aoi_unchanged
@@ -1997,12 +1994,14 @@ def make_project_data_locations(project_name: str, include_seasons: bool, attrs:
             and prev_layer_last == layer_last_ms
         )
 
+        # ------------------------------------------
+        # CASE 1 — REUSE CACHE
+        # ------------------------------------------
         if can_use_cache:
             logger.info(f"Reusing cached data_locations for '{label_prefix}' ({layer_url}).")
             entries = cached_entry.get("entries") or []
 
-            # Reinsert entries respecting insert_at semantics
-            nonlocal data_locations
+            # Reinsert entries respecting insert_at
             for entry in entries:
                 if insert_at is None or insert_at < 0:
                     data_locations.append(entry)
@@ -2011,7 +2010,7 @@ def make_project_data_locations(project_name: str, include_seasons: bool, attrs:
                     data_locations.insert(pos, entry)
                     insert_at += 1
 
-            # AOI + layer unchanged → is_updated = False
+            # Write back cache (no change, AOI+layer unchanged)
             new_layer_cache[layer_key] = {
                 "layer_url": layer_url,
                 "label_prefix": label_prefix,
@@ -2022,51 +2021,45 @@ def make_project_data_locations(project_name: str, include_seasons: bool, attrs:
             }
             return
 
-        # FALLBACK: build fresh entries (original behaviour)
+        # ------------------------------------------
+        # CASE 2 — REBUILD LAYER (layer changed or AOI changed)
+        # ------------------------------------------
         try:
             if not _layer_has_features(layer_url):
                 logger.info(f"Skipping empty layer: {layer_url}")
                 return
         except Exception:
-            # If the empty-layer check fails, we just continue and try anyway
             pass
 
         try:
-            # AOI in the layer's CRS
+            # AOI in layer CRS
             aoi_layer_crs = get_aoi_in_layer_crs(project_name, layer_url)
             label = _label_for_layer(label_prefix, layer_url)
 
-            # Build one or many URLs so ALL rows are retrievable
+            # Build paginated URLs
             page_urls = _paginate_urls_for_aoi(layer_url, aoi_layer_crs, out_fields="*")
 
-            # Columns once (no need to fetch for every page)
+            # Fetch columns + schema
             _cols = _get_layer_columns(layer_url)
             _cols_str = _format_columns_inline(_cols)
-
-            # Schema with unlimited strings + 30-cap numerics
             _schema = _extract_schema_for_layer(project_name, layer_url, where="1=1", per_field_numeric_limit=30)
-            _schema_str = _schema_string_for_prompt(_schema, max_total_chars=None)  # no truncation
+            _schema_str = _schema_string_for_prompt(_schema, max_total_chars=None)
 
-            # Human-readable last updated (may be None)
             _last_updated_str = layer_last_display
-
-            # Collect entries for this layer for caching
             layer_entries: list[str] = []
 
-            nonlocal data_locations
+            # Build entries
             for idx, url in enumerate(page_urls, start=1):
                 suffix = f" (page {idx}/{len(page_urls)})" if len(page_urls) > 1 else ""
                 entry = f"{label}{suffix}: {url}"
+
                 if idx == 1:
                     if _cols_str:
                         entry += f"\n{_cols_str}"
-                    # schema text
                     entry += f"\n  schema: {_schema_str}"
-                    # last updated text
                     if _last_updated_str:
                         entry += f"\n  last_updated: {_last_updated_str}"
 
-                # Insert into main list honouring insert_at
                 if insert_at is None or insert_at < 0:
                     data_locations.append(entry)
                 else:
@@ -2076,22 +2069,19 @@ def make_project_data_locations(project_name: str, include_seasons: bool, attrs:
 
                 layer_entries.append(entry)
 
-            # Store freshly built entries in cache, including update flag
+            # Write new cache entry
             new_layer_cache[layer_key] = {
                 "layer_url": layer_url,
                 "label_prefix": label_prefix,
                 "last_updated": layer_last_ms,
                 "last_updated_display": layer_last_display,
-                # True if:
-                #   - layer did not exist in previous cache (new), OR
-                #   - lastEditDate changed since previous run.
-                # If only AOI changed but layer didn't, this stays False.
-                "is_updated": layer_updated_flag,
+                "is_updated": layer_updated_flag,       # TRUE if new or changed
                 "entries": layer_entries,
             }
 
         except Exception as ex:
             logger.error(f"Failed to add data location for {label_prefix}: {ex}")
+
 
     def _layer_has_features(url: str) -> bool:
         """
@@ -2325,5 +2315,4 @@ def _label_for_layer(prefix: str, layer_url: str) -> str:
     else:
         kind = "Features"
     return f"{kind} geoJSON: {prefix}"
-
 
