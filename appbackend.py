@@ -1921,7 +1921,7 @@ def make_project_data_locations(project_name: str, include_seasons: bool, attrs:
         logger.warning(f"Failed to read data_locations cache for '{project_name}': {ex}")
         cached = {}
 
-    # AOI source = prefer CHAT_INPUT, else ORTHOMOSAIC (same logic as your AOI builder in spirit)
+    # AOI source = prefer CHAT_INPUT, else ORTHOMOSAIC (or None if implicit AOI)
     aoi_source_url = (get_attr(attrs, "CHAT_INPUT") or get_attr(attrs, "ORTHOMOSAIC") or "").strip() or None
     aoi_last_ms, aoi_last_display = _get_layer_last_edit_metadata(aoi_source_url) if aoi_source_url else (None, None)
 
@@ -1929,21 +1929,22 @@ def make_project_data_locations(project_name: str, include_seasons: bool, attrs:
     prev_aoi_url = cached_aoi.get("source_url")
     prev_aoi_last = cached_aoi.get("last_updated")
 
-    # Only treat AOI as unchanged if we actually have a timestamp to compare
-    aoi_unchanged = (
-    # Case 1: AOI is tied to a layer/raster and we have a timestamp
-    (
-        aoi_source_url
-        and aoi_last_ms is not None
-        and prev_aoi_url == aoi_source_url
-        and prev_aoi_last == aoi_last_ms
-    )
-    # Case 2: AOI is not tied to any layer (None both times) → treat as stable
-    or (
-        aoi_source_url is None
-        and cached_aoi.get("source_url") is None
-    )
-)
+    # AOI update detection:
+    # - First run (no cached AOI)          -> is_updated = True
+    # - URL changed                        -> is_updated = True
+    # - lastEditDate changed (incl. None)  -> is_updated = True
+    # - Else                               -> is_updated = False
+    if cached_aoi:
+        if (aoi_source_url != prev_aoi_url) or (aoi_last_ms != prev_aoi_last):
+            aoi_is_updated_flag = True
+        else:
+            aoi_is_updated_flag = False
+    else:
+        # No previous AOI cached → treat as newly built
+        aoi_is_updated_flag = True
+
+    aoi_unchanged = not aoi_is_updated_flag
+
 
     # Previous per-layer cache (may be empty)
     previous_layer_cache: dict[str, Any] = cached.get("layers") or {}
@@ -2264,18 +2265,19 @@ def make_project_data_locations(project_name: str, include_seasons: bool, attrs:
     # -----------------------------------------------------------------
     try:
         cache_obj = {
-            "version": 1,
-            "project": project_name,
-            "cached_at": datetime.datetime.utcnow().isoformat() + "Z",
-            "aoi": {
-                "source_url": aoi_source_url,
-                "last_updated": aoi_last_ms,
-                "last_updated_display": aoi_last_display,
-            },
-            "layers": new_layer_cache,
-            # Optional: keep a copy of the fully combined list for inspection
-            "full_list": data_locations,
-        }
+                "version": 1,
+                "project": project_name,
+                "cached_at": datetime.datetime.utcnow().isoformat() + "Z",
+                "aoi": {
+                    "source_url": aoi_source_url,
+                    "last_updated": aoi_last_ms,
+                    "last_updated_display": aoi_last_display,
+                    "is_updated": aoi_is_updated_flag,   # <--- NEW
+                },
+                "layers": new_layer_cache,
+                "full_list": data_locations,
+            }
+
         with open(cache_path, "w", encoding="utf-8") as f:
             _json.dump(cache_obj, f, default=_json_default, indent=2)
         logger.info(f"Wrote data_locations cache for '{project_name}' to {cache_path}")
