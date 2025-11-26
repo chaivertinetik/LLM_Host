@@ -2317,4 +2317,3 @@ def _label_for_layer(prefix: str, layer_url: str) -> str:
     else:
         kind = "Features"
     return f"{kind} geoJSON: {prefix}"
-
