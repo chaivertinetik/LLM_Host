@@ -7,12 +7,11 @@ import os
 from pydantic import BaseModel
 from typing import Dict
 from credentials import db, parser, rag_llm, emd_model
-from appagents import agent, llm, load_history, save_history, build_conversation_prompt, wants_map_output_keyword, wants_map_output_genai, wants_map_output, is_geospatial_task, clean_indentation, wants_additional_info_keyword, wants_additional_info_genai, wants_additional_info, wants_gis_task_genai, want_gis_task, prompt_suggetions, try_llm_fix, long_running_task, get_geospatial_context_tool, get_zoning_info, get_climate_info, check_tree_health, assess_tree_benefit, check_soil_suitability, get_geospatial_context, cosine_similarity, retrieve_rag_chunks, rag_tree_grants_tool, rag_tree_info_tool, geospatial_helper
+from appagents import agent, llm, load_history, save_history, build_conversation_prompt, wants_map_output_keyword, wants_map_output_genai, wants_map_output, is_geospatial_task, clean_indentation, wants_additional_info_keyword, wants_additional_info_genai, wants_additional_info, wants_gis_task_genai, want_gis_task, prompt_suggetions, try_llm_fix, long_running_task, get_geospatial_context_tool, get_zoning_info, get_climate_info, check_tree_health, assess_tree_benefit, check_soil_suitability, get_geospatial_context, cosine_similarity, retrieve_rag_chunks, rag_tree_grants_tool, rag_tree_info_tool, geospatial_helper,  get_query_hash, check_firestore_for_cached_answer, store_answer_in_firestore, cache_load_helper
 from appbackend import trigger_cleanup, ClearRequest, get_project_urls, get_attr, make_project_data_locations
 from fastapi import FastAPI, BackgroundTasks, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-
-
+from appbackend import filter as push_to_map
 
 
 # --------------------- Setup FASTAPI app ---------------------
@@ -103,7 +102,7 @@ async def process_request(request_data: RequestData):
                 #     "messages": [{"role": "user", "content": full_context}]
                 # })
                 # reasoning_response = response["messages"][-1]["content"]
-                reasoning_response = geospatial_helper(user_task) 
+                reasoning_response = geospatial_helper(full_context) 
                 combined_message = f"{message}\n\nAdditional Analysis:\n{reasoning_response}"
             except Exception:
                 combined_message = message
@@ -134,6 +133,22 @@ async def process_request(request_data: RequestData):
 
     elif do_gis_op: 
         try:
+            #pipeline for checking if area is selected..
+            # if is_updated:
+            #     cached_result = check_firestore_for_cached_answer(user_task)
+            #     if cached_result is not None:
+            #         push_to_map(cached_result, user_task)
+            #         message = cache_load_helper(user_task)
+            #         result = cached_result
+            #         return {
+            #             "status": "completed",
+            #             "message": message,
+            #             "tree_ids": result if isinstance(result, list) else (result.to_json() if hasattr(result, "to_json") and "GeoDataFrame" in str(type(result)) else None)
+            #         }
+            #     else:
+            #         #patch in the normal pipeline here!
+                    
+                    
             attrs = get_project_urls(task_name)
             tree_crowns_url = get_attr(attrs, "TREE_CROWNS")
             roi_url = get_attr(attrs, "CHAT_INPUT")

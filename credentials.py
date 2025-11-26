@@ -10,11 +10,6 @@ from sentence_transformers import SentenceTransformer
 from flask_cors import CORS
 from google.oauth2.service_account import Credentials
 
-
-
-
-
-
 # --------------------- SETUP and INIT---------------------
 
 google_creds = os.environ.get("GOOGLE_CREDENTIALS")

@@ -25,6 +25,9 @@ from google.api_core.exceptions import ResourceExhausted
 from appbackend import filter as push_to_map
 from LLM_Heroku_Kernel import Solution
 
+import hashlib
+import io
+import geopandas as gpd
 
 
 
@@ -59,7 +62,7 @@ class GeminiLLMWrapper(LLM):
 # === Create Gemini model ===
 model = GenerativeModel("gemini-2.0-flash-001")
 llm = GeminiLLMWrapper(gemini_llm=model)
-#------------------------------------------- Firestore to store and retrieve old prompts ------------------------------------------------------
+#------------------------------------------- Firestore to store and retrieve old prompts and fetch data ------------------------------------------------------
 
 #Temporary : need to revert to the collections-> with documents version and fix the datetime serialization error 
 def load_history(session_id:str, max_turns=5):
@@ -91,8 +94,35 @@ def build_conversation_prompt(new_user_prompt: str,
     lines.append("Assistant:")
     return "\n".join(lines)
 
+def get_query_hash(prompt):
+    # Hash the prompt string directly
+    return hashlib.md5(prompt.encode()).hexdigest()
+
+def check_firestore_for_cached_answer(prompt):
+    query_hash = get_query_hash(prompt)
+    doc_ref = db.collection("map_history").document(query_hash)
+    doc = doc_ref.get()
+    if doc.exists:
+        geojson_str = doc.to_dict().get("geojson_data")
+        if geojson_str:
+            return gpd.read_file(io.BytesIO(geojson_str.encode()))
+    return None
+
+def store_answer_in_firestore(prompt, gdf):
+    query_hash = get_query_hash(prompt)
+    geojson_str = gdf.to_json()
+    doc_ref = db.collection("map_history").document(query_hash)
+    doc_ref.set({"geojson_data": geojson_str})
+
+
+
 
 # --------------------- ERDO LLM main functions ---------------------
+
+def cache_load_helper(prompt:str): 
+    cache_prompt = f"The user is asking about geospatial or forestry information: {prompt} and you were able to fetch the result from their history, so reply telling this to the user (two or three lines max) as a GIS expert in a simple friendly way."
+    response = model.generate_content(cache_prompt).text.strip()
+    return str(response)
 
 def geospatial_helper(prompt: str):
     
@@ -569,6 +599,8 @@ def long_running_task(user_task: str, task_name: str, data_locations: list):
             
                 geojson = result.to_json()
                 # need to update this to go to the write place in arcgis if it's a GeoDataFrame
+                #store the query and geojson in firestore for the furture
+                # store_answer_in_firestore(user_task, geojson)
                 push_to_map(geojson, task_name)
             
             elif isinstance(result, list):
