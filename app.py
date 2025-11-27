@@ -902,10 +902,43 @@ async def process_request(request_data: RequestData):
     # job_status[job_id] = {"status": "queued", "message": "Task is queued for processing"}
     try:
         tree_crowns_url, chat_output_url = get_project_urls(task_name)
+        def build_tree_crowns_data_location(tree_crowns_url: str) -> list[str]:
+            """
+            Builds a single-item list containing the correct Tree Crowns geojson URL
+            following Rahul's rules.
+            """
+            if not tree_crowns_url:
+                return []
+
+            url = tree_crowns_url.strip()
+
+            # Rule 1: If .geojson → use as-is
+            if url.lower().endswith(".geojson"):
+                return [f"Tree crown geoJSON shape file: {url}"]
+
+            # Extract last path segment
+            last_part = url.rstrip("/").split("/")[-1]
+
+            # Rule 2: If last segment is a number → do NOT append /0
+            if last_part.isdigit():
+                full_url = (
+                    f"{url}/query?where=1%3D1&outFields=*&f=geojson"
+                )
+                return [f"Tree crown geoJSON shape file: {full_url}"]
+
+            # Rule 3: If not ending with number → append /0/query...
+            full_url = (
+                f"{url}/0/query?where=1%3D1&outFields=*&f=geojson"
+            )
+            return [f"Tree crown geoJSON shape file: {full_url}"]
+
+
+        tree_crowns_url=build_tree_crowns_data_location(tree_crowns_url)
         if task_name in ["TT_GCW1_Summer", "TT_GCW1_Winter"]:
             tree_crown_summer, _ = get_project_urls("TT_GCW1_Summer")
             tree_crown_winter, _ = get_project_urls("TT_GCW1_Winter")
-        
+            tree_crown_summer=build_tree_crowns_data_location(tree_crown_summer)
+            tree_crown_winter=build_tree_crowns_data_location(tree_crown_winter)
             # Fetch CRS for each relevant URL
             # crs_current = fetch_crs(tree_crowns_url)
             # crs_summer = fetch_crs(tree_crown_summer)
@@ -914,16 +947,16 @@ async def process_request(request_data: RequestData):
             # (CRS: EPSG:{crs_summer})
             #( CRS: EPSG:{crs_winter})
             data_locations = [
-                f"Tree crown geoJSON shape file: {tree_crowns_url}/0/query?where=1%3D1&outFields=*&f=geojson.",
-                f"Before storm tree crown geoJSON: {tree_crown_summer}/0/query?where=1%3D1&outFields=*&f=geojson.",
-                f"After storm tree crown geoJSON: {tree_crown_winter}/0/query?where=1%3D1&outFields=*&f=geojson."
+                f"Tree crown geoJSON shape file: {tree_crowns_url}.",
+                f"Before storm tree crown geoJSON: {tree_crown_summer}.",
+                f"After storm tree crown geoJSON: {tree_crown_winter}."
             ]
         else:
             # Fetch CRS for the single URL
             # crs_current = fetch_crs(tree_crowns_url)
             # (CRS: EPSG:{crs_current})
             data_locations = [
-                f"Tree crown geoJSON shape file: {tree_crowns_url}/0/query?where=1%3D1&outFields=*&f=geojson."
+                f"Tree crown geoJSON shape file: {tree_crowns_url}."
             ]
         # background_tasks.add_task(long_running_task, job_id, user_task, task_name, data_locations)
         result = long_running_task(user_task, task_name, data_locations)
