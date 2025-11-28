@@ -18,8 +18,20 @@ from shapely.geometry import mapping
 from shapely.ops import transform as _shp_transform
 import os
 from functools import lru_cache
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Union, Tuple
 from pandas.api.types import is_datetime64_any_dtype, is_datetime64tz_dtype
+import os
+import time
+
+ARCGIS_TOKEN_API = os.getenv(
+    "ARCGIS_TOKEN_API",
+    "https://arcgis-token-microservice-1042524106019.europe-west1.run.app"
+)
+INTERNAL_API_KEY = os.getenv("INTERNAL_API_KEY", "xyz")
+
+# Simple in-memory cache: { "token": str, "expires_at": unix_ts }
+_token_cache: dict = {}
+
 
 
 try:
@@ -65,6 +77,66 @@ class ClearRequest(BaseModel):
     task_name: str
 
 # --------------------- ARC GIS UPDATE ---------------------
+
+def get_arcgis_token(force_refresh: bool = False) -> str:
+    """
+    Get an ArcGIS token from your Cloud Run microservice.
+    - Uses INTERNAL_API_KEY header for auth.
+    - Caches the token in memory until close to expiry.
+    - Raises RuntimeError on failure.
+    Returns
+    -------
+    str
+        The ArcGIS access token string.
+    """
+    global _token_cache
+    # ----------------------------------------------------------------
+    # 1. Use cached token if still valid and not forcing refresh
+    # ----------------------------------------------------------------
+    now = time.time()
+    token = _token_cache.get("token")
+    expires_at = _token_cache.get("expires_at")
+    if (
+        not force_refresh
+        and token is not None
+        and expires_at is not None
+        and now < expires_at - 60  # 60s safety margin
+    ):
+        return token
+    # ----------------------------------------------------------------
+    # 2. Call Cloud Run /token endpoint
+    # ----------------------------------------------------------------
+    url = f"{ARCGIS_TOKEN_API.rstrip('/')}/token"
+    headers = {
+        "X-Internal-Key": INTERNAL_API_KEY
+    }
+    try:
+        resp = requests.get(url, headers=headers, timeout=15)
+    except Exception as exc:
+        raise RuntimeError(f"Error calling token microservice: {exc}") from exc
+    if not resp.ok:
+        raise RuntimeError(
+            f"Token service error {resp.status_code}: {resp.text}"
+        )
+    try:
+        data = resp.json()
+    except Exception as exc:
+        raise RuntimeError(f"Token service returned non-JSON: {resp.text}") from exc
+    # Your microservice returns something like:
+    # {"access_token": "...", "expires_in": 7200}
+    token = data.get("access_token") or data.get("token")
+    expires_in = data.get("expires_in") or data.get("expires")
+    if not token:
+        raise RuntimeError(f"Token service returned no token field: {data}")
+    # Fallback expiry: 1 hour if not provided
+    if isinstance(expires_in, (int, float)):
+        expires_at = now + float(expires_in)
+    else:
+        expires_at = now + 3600
+    # Cache
+    _token_cache["token"] = token
+    _token_cache["expires_at"] = expires_at
+    return token
 
 def _json_default(obj):
     # numpy → python scalars
