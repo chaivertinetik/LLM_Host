@@ -130,6 +130,12 @@ def geospatial_helper(prompt: str):
     response = model.generate_content(geospatial_prompt).text.strip()
     return str(response)
 
+def long_debug(prompt: str, error: str):
+    
+    geospatial_prompt = f"The user is asking about geospatial or forestry information: {prompt}. But encountered the following error: {error}. As a geospatial helper in simple terms (two or three lines max) can you explain to the user what the error is and whow they should requery the system to prevent this from happening."
+    response = model.generate_content(geospatial_prompt).text.strip()
+    return str(response)
+
 def wants_map_output_keyword(prompt: str) -> bool:
     keywords = ["show", "display", "highlight", "visualize"]
     prompt_lower = prompt.lower()
@@ -578,6 +584,14 @@ def long_running_task(user_task: str, task_name: str, data_locations: list):
         result = globals().get('result', None)
         print("result type:", type(result))
         print("Final result:", result)
+        explanation_prompt = (
+        f"For the task: {user_task}, I just ran the generated code: {code_for_assembly}.\n"
+        f"Here's the output: {result}.\n"
+        f"Explain in simple terms (one or two lines max) as a GIS expert what geospatial task was performed to obtain this result. Do not mention or describe any code or programming; just summarize the GIS action you took in a simple friendly way and what the result means for the user's query.\n"   
+        )
+        explanation_response = model.generate_content(explanation_prompt)
+        explanation_text = explanation_response.text.strip()
+
         is_empty_result = False
         is_empty_result = result is None or (isinstance(result, list) and len(result) == 0) or (hasattr(result, "empty") and result.empty)
         if is_empty_result: 
@@ -589,54 +603,69 @@ def long_running_task(user_task: str, task_name: str, data_locations: list):
         if wants_map_output(user_task):
             
             print("Execution completed.")
-            if hasattr(result, "to_json") and "GeoDataFrame" in str(type(result)):
-                print(str(type(result)))
-                try:
-                    # Print first 2 records safely
-                    print(result.head(2))
-                except Exception as e:
-                    print(f"Error printing GeoDataFrame preview: {e}")
             
-                geojson = result.to_json()
-                # need to update this to go to the write place in arcgis if it's a GeoDataFrame
-                #store the query and geojson in firestore for the furture
-                # store_answer_in_firestore(user_task, geojson)
-                push_to_map(geojson, task_name)
-            
-            elif isinstance(result, list):
-                # Print first 2 records if list has multiple items
-                preview = result[:2] if len(result) > 2 else result
-                print("Preview of list result:", preview)
-                push_to_map(result, task_name)
-            
-            else:
-                try:
-                    print(result)
-                    push_to_map(result, task_name)
-                except Exception as e:
-                    print(f"Error handling result: {e}")
-
-            message = f"The task has been executed successfully, and the results should be on your screen."
             if isinstance(result, str):
-                message = result
-            return {
+                message = f"{result} \n {explanation_text}"
+                return {
                 "status": "completed",
                 "message": message,
-                "tree_ids": result if isinstance(result, list) else (result.to_json() if hasattr(result, "to_json") and "GeoDataFrame" in str(type(result)) else None)
-            }
+                
+                }
+            try: 
+                if hasattr(result, "to_json") and "GeoDataFrame" in str(type(result)):
+                
+                    print(result.head(2))
+                    geojson = result.to_json()
+                    # need to update this to go to the write place in arcgis if it's a GeoDataFrame
+                    #store the query and geojson in firestore for the furture
+                    # store_answer_in_firestore(user_task, geojson)
+                    push_to_map(geojson, task_name)
+            
+            
+
+                if isinstance(result, list):
+                    # Print first 2 records if list has multiple items
+                    preview = result[:2] if len(result) > 2 else result
+                    print("Preview of list result:", preview)
+                    push_to_map(result, task_name)
+                
+                else: 
+                    print(f"Potential nsupported result type: {type(result)}")
+                    push_to_map(result, task_name)
+                        
+                   
+                     
+                message = f"The task has been executed successfully, and the results should be on your screen. \n {explanation_text}"
+            
+                return {
+                    "status": "completed",
+                    "message": message,
+                    "tree_ids": result if isinstance(result, list) else (result.to_json() if hasattr(result, "to_json") and "GeoDataFrame" in str(type(result)) else None)
+                }
+            except Exception as map_error:
+                print(f"Map push failed: {map_error}")
+                return {
+                        "status": "completed", 
+                        "message": f"Th task completed but map display failed: {map_error}. \n {explanation_text}"
+                }   
+                
+
         # job_status[job_id] = {"status": "completed", "message": f"Task '{task_name}' executed successfully, adding it to the map shortly."}
         else: 
+                
                 return{
                     "status": "completed",
-                    "message": str(result)
+                    "message": f"{result}. {explanation_text}"
                 }
         
-     
+    
     except Exception as e:
         print(f"Error during execution: {e}")
+        debug_response = long_debug(user_task,e)
         #job_status[job_id] = {"status": "failed", "message": str(e)}
         # return f"Error during execution: {str(e)}"
-        return f"Error during execution: The server seems to be down." 
+        return f"Oops the server seems to be down! \n {debug_response}" 
+        #add error agent here too return message
 
 
 # === Simulated tools ===
