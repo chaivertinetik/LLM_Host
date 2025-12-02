@@ -1,0 +1,30 @@
+{
+    "type": "FeatureCollection",
+    "features": [
+      {
+        "type": "Feature", 
+        "properties": {
+          "site": "Tree_gen", 
+          "task_name": "Tree_Generation", 
+          "task": "Show the tallest ash tree"
+        }
+      },
+      {
+        "type": "Feature", 
+        "properties": {
+          "site": "Cardiff", 
+          "task_name": "Cardiff City", 
+          "task": "How many unhealthy trees?"
+        }
+      },
+      {
+        "type": "Feature", 
+        "properties": {
+          "site": "Nottingham", 
+          "task_name": "nottingham_trial", 
+          "task": "Show trees near parks"
+        }
+      }
+    ]
+  }
+  

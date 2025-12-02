@@ -7,6 +7,8 @@ import helper
 import networkx as nx
 import datetime
 import time
+import ast
+import textwrap
 import ee 
 import numpy as np 
 from google.oauth2 import service_account
@@ -547,6 +549,34 @@ def long_running_task(user_task: str, task_name: str, data_locations: list):
         # code_for_assembly = black.format_str(code_for_assembly, mode=black.FileMode())
         exec_globals = {}
         # Execute the code directly 
+        
+        
+        code_for_assembly = textwrap.dedent(code_for_assembly).strip()
+        
+        try:
+            ast.parse(code_for_assembly)
+        except SyntaxError as e:
+            print(f"Syntax / indentation error before exec: {e}")
+            # You can special‑case indentation here if you want:
+            # if isinstance(e, IndentationError): ...
+
+            # Try a simple “fix indentation” loop (your existing logic)
+            for attempt in range(10):
+                try:
+                    prompt = f"Fix Indentation in the following Python code:\n{code_for_assembly}\n"
+                    response = model.generate_content(prompt)
+                    break
+                except ResourceExhausted:
+                    if attempt < 9:
+                        time.sleep(10)
+                    else:
+                        raise
+
+            code_for_assembly = helper.extract_code(response.text)
+
+            # Re-parse after fix
+            ast.parse(code_for_assembly)
+
         try:
             exec(code_for_assembly, globals())
         except IndentationError as e:
@@ -580,7 +610,8 @@ def long_running_task(user_task: str, task_name: str, data_locations: list):
                 return {
                         "status": "completed",
                         "message": fixed_code_or_error,
-                       }
+                    }            
+        
         result = globals().get('result', None)
         print("result type:", type(result))
         print("Final result:", result)
