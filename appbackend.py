@@ -279,6 +279,31 @@ def _strip_token_param(url: str) -> str:
         return url
 
 
+def _attach_token_in_entry(entry: str) -> str:
+    """
+    Given an entry like 'Label: URL[\\nextra...]', append a token to the URL part
+    while leaving the label and any extra lines unchanged.
+    """
+    try:
+        first_newline = entry.find("\n")
+        if first_newline == -1:
+            first_line = entry
+            rest = ""
+        else:
+            first_line = entry[:first_newline]
+            rest = entry[first_newline:]
+
+        if ": " not in first_line:
+            return entry
+
+        prefix, url = first_line.split(": ", 1)
+        url = url.strip()
+        url_with_token = _append_token_to_url(url)
+        return f"{prefix}: {url_with_token}{rest}"
+    except Exception:
+        return entry
+
+
 async def trigger_cleanup(task_name: str):
     logger.info(f"Starting cleanup for task: {task_name}")
     try:
@@ -1412,7 +1437,6 @@ def _gdf_from_layer_all(
     return gdf
 
 
-
 def _rings_from_shapely(geom) -> list[list[list[float]]]:
     logger.debug(f"Converting Shapely geometry type {geom.geom_type} to Esri 'rings'.")
     if isinstance(geom, Polygon):
@@ -2145,8 +2169,6 @@ def _get_layer_last_edit_metadata(layer_url: str):
         return None, ts
 
     return None, None
-
-
 def make_project_data_locations(
     project_name: str, include_seasons: bool, attrs: dict
 ) -> list[str]:
@@ -2282,14 +2304,17 @@ def make_project_data_locations(
             )
             entries = cached_entry.get("entries") or []
 
+            # Attach token at read-time only for returned list
             for entry in entries:
+                entry_display = _attach_token_in_entry(entry)
                 if insert_at is None or insert_at < 0:
-                    data_locations.append(entry)
+                    data_locations.append(entry_display)
                 else:
                     pos = min(insert_at, len(data_locations))
-                    data_locations.insert(pos, entry)
+                    data_locations.insert(pos, entry_display)
                     insert_at += 1
 
+            # Keep cached entries tokenless
             new_layer_cache[layer_key] = {
                 "layer_url": layer_url,
                 "label_prefix": label_prefix,
@@ -2338,24 +2363,29 @@ def make_project_data_locations(
                     if len(page_urls) > 1
                     else ""
                 )
-                entry = f"{label}{suffix}: {url}"
+                # Raw entry (tokenless) for cache
+                entry_raw = f"{label}{suffix}: {url}"
 
                 # Attach cols + schema + last_updated on first page only
                 if idx == 1:
                     if _cols_str:
-                        entry += f"\n{_cols_str}"
-                    entry += f"\n  schema: {_schema_str}"
+                        entry_raw += f"\n{_cols_str}"
+                    entry_raw += f"\n  schema: {_schema_str}"
                     if _last_updated_str:
-                        entry += f"\n  last_updated: {_last_updated_str}"
+                        entry_raw += f"\n  last_updated: {_last_updated_str}"
+
+                # Tokenised entry for returning to caller
+                entry_display = _attach_token_in_entry(entry_raw)
 
                 if insert_at is None or insert_at < 0:
-                    data_locations.append(entry)
+                    data_locations.append(entry_display)
                 else:
                     pos = min(insert_at, len(data_locations))
-                    data_locations.insert(pos, entry)
+                    data_locations.insert(pos, entry_display)
                     insert_at += 1
 
-                layer_entries.append(entry)
+                # Cache keeps tokenless entries
+                layer_entries.append(entry_raw)
 
             new_layer_cache[layer_key] = {
                 "layer_url": layer_url,
@@ -2374,13 +2404,14 @@ def make_project_data_locations(
         if not raw_url:
             return
         try:
-            entry = f"{label}: {raw_url}"
+            entry_raw = f"{label}: {raw_url}"
+            entry_display = _attach_token_in_entry(entry_raw)
             if insert_at is None or insert_at < 0:
-                data_locations.append(entry)
+                data_locations.append(entry_display)
             else:
                 idx = min(insert_at, len(data_locations))
-                data_locations.insert(idx, entry)
-            logger.debug(f"Added RAW data location: {entry}")
+                data_locations.insert(idx, entry_display)
+            logger.debug(f"Added RAW data location: {entry_display}")
         except Exception as ex:
             logger.error(f"Failed to add raw data location for {label}: {ex}")
 
@@ -2561,7 +2592,8 @@ def make_project_data_locations(
                 "is_updated": aoi_is_updated_flag,
             },
             "layers": new_layer_cache,
-            "full_list": data_locations,
+            # Store tokenless variants of the entries on disk
+            "full_list": [_strip_token_param(x) for x in data_locations],
         }
 
         with open(cache_path, "w", encoding="utf-8") as f:
