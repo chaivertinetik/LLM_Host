@@ -67,7 +67,7 @@ llm = GeminiLLMWrapper(gemini_llm=model)
 #------------------------------------------- Firestore to store and retrieve old prompts and fetch data ------------------------------------------------------
 
 #Temporary : need to revert to the collections-> with documents version and fix the datetime serialization error 
-def load_history(session_id:str, max_turns=5):
+def load_history(session_id:str, max_turns=1):
         doc= db.collection("chat_histories").document(session_id).get()
         history= doc.to_dict().get("history", []) if doc.exists else []
         return history[ -2* max_turns:]
@@ -85,7 +85,7 @@ def save_history(session_id: str, history: list):
         
 def build_conversation_prompt(new_user_prompt: str,
                               history: list | None = None,
-                              max_turns: int = 5) -> str:
+                              max_turns: int = 1) -> str:
     history = history or []
     recent = history[-2 * max_turns:]
     lines = []
@@ -134,7 +134,7 @@ def geospatial_helper(prompt: str):
 
 def long_debug(prompt: str, error: str):
     
-    geospatial_prompt = f"The user is asking about geospatial or forestry information: {prompt}. But encountered the following error: {error}. As a geospatial helper in simple terms (two or three lines max) can you explain to the user what the error is and whow they should requery the system to prevent this from happening."
+    geospatial_prompt = f"The user is asking about geospatial or forestry information: {prompt}. But encountered the following error: {error}. As a geospatial helper in simple terms (two or three lines max, dont overexplain) can you explain to the user what the error is (in a non technical way, don't refer to the code) and whow they should requery the system to prevent this from happening."
     response = model.generate_content(geospatial_prompt).text.strip()
     return str(response)
 
