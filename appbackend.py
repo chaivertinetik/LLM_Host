@@ -1656,6 +1656,40 @@ def get_project_aoi_geometry(project_name: str):
         }
 
 
+def get_project_coords(project_name: str):
+    logger.info(f"Extracting bounding box coordinates for project: {project_name}")
+    attrs = get_project_urls(project_name)
+    ortho_url = (attrs.get("ORTHOMOSAIC") or "").strip()
+    if not ortho_url:
+        logger.error("ORTHOMOSAIC URL missing for this project.")
+        raise ValueError("ORTHOMOSAIC URL missing.")
+    try:
+        # Request metadata from the ArcGIS Service
+        base = ortho_url.rstrip("/")
+        params = _with_token_params({"f": "json"})
+        r = _session.get(base, params=params, timeout=30)
+        r.raise_for_status()
+        meta = r.json()
+        # Extract the extent (xmin, ymin, xmax, ymax)
+        extent = meta.get("extent") or meta.get("fullExtent")
+        if not extent:
+            raise ValueError("Service metadata does not contain an extent.")
+        # Determine the coordinate system (WKID)
+        sr = extent.get("spatialReference") or meta.get("spatialReference") or {}
+        wkid = sr.get("wkid") or 4326
+        # Return strictly the numeric coordinates and SR
+        return {
+            "xmin": extent["xmin"],
+            "ymin": extent["ymin"],
+            "xmax": extent["xmax"],
+            "ymax": extent["ymax"],
+            "wkid": wkid
+        }
+    except Exception as e:
+        logger.error(f"Failed to fetch extent for {project_name}: {e}")
+        return None
+
+
 def _build_spatial_query_url(
     layer_url: str, aoi: dict, where: str = "1=1", out_fields: str = "*"
 ) -> str:

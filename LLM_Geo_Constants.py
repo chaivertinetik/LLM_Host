@@ -278,8 +278,11 @@ operation_requirement = [
     # --- Spatial join hygiene (added) ---
     "In all spatial joins, preserve the LEFT (query) layer geometry in the output; do NOT overwrite left geometry with right-hand geometries or temporary buffers.",
     "Before joining, subset the RIGHT GeoDataFrame to ONLY the required attribute columns plus its geometry to avoid carrying Shape__Area/Shape__Length and other unneeded fields.",
-    "When using geopandas.sjoin, set lsuffix='' (keep left names as-is) and set a meaningful rsuffix (e.g., '_road', '_bldg', '_park') to avoid generic '_right' clutter.",
-    "geopandas.sjoin() always creates a column named 'index_right' for the right-hand index. The rsuffix does NOT apply to 'index_right'; do NOT try to rename or suffix this column.",
+    # "When using geopandas.sjoin, set lsuffix='' (keep left names as-is) and set a meaningful rsuffix (e.g., '_road', '_bldg', '_park') to avoid generic '_right' clutter.",
+    "When using geopandas.sjoin, set lsuffix='' (keep left names as-is) and always set rsuffix '_right' and never drop any index after join.",
+    # "geopandas.sjoin() always creates a column named 'index_right' for the right-hand index. The rsuffix does NOT apply to 'index_right'; do NOT try to rename or suffix this column.",
+    # "Use 'index_right' as needed for grouping, deduplication, or diagnostics, and ONLY drop 'index_right' at the very end of the workflow when you are sure it is no longer needed.",
+    "geopandas.sjoin() always creates a column named 'index_right' for the right-hand index. Do NOT try to rename or add suffix to this column.",
     "Use 'index_right' as needed for grouping, deduplication, or diagnostics, and ONLY drop 'index_right' at the very end of the workflow when you are sure it is no longer needed.",
     "If a spatial join can create 1:N matches (e.g., one tree intersecting many road segments), de-duplicate to one row per left feature as required (e.g., drop_duplicates on 'Tree_ID', keeping the first or by preferred rule).",
     "For nearest-within-distance tasks, use gpd.sjoin_nearest with max_distance (after projecting to a metric CRS) and optionally add distance_col='dist_m'; then reproject results back to the original left-layer CRS.",
