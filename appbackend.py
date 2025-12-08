@@ -2452,7 +2452,7 @@ def make_project_data_locations(
     def _infer_category(label: str, url: Optional[str]) -> str:
         lbl = (label or "").lower()
         u = (url or "").lower()
-
+    
         is_national = any(k in lbl for k in ["national"]) or any(
             k in u
             for k in [
@@ -2463,7 +2463,8 @@ def make_project_data_locations(
                 "services.arcgis.com/qhlhlqrcvenxjtpr",
             ]
         )
-
+    
+        # --- Core base type detection ---
         if any(k in lbl for k in ["building", "buildings"]) or "openmap_local_buildings" in u:
             base = "buildings"
         elif any(k in lbl for k in ["road"]) or "openroads" in u:
@@ -2474,42 +2475,61 @@ def make_project_data_locations(
             base = "tree_points"
         elif any(k in lbl for k in ["tree polygons", "arbotrackpolygons"]):
             base = "tree_polygons"
-        elif any(k in lbl for k in ["operational property"]):
-            base = "operational_property"
+        # IMPORTANT: non-operational must be checked BEFORE operational to avoid substring clash
         elif any(
             k in lbl for k in ["non operational property", "non-operational property"]
         ):
             base = "non_operational_property"
+        elif "operational property" in lbl:
+            base = "operational_property"
         else:
             base = lbl.strip() or "unknown"
-
+    
         return f"{base}::{'national' if is_national else 'local'}"
+
 
     def _category_already_present(category_key: str) -> bool:
         base = category_key.split("::", 1)[0]
         for line in data_locations:
             low = line.lower()
+    
             if base == "buildings" and ("building" in low or "buildings" in low):
                 return True
-            if base == "roads" and ("road" in low):
+    
+            if base == "roads" and "road" in low:
                 return True
+    
             if base == "greenspace" and any(
                 k in low for k in ["green space", "greenspace", "open space", "park"]
             ):
                 return True
+    
             if base == "tree_points" and any(
                 k in low for k in ["points geojson", "tree points"]
             ):
                 return True
+    
             if base == "tree_polygons" and any(
                 k in low for k in ["polygons geojson", "tree polygons"]
             ):
                 return True
-            if base == "operational_property" and "operational property" in low:
+    
+            # IMPORTANT: make sure we don't treat "non operational" as "operational"
+            if base == "operational_property":
+                if (
+                    "operational property" in low
+                    and "non operational property" not in low
+                    and "non-operational property" not in low
+                ):
+                    return True
+    
+            if base == "non_operational_property" and any(
+                k in low for k in ["non operational property", "non-operational property"]
+            ):
                 return True
-            if base == "non_operational_property" and "non operational property" in low:
-                return True
+    
         return False
+
 
     # --- 1) Core tree crowns layer -------------------------------------------
     if tree_crowns_url:
