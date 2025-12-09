@@ -8,7 +8,8 @@ from pydantic import BaseModel
 from typing import Dict
 from credentials import db, parser, emd_model
 # rag_llm
-from appagents import agent, llm, load_history, save_history, build_conversation_prompt, wants_map_output_keyword, wants_map_output_genai, wants_map_output, is_geospatial_task, clean_indentation, wants_additional_info_keyword, wants_additional_info_genai, wants_additional_info, wants_gis_task_genai, want_gis_task, prompt_suggetions, try_llm_fix, long_running_task, get_geospatial_context_tool, get_zoning_info, get_climate_info, check_tree_health, assess_tree_benefit, check_soil_suitability, get_geospatial_context, cosine_similarity, retrieve_rag_chunks, rag_tree_grants_tool, rag_tree_info_tool, geospatial_helper,  get_query_hash, check_firestore_for_cached_answer, store_answer_in_firestore, cache_load_helper
+# rag_tree_grants_tool, rag_tree_info_tool,
+from appagents import agent, llm, load_history, save_history, build_conversation_prompt, wants_map_output_keyword, wants_map_output_genai, wants_map_output, is_geospatial_task, clean_indentation, wants_additional_info_keyword, wants_additional_info_genai, wants_additional_info, wants_gis_task_genai, want_gis_task, prompt_suggetions, try_llm_fix, long_running_task, get_geospatial_context_tool, get_zoning_info, get_climate_info, check_tree_health, assess_tree_benefit, check_soil_suitability, get_geospatial_context, cosine_similarity, retrieve_rag_chunks, geospatial_helper,  get_query_hash, check_firestore_for_cached_answer, store_answer_in_firestore, cache_load_helper
 from appbackend import trigger_cleanup, ClearRequest, get_project_urls, get_attr, make_project_data_locations, get_project_coords
 from fastapi import FastAPI, BackgroundTasks, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
