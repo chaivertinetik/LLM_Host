@@ -1,4 +1,5 @@
-from credentials import db, emd_model, parser, rag_llm
+from credentials import db, emd_model, parser 
+# rag_llm
 import torch
 import vertexai
 import json 
@@ -901,49 +902,30 @@ def prompt_template(query: str, context: str, format_instructions: str) -> str:
     )
     return prompt
     
-# prompt_template = PromptTemplate(
-#     input_variables=["query", "context", "format_instructions"],
-#     template=(
-#         "Use the following forestry data extracted from documents:\n"
-#         "{context}\n\n"
-#         "Answer the query with geospatial reasoning:\n"
-#         "{query}\n\n"
-#         "{format_instructions}\n"
-#         "Return only valid JSON."
-#     )
-# )
+# temp remove for rag_llm
+# def rag_tree_grants_tool(query: str) -> str:
+#     chunks = retrieve_rag_chunks("tree_grants", query)
+#     if not chunks:
+#         return json.dumps({"result": [], "message": "No relevant tree grants data found."})
+#     context_text = "\n".join(chunks)
+#     format_instructions=parser.get_format_instructions()
+#     prompt = prompt_template(query, context_text, format_instructions)
+    
+#     response = rag_llm.invoke(prompt)
+#     parsed = parser.parse(response.content)
+#     return json.dumps(parsed)
 
-def rag_tree_grants_tool(query: str) -> str:
-    chunks = retrieve_rag_chunks("tree_grants", query)
-    if not chunks:
-        return json.dumps({"result": [], "message": "No relevant tree grants data found."})
-    context_text = "\n".join(chunks)
-    format_instructions=parser.get_format_instructions()
-    prompt = prompt_template(query, context_text, format_instructions)
-    # prompt = prompt_template.format(
-    #     query=query,
-    #     context=context_text,
-    #     format_instructions=parser.get_format_instructions()
-    # )
-    response = rag_llm.invoke(prompt)
-    parsed = parser.parse(response.content)
-    return json.dumps(parsed)
-
-def rag_tree_info_tool(query: str) -> str:
-    chunks = retrieve_rag_chunks("tree_info", query)
-    if not chunks:
-        return json.dumps({"result": [], "message": "No relevant tree info data found."})
-    context_text = "\n".join(chunks)
-    format_instructions=parser.get_format_instructions()
-    prompt = prompt_template(query, context_text, format_instructions)
-    # prompt = prompt_template.format(
-    #     query=query,
-    #     context=context_text,
-    #     format_instructions=parser.get_format_instructions()
-    # )
-    response = rag_llm.invoke(prompt)
-    parsed = parser.parse(response.content)
-    return json.dumps(parsed)
+# def rag_tree_info_tool(query: str) -> str:
+#     chunks = retrieve_rag_chunks("tree_info", query)
+#     if not chunks:
+#         return json.dumps({"result": [], "message": "No relevant tree info data found."})
+#     context_text = "\n".join(chunks)
+#     format_instructions=parser.get_format_instructions()
+#     prompt = prompt_template(query, context_text, format_instructions)
+    
+#     response = rag_llm.invoke(prompt)
+#     parsed = parser.parse(response.content)
+#     return json.dumps(parsed)
 
 
 
