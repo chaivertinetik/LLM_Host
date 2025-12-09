@@ -2469,7 +2469,7 @@ def make_project_data_locations(
             base = "buildings"
         elif any(k in lbl for k in ["road"]) or "openroads" in u:
             base = "roads"
-        elif any(k in lbl for k in ["green space", "greenspace", "open space", "park"]) or "open_greenspace" in u:
+        elif any(k in lbl for k in ["green space", "greenspace", "park"]) or "open_greenspace" in u:
             base = "greenspace"
         elif any(k in lbl for k in ["tree points", "arbotrackpoints"]):
             base = "tree_points"
