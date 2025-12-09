@@ -2245,14 +2245,19 @@ def make_project_data_locations(
     prev_aoi_last = cached_aoi.get("last_updated")
 
     if cached_aoi:
-        if (aoi_source_url != prev_aoi_url) or (aoi_last_ms != prev_aoi_last):
+        # If we *don't* have a meaningful last-edit timestamp, always treat AOI as updated
+        if aoi_last_ms is None or prev_aoi_last is None:
+            aoi_is_updated_flag = True
+        elif (aoi_source_url != prev_aoi_url) or (aoi_last_ms != prev_aoi_last):
             aoi_is_updated_flag = True
         else:
             aoi_is_updated_flag = False
     else:
+        # No previous AOI in cache → treat as updated
         aoi_is_updated_flag = True
-
+    
     aoi_unchanged = not aoi_is_updated_flag
+
 
     # --- Per-layer cache from previous run -----------------------------------
     previous_layer_cache: dict[str, Any] = cached.get("layers") or {}
