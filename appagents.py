@@ -960,18 +960,18 @@ tools = [
     Tool(name="ClimateLookUp", func=get_climate_info, description="Returns precipitation, temperature, vegetation health (NDVI), flood risk, and sea level rise estimates for forestry planning."),
     Tool(name="CheckTreeHealth", func=check_tree_health, description="Assess how healthy the trees are using the canopy cover and soil."),
     Tool(name="SoilSuitabilityCheck",func=check_soil_suitability,description="Analyzes soil moisture, elevation, and land cover to evaluate suitability for native tree species planting."), 
-    Tool(name="TreeBenefitAssessment", func=assess_tree_benefit, description="Estimates carbon capture potential and cooling benefits based on NDVI, precipitation, and land cover data."),
-    Tool(
-        name="RAGTreeGrants",
-        func=rag_tree_grants_tool,
-        description="Retrieves recent tree grant and licensing information based on the users query."
-    ),
+    Tool(name="TreeBenefitAssessment", func=assess_tree_benefit, description="Estimates carbon capture potential and cooling benefits based on NDVI, precipitation, and land cover data.")
+    # Tool(
+    #     name="RAGTreeGrants",
+    #     func=rag_tree_grants_tool,
+    #     description="Retrieves recent tree grant and licensing information based on the users query."
+    # ),
 
-    Tool(
-        name="RAGTreeInfo",
-        func=rag_tree_info_tool,
-        description="Retrieves additional forestry and tree information from based on UK forestry records and rules."
-    )
+    # Tool(
+    #     name="RAGTreeInfo",
+    #     func=rag_tree_info_tool,
+    #     description="Retrieves additional forestry and tree information from based on UK forestry records and rules."
+    # )
     # gis_batch_tool
 ]
 
