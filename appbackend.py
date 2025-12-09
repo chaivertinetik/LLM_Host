@@ -2495,41 +2495,47 @@ def make_project_data_locations(
 
     def _category_already_present(category_key: str) -> bool:
         base = category_key.split("::", 1)[0]
+    
         for line in data_locations:
             low = line.lower()
     
-            if base == "buildings" and ("building" in low or "buildings" in low):
+            # Only look at the part before any URL so schema / query params
+            # (e.g. "buildingnu") don't accidentally trigger category matches.
+            text = low.split("http://", 1)[0]
+            text = text.split("https://", 1)[0]
+    
+            if base == "buildings" and ("building" in text or "buildings" in text):
                 return True
     
-            if base == "roads" and "road" in low:
+            if base == "roads" and "road" in text:
                 return True
     
             if base == "greenspace" and any(
-                k in low for k in ["green space", "greenspace", "open space"]
+                k in text for k in ["green space", "greenspace", "open space"]
             ):
                 return True
     
             if base == "tree_points" and any(
-                k in low for k in ["points geojson", "tree points"]
+                k in text for k in ["points geojson", "tree points"]
             ):
                 return True
     
             if base == "tree_polygons" and any(
-                k in low for k in ["polygons geojson", "tree polygons"]
+                k in text for k in ["polygons geojson", "tree polygons"]
             ):
                 return True
     
             # IMPORTANT: make sure we don't treat "non operational" as "operational"
             if base == "operational_property":
                 if (
-                    "operational property" in low
-                    and "non operational property" not in low
-                    and "non-operational property" not in low
+                    "operational property" in text
+                    and "non operational property" not in text
+                    and "non-operational property" not in text
                 ):
                     return True
     
             if base == "non_operational_property" and any(
-                k in low for k in ["non operational property", "non-operational property"]
+                k in text for k in ["non operational property", "non-operational property"]
             ):
                 return True
     
