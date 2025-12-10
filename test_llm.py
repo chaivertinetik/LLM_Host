@@ -5,8 +5,8 @@ import requests
 import statistics
 from pathlib import Path
 
-API_URL = "http://localhost:8000/process"
-TIMEOUT = 300  # seconds
+API_URL = "https://llmgeo-dev-1042524106019.us-central1.run.app/process"
+TIMEOUT = 1000  # seconds
 
 def load_test_cases(path):
     path = Path(path)
