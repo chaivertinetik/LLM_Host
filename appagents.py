@@ -64,7 +64,7 @@ class GeminiLLMWrapper(LLM):
     
 # === Create Gemini model ===
 model = GenerativeModel("gemini-2.0-flash-001")
-model_debug = GenerativeModel("gemini-3.0-pro")
+# model_debug = GenerativeModel("gemini-3.0-pro")
 llm = GeminiLLMWrapper(gemini_llm=model)
 #------------------------------------------- Firestore to store and retrieve old prompts and fetch data ------------------------------------------------------
 
@@ -137,7 +137,7 @@ def geospatial_helper(prompt: str):
 def long_debug(prompt: str, error: str):
     
     geospatial_prompt = f"The user is asking about geospatial or forestry information: {prompt}. But encountered the following error: {error}. As a geospatial helper in simple terms (two or three lines max, dont overexplain) can you explain to the user what the error is (in a non technical way, don't refer to the code) and whow they should requery the system to prevent this from happening."
-    response = model_debug.generate_content(geospatial_prompt).text.strip()
+    response = model.generate_content(geospatial_prompt).text.strip()
     return str(response)
 
 def wants_map_output_keyword(prompt: str) -> bool:
@@ -529,7 +529,7 @@ def long_running_task(user_task: str, task_name: str, data_locations: list):
         model = GenerativeModel("gemini-2.0-flash-001")
         for attempt in range(10):
            try: 
-              response = model_debug.generate_content(solution.assembly_prompt)
+              response = model.generate_content(solution.assembly_prompt)
               break
            except ResourceExhausted: 
               if attempt<10:
@@ -586,7 +586,7 @@ def long_running_task(user_task: str, task_name: str, data_locations: list):
             for attempt in range(10):
                 try:
                     prompt = f"Fix Indentation in the following Python code:\n{code_for_assembly}\n"
-                    response = model_debug.generate_content(prompt)
+                    response = model.generate_content(prompt)
                     break
                 except ResourceExhausted: 
                     if attempt<10:
@@ -622,7 +622,7 @@ def long_running_task(user_task: str, task_name: str, data_locations: list):
         f"Here's the output: {result}.\n"
         f"Explain in simple terms (one or two lines max) as a GIS expert what geospatial task was performed to obtain this result. Do not mention or describe any code or programming; just summarize the GIS action you took in a simple friendly way and what the result means for the user's query.\n"   
         )
-        explanation_response = model_debug.generate_content(explanation_prompt)
+        explanation_response = model.generate_content(explanation_prompt)
         explanation_text = explanation_response.text.strip()
 
         is_empty_result = False
