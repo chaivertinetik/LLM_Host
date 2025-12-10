@@ -129,7 +129,17 @@ data_location_priority_rules = r"""
         unless the user explicitly requests both.
         """
 
-
+concat_policy = r"""
+        import pandas as pd
+        import geopandas as gpd
+        # Assuming gdf_list is a list of GeoDataFrames with the same CRS
+        gdf_list = [gdf1, gdf2, gdf3]
+        # 1. Use pandas.concat for the data
+        temp_gdf = pd.concat(gdf_list, ignore_index=True)
+        # 2. Re-create the GeoDataFrame explicitly, ensuring the CRS is set
+        # We take the CRS from the first GeoDataFrame in the list
+        concatenated_gdf = gpd.GeoDataFrame(temp_gdf, crs=gdf_list[0].crs)
+        """
 
 
 # carefully change these prompt parts!   
@@ -246,6 +256,7 @@ operation_requirement = [
     "If using GeoPandas to load a zipped ESRI shapefile from a URL, the correct method is \"gpd.read_file(URL)\". DO NOT download and unzip the file.",
     # "Generate descriptions for input and output arguments.",
     "Ensure all comments and descriptions use # and are single line.",
+    f"When combining multiple GeoDataFrames, follow this pattern exactly {concat_policy}; do not invent alternative APIs like gpd.concat.",
     "If the user asks about ash trees also look for other 'Fraxinus' while filtering, for example species called 'Fraxinus excelsior Altena', 'Fraxinus excelsior Pendula' ..should all be factored in when qureying ash trees, and be careful that the data is case sensitive.",
     "If the query asks for something like show me the tallest ash tree, that means they want a visual result so the final output should be a geodataframe that will be sent to the map on ArcGIS, dont generate a textual summary in this case, but if the user asks for what the height of the tallest tree is then the result should be a textual summary containing that value (string).",
     "A reliable approach to filter for ash trees is by: ash_trees_gdf = tree_points_gdf[tree_points_gdf['Species'].str.lower().str.contains('ash|fraxinus', na=False, regex=True)] and ensure regex=True",
