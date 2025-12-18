@@ -1,8 +1,9 @@
-from credentials import db, emd_model, parser 
+from credentials import db, emd_model, parser
+
 # rag_llm
 import torch
 import vertexai
-import json 
+import json
 import os
 import helper
 import networkx as nx
@@ -10,18 +11,15 @@ import datetime
 import time
 import ast
 import textwrap
-import ee 
-import numpy as np 
+import ee
+import numpy as np
 from google.oauth2 import service_account
 from sentence_transformers import util
-# from langchain.agents import Tool
 from langchain_core.tools import Tool
 from langgraph.prebuilt import create_react_agent
-# from langchain.agents.agent_types import AgentType
-# from langchain.prompts import PromptTemplate
 from langchain_core.language_models import LLM
 from langchain_core.messages import AIMessage
-from typing import List, Optional, Any 
+from typing import List, Optional, Any, Tuple
 from pydantic import PrivateAttr
 from vertexai.generative_models import GenerativeModel
 from google.api_core.exceptions import ResourceExhausted
@@ -32,10 +30,128 @@ import hashlib
 import io
 import geopandas as gpd
 
+# ============================================================
+#                 SAFE LINT + FIX + COMPILE GATE
+# ============================================================
 
+def _strip_markdown_fences(code: str) -> str:
+    code = (code or "").strip()
+    if code.startswith("```"):
+        # Remove leading fence line e.g. ```python
+        code = re.sub(r"^```[a-zA-Z0-9_-]*\n", "", code)
+        # Remove trailing fence
+        code = re.sub(r"\n```$", "", code.strip())
+    return code.strip()
 
-# --------------------- GIS CODE AGENT WRAPPER ---------------------
-    
+def _basic_normalize(code: str) -> str:
+    # Preserve indentation structure (do NOT lstrip lines).
+    code = _strip_markdown_fences(code)
+    code = code.replace("\t", "    ")
+    code = textwrap.dedent(code).strip() + "\n"
+    return code
+
+def _try_black(code: str) -> Optional[str]:
+    try:
+        import black
+        return black.format_str(code, mode=black.FileMode())
+    except Exception:
+        return None
+
+def _try_autopep8(code: str) -> Optional[str]:
+    try:
+        import autopep8
+        return autopep8.fix_code(code, options={"aggressive": 1})
+    except Exception:
+        return None
+
+def _try_ruff_fix(code: str) -> Tuple[Optional[str], List[str]]:
+    """
+    Best-effort: uses ruff via subprocess if installed.
+    Returns (fixed_code_or_none, notes)
+    """
+    notes: List[str] = []
+    try:
+        import subprocess, tempfile, os as _os
+
+        with tempfile.TemporaryDirectory() as td:
+            path = _os.path.join(td, "snippet.py")
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(code)
+
+            # Autofix lint issues (non-fatal)
+            subprocess.run(
+                ["ruff", "check", "--fix", "--exit-zero", path],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            # Format (ruff formatter)
+            subprocess.run(
+                ["ruff", "format", "--exit-zero", path],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+
+            with open(path, "r", encoding="utf-8") as f:
+                fixed = f.read()
+
+        return fixed, notes
+    except Exception as e:
+        notes.append(f"ruff not available or failed: {e}")
+        return None, notes
+
+def safe_lint_fix_compile(code: str) -> Tuple[bool, str, str]:
+    """
+    Returns (ok, code_out, message)
+
+    Gate:
+      - normalize (tabs->spaces, dedent)
+      - optional ruff autofix + format
+      - optional black format
+      - optional autopep8 fallback
+      - ast.parse + compile (catches indentation + syntax)
+    """
+    original = code
+    code = _basic_normalize(code)
+
+    # Try Ruff first (fix + format)
+    ruff_fixed, _ = _try_ruff_fix(code)
+    if ruff_fixed:
+        code = ruff_fixed
+
+    # Then Black (deterministic formatting)
+    black_fixed = _try_black(code)
+    if black_fixed:
+        code = black_fixed
+
+    # Fallback to autopep8 if still not parsable
+    try:
+        ast.parse(code)
+    except SyntaxError:
+        ap8 = _try_autopep8(code)
+        if ap8:
+            code = ap8
+
+    # Final parse/compile gate
+    try:
+        ast.parse(code)
+        compile(code, "<generated>", "exec")
+        return True, code, "Lint/format/compile gate passed."
+    except IndentationError as e:
+        return False, original, f"IndentationError after fixes: {e}"
+    except SyntaxError as e:
+        return False, original, f"SyntaxError after fixes: {e}"
+    except Exception as e:
+        return False, original, f"Unexpected compile failure: {e}"
+
+# NOTE: this is required by _strip_markdown_fences
+import re
+
+# ============================================================
+#                 GIS CODE AGENT WRAPPER
+# ============================================================
+
 class GeminiLLMWrapper(LLM):
     _gemini_llm: Any = PrivateAttr()
     _tools: Optional[List[Any]] = PrivateAttr(default=None)
@@ -45,10 +161,9 @@ class GeminiLLMWrapper(LLM):
         self._gemini_llm = gemini_llm
 
     def _call(self, prompt: str, stop=None, **kwargs) -> str:
-        # Run the Gemini model
         raw_response = self._gemini_llm.generate_content(prompt)
         print("DEBUG type:", type(raw_response.text), "value:", raw_response.text)
-        return raw_response.text if isinstance(raw_response.text, str) else str(raw_response.text) 
+        return raw_response.text if isinstance(raw_response.text, str) else str(raw_response.text)
 
     def bind_tools(self, tools: List[Any]) -> "GeminiLLMWrapper":
         self._tools = tools
@@ -60,46 +175,40 @@ class GeminiLLMWrapper(LLM):
 
     @property
     def _identifying_params(self) -> dict:
-        return {"model": "gemini"}    
-    
+        return {"model": "gemini"}
+
 # === Create Gemini model ===
 model = GenerativeModel("gemini-2.0-flash-001")
-# model_debug = GenerativeModel("gemini-3.0-pro")
 llm = GeminiLLMWrapper(gemini_llm=model)
-#------------------------------------------- Firestore to store and retrieve old prompts and fetch data ------------------------------------------------------
 
-#Temporary : need to revert to the collections-> with documents version and fix the datetime serialization error 
-def load_history(session_id:str, max_turns=1):
-        doc= db.collection("chat_histories").document(session_id).get()
-        history= doc.to_dict().get("history", []) if doc.exists else []
-        return history[ -2* max_turns:]
-    
+# ============================================================
+#     Firestore to store and retrieve old prompts and fetch data
+# ============================================================
+
+# Temporary : need to revert to the collections-> with documents version and fix the datetime serialization error
+def load_history(session_id: str, max_turns=1):
+    doc = db.collection("chat_histories").document(session_id).get()
+    history = doc.to_dict().get("history", []) if doc.exists else []
+    return history[-2 * max_turns :]
+
 def save_history(session_id: str, history: list):
-    # Load existing history
     doc = db.collection("chat_histories").document(session_id).get()
     existing_history = doc.to_dict().get("history", []) if doc.exists else []
-
-    # Append new history entries
     combined_history = existing_history + history
-
-    # Save combined history back
     db.collection("chat_histories").document(session_id).set({"history": combined_history})
-        
-def build_conversation_prompt(new_user_prompt: str,
-                              history: list | None = None,
-                              max_turns: int = 1) -> str:
+
+def build_conversation_prompt(new_user_prompt: str, history: list | None = None, max_turns: int = 1) -> str:
     history = history or []
-    recent = history[-2 * max_turns:]
+    recent = history[-2 * max_turns :]
     lines = []
     for entry in recent:
-        prefix = "User: " if entry.get('role') == 'user' else "Assistant: "
+        prefix = "User: " if entry.get("role") == "user" else "Assistant: "
         lines.append(f"{prefix}{entry.get('content', '')}")
     lines.append(f"User: {new_user_prompt}")
     lines.append("Assistant:")
     return "\n".join(lines)
 
 def get_query_hash(prompt):
-    # Hash the prompt string directly
     return hashlib.md5(prompt.encode()).hexdigest()
 
 def check_firestore_for_cached_answer(prompt):
@@ -118,25 +227,36 @@ def store_answer_in_firestore(prompt, gdf):
     doc_ref = db.collection("map_history").document(query_hash)
     doc_ref.set({"geojson_data": geojson_str})
 
+# ============================================================
+#                 ERDO LLM main functions
+# ============================================================
 
-
-
-# --------------------- ERDO LLM main functions ---------------------
-
-def cache_load_helper(prompt:str): 
-    cache_prompt = f"The user is asking about geospatial or forestry information: {prompt} and you were able to fetch the result from their history, so reply telling this to the user (two or three lines max) as a GIS expert in a simple friendly way."
+def cache_load_helper(prompt: str):
+    cache_prompt = (
+        f"The user is asking about geospatial or forestry information: {prompt} and you were able to fetch the result "
+        f"from their history, so reply telling this to the user (two or three lines max) as a GIS expert in a simple friendly way."
+    )
     response = model.generate_content(cache_prompt).text.strip()
     return str(response)
 
 def geospatial_helper(prompt: str):
-    
-    geospatial_prompt = f"The user is asking about geospatial or forestry information: {prompt}. Answer their query in simple terms (two or three lines max) as a GIS expert in a simple friendly way. They may ask for assistance for things like how to remove ash trees safely or other diseases and pest infestations. Pull from trusted geospatial resources and respond within these constraints as a geospatial expert in a friendly way."
+    geospatial_prompt = (
+        f"The user is asking about geospatial or forestry information: {prompt}. "
+        f"Answer their query in simple terms (two or three lines max) as a GIS expert in a simple friendly way. "
+        f"They may ask for assistance for things like how to remove ash trees safely or other diseases and pest infestations. "
+        f"Pull from trusted geospatial resources and respond within these constraints as a geospatial expert in a friendly way."
+    )
     response = model.generate_content(geospatial_prompt).text.strip()
     return str(response)
 
 def long_debug(prompt: str, error: str):
-    
-    geospatial_prompt = f"The user is asking about geospatial or forestry information: {prompt}. But encountered the following error: {error}. As a geospatial helper in simple terms (two or three lines max, dont overexplain) can you explain to the user what the error is (in a non technical way, don't refer to the code) and whow they should requery the system to prevent this from happening."
+    geospatial_prompt = (
+        f"The user is asking about geospatial or forestry information: {prompt}. "
+        f"But encountered the following error: {error}. "
+        f"As a geospatial helper in simple terms (two or three lines max, dont overexplain) can you explain to the user "
+        f"what the error is (in a non technical way, don't refer to the code) and whow they should requery the system "
+        f"to prevent this from happening."
+    )
     response = model.generate_content(geospatial_prompt).text.strip()
     return str(response)
 
@@ -148,12 +268,9 @@ def wants_map_output_keyword(prompt: str) -> bool:
 def wants_map_output_genai(prompt: str) -> bool:
     credentials_data = json.loads(os.getenv("GOOGLE_CREDENTIALS"))
     credentials = service_account.Credentials.from_service_account_info(credentials_data)
-    # Initialize Vertex AI
-    # Adjust project and location as needed
-    
     vertexai.init(project="disco-parsec-444415-c4", location="us-central1", credentials=credentials)
 
-    model = GenerativeModel("gemini-2.0-flash-001")
+    model_local = GenerativeModel("gemini-2.0-flash-001")
     system_prompt = (
         "Decide if the user's input is asking for a map, geodataframe, or visual display of spatial features. "
         "Return only 'yes' for dispalying on the map or 'no' for things that can't be mapped. Examples:\n"
@@ -173,35 +290,29 @@ def wants_map_output_genai(prompt: str) -> bool:
         "- 'Summarize changes between surveys' -> no"
     )
     full_prompt = f"{system_prompt}\n\nUser input: {prompt}\nAnswer:"
-    response = model.generate_content(
+    response = model_local.generate_content(
         full_prompt,
-        generation_config={
-            "temperature": 0.0,
-            "max_output_tokens": 5
-        }
+        generation_config={"temperature": 0.0, "max_output_tokens": 5},
     )
     answer = response.text.strip().lower()
     return answer.startswith("yes")
 
 def wants_map_output(prompt: str) -> bool:
-    # First try keyword matching
     if wants_map_output_keyword(prompt):
         return True
-    # Fallback to GenAI classification
     return wants_map_output_genai(prompt)
 
 def is_geospatial_task(prompt: str) -> bool:
-    """Vertex AI does intent classification to determine if the task is geo spatial related"""
-    
-
+    """Vertex AI intent classification to determine if the task is geo-spatial related"""
     credentials_data = json.loads(os.getenv("GOOGLE_CREDENTIALS"))
     credentials = service_account.Credentials.from_service_account_info(credentials_data)
     vertexai.init(project="disco-parsec-444415-c4", location="us-central1", credentials=credentials)
-    # gemini-1.5-flash-002
-    model = GenerativeModel("gemini-2.0-flash-001")
+
+    model_local = GenerativeModel("gemini-2.0-flash-001")
     system_prompt = (
         "Decide if the user's input is related to geospatial analysis or geospatial data. "
-        "This includes queries about map features, tree health, species, spatial attributes, survey date, spatial selections, overlays, or analysis."
+        "This includes queries about map features, tree health, species, spatial attributes, survey date, "
+        "spatial selections, overlays, or analysis."
         "Return only 'yes' or 'no'. Examples:\n"
         "- 'Find all ash trees' -> yes\n"
         "- 'What's my mother’s name?' -> no\n"
@@ -210,53 +321,55 @@ def is_geospatial_task(prompt: str) -> bool:
         "- 'Show areas with high NDVI in a satellite image' -> yes\n"
         "- 'What is the capital of France?' -> no"
     )
-    
+
     full_prompt = f"{system_prompt}\n\nUser input: {prompt}\nAnswer:"
-    # response = model.predict(full_prompt, temperature=0.0, max_output_tokens=5)
-    response = model.generate_content(
-       full_prompt,
-       generation_config={
-          "temperature": 0.0,
-          "max_output_tokens": 5}
+    response = model_local.generate_content(
+        full_prompt,
+        generation_config={"temperature": 0.0, "max_output_tokens": 5},
     )
     answer = response.text.strip().lower()
     return answer.startswith("yes")
 
-def clean_indentation(code):
-     # Split the code into lines
-    lines = code.split('\n')
-     # Remove leading spaces/tabs on each line, and replace tabs with 4 spaces
-    cleaned_lines = []
-    for line in lines:
-         # Strip unwanted leading spaces/tabs and then add consistent 4 spaces for each level
-        cleaned_lines.append(line.lstrip())
-     
-     # Join the cleaned lines back into a single string with proper indentation
-    return '\n'.join(cleaned_lines)
-# job_id: str, 
+# NOTE: removed unsafe clean_indentation() that lstrips every line.
 
 def wants_additional_info_keyword(prompt: str) -> bool:
     keywords = [
-        "advice", "explain", "reason", "why", "weather", "soil", "context",
-        "impact", "effect", "should I do", "recommend", "suggest",
-        "interpret", "analysis", "information", "based on", "because",
-        "caused by", "influence", "due to", "assessment"
+        "advice",
+        "explain",
+        "reason",
+        "why",
+        "weather",
+        "soil",
+        "context",
+        "impact",
+        "effect",
+        "should I do",
+        "recommend",
+        "suggest",
+        "interpret",
+        "analysis",
+        "information",
+        "based on",
+        "because",
+        "caused by",
+        "influence",
+        "due to",
+        "assessment",
     ]
     prompt_lower = prompt.lower()
     return any(kw in prompt_lower for kw in keywords)
 
 def wants_additional_info_genai(prompt: str) -> bool:
-    
-
     credentials_data = json.loads(os.getenv("GOOGLE_CREDENTIALS"))
     credentials = service_account.Credentials.from_service_account_info(credentials_data)
     vertexai.init(project="disco-parsec-444415-c4", location="us-central1", credentials=credentials)
 
-    model = GenerativeModel("gemini-2.0-flash-001")
+    model_local = GenerativeModel("gemini-2.0-flash-001")
     system_prompt = (
         "Decide if the user's input is asking for additional geospatial explanation or advice, "
-        "beyond simply showing or listing features. This includes queries about reasons, causes, impact, recommendations, "
-        "interpretations, soil, weather, context, or what should be done. Return no if the task requires analyzing site data for specific features (like number of ash trees/healthy trees on a site..) "
+        "beyond simply showing or listing features. This includes queries about reasons, causes, impact, "
+        "recommendations, interpretations, soil, weather, context, or what should be done. Return no if the task "
+        "requires analyzing site data for specific features (like number of ash trees/healthy trees on a site..). "
         "Return only 'yes' or 'no'. Examples:\n"
         "- 'Show all healthy trees' -> no\n"
         "- 'How many trees are on the site' -> no\n"
@@ -270,42 +383,52 @@ def wants_additional_info_genai(prompt: str) -> bool:
         "- 'Explain the difference between two areas' -> yes"
     )
     full_prompt = f"{system_prompt}\n\nUser input: {prompt}\nAnswer:"
-    response = model.generate_content(
+    response = model_local.generate_content(
         full_prompt,
-        generation_config={
-            "temperature": 0.0,
-            "max_output_tokens": 5
-        }
+        generation_config={"temperature": 0.0, "max_output_tokens": 5},
     )
     answer = response.text.strip().lower()
     return answer.startswith("yes")
 
 def wants_additional_info(prompt: str) -> bool:
-    # Try keyword first
     if wants_additional_info_keyword(prompt):
         return True
-    # Backstop with vertex AI LLM classification if keyword not found
     return wants_additional_info_genai(prompt)
 
 def wants_gis_task_keyword(prompt: str) -> bool:
     keywords = [
-        "show", "display", "map", "highlight", "visualize", "which trees", 
-        "what trees", "list", "extract", "buffer", "join", "select", "clip", 
-        "overlay", "spatial", "geopandas", "geospatial", "coordinates", 
-        "location", "find", "query", "identify"
+        "show",
+        "display",
+        "map",
+        "highlight",
+        "visualize",
+        "which trees",
+        "what trees",
+        "list",
+        "extract",
+        "buffer",
+        "join",
+        "select",
+        "clip",
+        "overlay",
+        "spatial",
+        "geopandas",
+        "geospatial",
+        "coordinates",
+        "location",
+        "find",
+        "query",
+        "identify",
     ]
     prompt_lower = prompt.lower()
     return any(kw in prompt_lower for kw in keywords)
 
 def wants_gis_task_genai(prompt: str) -> bool:
-    
-
     credentials_data = json.loads(os.getenv("GOOGLE_CREDENTIALS"))
     credentials = service_account.Credentials.from_service_account_info(credentials_data)
     vertexai.init(project="disco-parsec-444415-c4", location="us-central1", credentials=credentials)
 
-    model = GenerativeModel("gemini-2.0-flash-001")
-
+    model_local = GenerativeModel("gemini-2.0-flash-001")
     system_prompt = (
         "Decide if the user's input is asking for a geospatial operation involving spatial data processing or analysis. "
         "This includes tasks like mapping, buffering, spatial querying, extraction of features, overlays, joins, or any "
@@ -324,35 +447,30 @@ def wants_gis_task_genai(prompt: str) -> bool:
         "- 'Summarize changes in tree health' -> no"
     )
     full_prompt = f"{system_prompt}\n\nUser input: {prompt}\nAnswer:"
-    response = model.generate_content(
+    response = model_local.generate_content(
         full_prompt,
-        generation_config={
-            "temperature": 0.0,
-            "max_output_tokens": 5
-        }
+        generation_config={"temperature": 0.0, "max_output_tokens": 5},
     )
     answer = response.text.strip().lower()
     return answer.startswith("yes")
 
 def want_gis_task(prompt: str) -> bool:
-    # Try keyword matching first for speed
     if wants_gis_task_keyword(prompt):
         return True
-    # Fallback to GenAI classifier for ambiguous queries
     return wants_gis_task_genai(prompt)
 
-def prompt_suggetions(task_name:str, user_prompt:str) -> list[str]: 
+def prompt_suggetions(task_name: str, user_prompt: str) -> list[str]:
     prompt_list = [
-        "Show the tallest ash tree", 
+        "Show the tallest ash tree",
         "Show the trees within a 30m range of the tallest ash tree",
         "Show the trees within a 30m range of the shortest ash tree",
-        "Show the diseased ash trees", 
-        "Show the unhealthy trees", 
-        "Show all the trees approx 40m to green spaces", 
-        "Show all the trees approx 40m to religious buildings", 
-        "What is the average height of the oak trees suveryed in 2024", 
-        "Sumamarize the health status of trees by species", 
-        "What is the average height of the ash trees", 
+        "Show the diseased ash trees",
+        "Show the unhealthy trees",
+        "Show all the trees approx 40m to green spaces",
+        "Show all the trees approx 40m to religious buildings",
+        "What is the average height of the oak trees suveryed in 2024",
+        "Sumamarize the health status of trees by species",
+        "What is the average height of the ash trees",
         "Find the tree with the largest shape area",
         "Show me all trees with signs of stress within 50 metres of Clumber Road East",
         "Highlight any unhealthy trees adjacent to [put road here]",
@@ -379,62 +497,72 @@ def prompt_suggetions(task_name:str, user_prompt:str) -> list[str]:
         "What management interventions are recommended for an area showing early signs of pest infestation?",
         "What are the common visual signs of stress in a sycamore tree?",
         "Explain how satellite data is used to determine tree health.",
-        "What is the most common tree species in UK urban environments?"
+        "What is the most common tree species in UK urban environments?",
     ]
     chat_doc = db.collection("chat_histories").document(task_name).get()
-    old_prompts= []
-    
-    if chat_doc.exists: 
+    old_prompts = []
+
+    if chat_doc.exists:
         data = chat_doc.to_dict()
         history = data.get("history", [])
 
-        for i in range (len(history) -1):
-            if history[i].get('role') == 'user' and history[i+1].get('role') == 'assistant':
-                if "successfully" in history[i+1].get('content', '').lower(): 
-                    old_prompts.append(history[i].get('content'))
-                    
+        for i in range(len(history) - 1):
+            if history[i].get("role") == "user" and history[i + 1].get("role") == "assistant":
+                if "successfully" in history[i + 1].get("content", "").lower():
+                    old_prompts.append(history[i].get("content"))
+
     combined_prompts = list(dict.fromkeys(prompt_list + old_prompts))
-    user_embd= emd_model.encode(user_prompt, convert_to_tensor = True) 
-    prompt_embeddings = emd_model.encode(combined_prompts, convert_to_tensor = True) 
+    user_embd = emd_model.encode(user_prompt, convert_to_tensor=True)
+    prompt_embeddings = emd_model.encode(combined_prompts, convert_to_tensor=True)
     similarity_scores = util.pytorch_cos_sim(user_embd, prompt_embeddings)[0]
     top_results = torch.topk(similarity_scores, k=min(4, len(combined_prompts)))
     return [combined_prompts[idx] for idx in top_results.indices]
 
-
-#-------- The debug agent ---------------
+# ============================================================
+#                     The debug agent
+# ============================================================
 
 def try_llm_fix(code, error_message=None, max_attempts=2):
     fixed_code = code
     exec_globals = {}
-    
+
     for attempt in range(max_attempts):
         try:
             if error_message:
                 prompt = (
                     f"The following Python code produced the error: \n"
                     f"{error_message}\n"
-                    f"Please fix the code (e.g., fixing unmatched parentheses and ensuring the code compiles) and output only the corrected Python code:\n{fixed_code}\n"
+                    f"Please fix the code (e.g., fixing unmatched parentheses and ensuring the code compiles) "
+                    f"and output only the corrected Python code:\n{fixed_code}\n"
                 )
             else:
                 prompt = f"Fix the following Python code and output only the corrected code:\n{fixed_code}\n"
+
             response = model.generate_content(prompt)
             fixed_code = helper.extract_code(response.text)
-            exec(fixed_code, exec_globals)
-            return True, fixed_code
+
+            # Gate before exec
+            ok, gated, msg = safe_lint_fix_compile(fixed_code)
+            if not ok:
+                raise SyntaxError(msg)
+
+            exec(gated, exec_globals)
+            return True, gated
         except Exception as e:
             print(f"Error during LLM fix attempt {attempt + 1}: {e}")
             error_message = str(e)
+
     explanation_prompt = (
         f"The following Python code consistently failed to execute:\n{code}\n"
         f"The last error message was:\n{error_message}\n"
         f"As an expert GIS forestry assistant, explain in simple, concise, friendly terms "
-        "what might be wrong and what the user can do to fix or provide clearer input. " \
+        "what might be wrong and what the user can do to fix or provide clearer input. "
         "For example for a KeyError, suggest checking for typos, or making sure the data actually exists."
-        )
-    
-    try: 
+    )
+
+    try:
         explanation = model.generate_content(explanation_prompt).text.strip()
-    except Exception as e: 
+    except Exception:
         explanation = (
             "There was an unexpected problem executing your request. "
             "Please check your input and try again."
@@ -442,54 +570,21 @@ def try_llm_fix(code, error_message=None, max_attempts=2):
 
     return False, explanation
 
-# def try_llm_fix(code, error_message=None, max_attempts=2):
-#     fixed_code = code
-#     exec_globals = {}
-#     for attempt in range(max_attempts):
-#         try:
-#             if error_message:
-#                 prompt = (
-#                     f"The following Python code produced the error: \n"
-#                     f"{error_message}\n"
-#                     f"Please fix the code and output only the corrected Python code:\n{fixed_code}\n"
-#                 )
-#             else:
-#                 prompt = f"Fix the following Python code and output only the corrected code:\n{fixed_code}\n"
-#             response = model.generate_content(prompt)
-#             fixed_code = helper.extract_code(response.text)
-#             exec(fixed_code, exec_globals)
-#             return True, fixed_code
-#         except Exception as e:
-#             print(f"Error during LLM fix attempt {attempt + 1}: {e}")
-#             error_message = str(e)
-#     return False, error_message
-
-#---- The geospatial code llm pipeline -----------
+# ============================================================
+#              The geospatial code llm pipeline
+# ============================================================
 
 def long_running_task(user_task: str, task_name: str, data_locations: list):
     message = None
     try:
-        # job_status[job_id] = {"status": "running", "message": "Task is in progress"}
-        # Set up task and directories
-        # print(f"Received user_task (should be single prompt): {user_task}")
         save_dir = os.path.join(os.getcwd(), task_name)
         os.makedirs(save_dir, exist_ok=True)
-        # Initialize Vertex AI done at the start. 
 
-        # credentials_data = json.loads(os.getenv("GOOGLE_CREDENTIALS"))
-        # credentials = service_account.Credentials.from_service_account_info(credentials_data)
-        # vertexai.init(project="disco-parsec-444415-c4", location="us-central1", credentials=credentials)
-
-        # user_task = r"""1) To use a geoJSON file and return all the "Tree_ID" that are ash species ('Predicted Tree Species':'Ash').
-        # """
-        # task_name ='Tree_crown_quality'
-        #Create Solution object        
         solution = Solution(
             task=user_task,
             task_name=task_name,
             save_dir=save_dir,
-            data_locations=data_locations
-    
+            data_locations=data_locations,
         )
 
         # Generate solution graph
@@ -497,253 +592,188 @@ def long_running_task(user_task: str, task_name: str, data_locations: list):
         solution.graph_response = response_for_graph
         solution.save_solution()
 
-        #  file_path = "debug_tree_id.py"
+        # IMPORTANT: do NOT lstrip indentation.
+        # If you need to normalize formatting here, use the gate:
+        ok_graph, graph_code, graph_msg = safe_lint_fix_compile(solution.code_for_graph)
+        if not ok_graph:
+            # Attempt LLM fix once for graph stage
+            success, fixed = try_llm_fix(solution.code_for_graph, error_message=graph_msg, max_attempts=1)
+            if not success:
+                return {"status": "completed", "message": fixed}
+            ok_graph2, graph_code2, graph_msg2 = safe_lint_fix_compile(fixed)
+            if not ok_graph2:
+                return {"status": "completed", "message": f"Graph code failed compile gate: {graph_msg2}"}
+            graph_code = graph_code2
 
-        # # Read the file content
-        #  with open(file_path, "r") as file:
-        #      debugged_code = file.read()
-        
-        # Store the code into solution.code_for_graph
-        #solution.code_for_graph = debugged_code
-        #print("The code is:",solution.code_for_graph)
-        solution.code_for_graph = clean_indentation(solution.code_for_graph)
-        exec(solution.code_for_graph)
+        exec(graph_code, globals())
+
         # Load graph file
         solution_graph = solution.load_graph_file()
-        G = nx.read_graphml(solution.graph_file) 
+        G = nx.read_graphml(solution.graph_file)
         nt = helper.show_graph(G)
-        html_name = os.path.join(os.getcwd(), solution.task_name + '.html') 
+        html_name = os.path.join(os.getcwd(), solution.task_name + ".html")
 
         # Generate operations
         operations = solution.get_LLM_responses_for_operations(review=False)
         solution.save_solution()
-        all_operation_code_str = '\n'.join([operation['operation_code'] for operation in operations])
+        all_operation_code_str = "\n".join([operation["operation_code"] for operation in operations])
 
         # Generate assembly code
         assembly_LLM_response = solution.get_LLM_assembly_response(review=False)
-        # solution.assembly_LLM_response = assembly_LLM_response
-        # solution.save_solution()
-        
-        # Run the generated code
-        #gemini-1.5-flash-002
-        model = GenerativeModel("gemini-2.0-flash-001")
+
+        model_local = GenerativeModel("gemini-2.0-flash-001")
         for attempt in range(10):
-           try: 
-              response = model.generate_content(solution.assembly_prompt)
-              break
-           except ResourceExhausted: 
-              if attempt<10:
-                 time.sleep(10)
-              else:
-                 raise
-        # response = model.generate_content(solution.assembly_prompt)
+            try:
+                response = model_local.generate_content(solution.assembly_prompt)
+                break
+            except ResourceExhausted:
+                if attempt < 9:
+                    time.sleep(10)
+                else:
+                    raise
+
         code_for_assembly = helper.extract_code(response.text)
 
-        # Combine all code
-        
-        # print("The combined code is: ", code_for_assembly)
-        
-            
-        
         print("Starting execution...")
-        # code_for_assembly = textwrap.dedent(code_for_assembly).strip()
-        # code_for_assembly = autopep8.fix_code(code_for_assembly)
-        # code_for_assembly = black.format_str(code_for_assembly, mode=black.FileMode())
-        exec_globals = {}
-        # Execute the code directly 
-        
-        
-        code_for_assembly = textwrap.dedent(code_for_assembly).strip()
-        
-        try:
-            ast.parse(code_for_assembly)
-        except SyntaxError as e:
-            print(f"Syntax / indentation error before exec: {e}")
-            # You can special‑case indentation here if you want:
-            # if isinstance(e, IndentationError): ...
 
-            # Try a simple “fix indentation” loop (your existing logic)
-            for attempt in range(10):
-                try:
-                    prompt = f"Fix Indentation in the following Python code:\n{code_for_assembly}\n"
-                    response = model.generate_content(prompt)
-                    break
-                except ResourceExhausted:
-                    if attempt < 9:
-                        time.sleep(10)
-                    else:
-                        raise
+        # ============================================================
+        #              SAFE GATE: lint + fix + compile
+        # ============================================================
 
-            code_for_assembly = helper.extract_code(response.text)
+        ok, gated_code, gate_msg = safe_lint_fix_compile(code_for_assembly)
+        print("GATE:", gate_msg)
 
-            # Re-parse after fix
-            ast.parse(code_for_assembly)
+        if not ok:
+            # Send through LLM fixer using gate error as context
+            success, fixed_code_or_error = try_llm_fix(code_for_assembly, error_message=gate_msg)
+            if not success:
+                return {"status": "completed", "message": fixed_code_or_error}
 
-        try:
-            exec(code_for_assembly, globals())
-        except IndentationError as e:
-            print("Entered exception zone")
-            for attempt in range(10):
-                try:
-                    prompt = f"Fix Indentation in the following Python code:\n{code_for_assembly}\n"
-                    response = model.generate_content(prompt)
-                    break
-                except ResourceExhausted: 
-                    if attempt<10:
-                        time.sleep(10)
-                    else:
-                        raise
-            code_for_assembly = helper.extract_code(response.text)
-            exec(code_for_assembly, globals())
-        except Exception as e:
-            print(f"Caught Exception: {e}, attempting LLM fix...")
-            success, fixed_code_or_error = try_llm_fix(code_for_assembly, error_message=str(e))
-            if success:
-                try:
-                    exec(fixed_code_or_error, globals())
-                except Exception as e2:
-                    print(f"Execution after LLM fix failed: {e2}")
-                    return {
-                        "status": "completed",
-                        "message": f"Execution failed even after code correction, try being more specific with your prompt."
-                    }
-            else:
-                print(f"LLM fix failed: {fixed_code_or_error}")
-                return {
-                        "status": "completed",
-                        "message": fixed_code_or_error,
-                    }            
-        
-        result = globals().get('result', None)
+            ok2, gated2, gate_msg2 = safe_lint_fix_compile(fixed_code_or_error)
+            print("GATE2:", gate_msg2)
+            if not ok2:
+                return {"status": "completed", "message": f"Still failing compile gate: {gate_msg2}"}
+
+            exec(gated2, globals())
+            final_executed_code = gated2
+        else:
+            exec(gated_code, globals())
+            final_executed_code = gated_code
+
+        result = globals().get("result", None)
         print("result type:", type(result))
         print("Final result:", result)
+
         explanation_prompt = (
-        f"For the task: {user_task}, I just ran the generated code: {code_for_assembly}.\n"
-        f"Here's the output: {result}.\n"
-        f"Explain in simple terms (one or two lines max) as a GIS expert what geospatial task was performed to obtain this result. Do not mention or describe any code or programming; just summarize the GIS action you took in a simple friendly way and what the result means for the user's query.\n"   
+            f"For the task: {user_task}, I just ran the generated code.\n"
+            f"Here's the output: {result}.\n"
+            f"Explain in simple terms (one or two lines max) as a GIS expert what geospatial task was performed to obtain this result. "
+            f"Do not mention or describe any code or programming; just summarize the GIS action you took in a simple friendly way "
+            f"and what the result means for the user's query.\n"
         )
-        explanation_response = model.generate_content(explanation_prompt)
+        explanation_response = model_local.generate_content(explanation_prompt)
         explanation_text = explanation_response.text.strip()
 
-        is_empty_result = False
-        is_empty_result = result is None or (isinstance(result, list) and len(result) == 0) or (hasattr(result, "empty") and result.empty)
-        if is_empty_result: 
-            return {
-                "status": "completed",
-                "message": "Your query returned no data. Please check your input."
-            }
-        
+        is_empty_result = (
+            result is None
+            or (isinstance(result, list) and len(result) == 0)
+            or (hasattr(result, "empty") and result.empty)
+        )
+        if is_empty_result:
+            return {"status": "completed", "message": "Your query returned no data. Please check your input."}
+
         if wants_map_output(user_task):
-            
             print("Execution completed.")
-            
+
             if isinstance(result, str):
                 message = f"{result} \n {explanation_text}"
-                return {
-                "status": "completed",
-                "message": message,
-                
-                }
-            try: 
+                return {"status": "completed", "message": message}
+
+            try:
                 if hasattr(result, "to_json") and "GeoDataFrame" in str(type(result)):
-                
                     print(result.head(2))
                     geojson = result.to_json()
-                    # need to update this to go to the write place in arcgis if it's a GeoDataFrame
-                    #store the query and geojson in firestore for the furture
-                    # store_answer_in_firestore(user_task, geojson)
                     push_to_map(geojson, task_name)
-            
-            
 
-                if isinstance(result, list):
-                    # Print first 2 records if list has multiple items
+                elif isinstance(result, list):
                     preview = result[:2] if len(result) > 2 else result
                     print("Preview of list result:", preview)
                     push_to_map(result, task_name)
-                
-                else: 
-                    print(f"Potential nsupported result type: {type(result)}")
+
+                else:
+                    print(f"Potential unsupported result type: {type(result)}")
                     push_to_map(result, task_name)
-                        
-                   
-                     
+
                 message = f"The task has been executed successfully, and the results should be on your screen. \n {explanation_text}"
-            
                 return {
                     "status": "completed",
                     "message": message,
-                    "tree_ids": result if isinstance(result, list) else (result.to_json() if hasattr(result, "to_json") and "GeoDataFrame" in str(type(result)) else None)
+                    "tree_ids": result
+                    if isinstance(result, list)
+                    else (
+                        result.to_json()
+                        if hasattr(result, "to_json") and "GeoDataFrame" in str(type(result))
+                        else None
+                    ),
                 }
             except Exception as map_error:
                 print(f"Map push failed: {map_error}")
                 return {
-                        "status": "completed", 
-                        "message": f"Th task completed but map display failed: {map_error}. \n {explanation_text}"
-                }   
-                
-
-        # job_status[job_id] = {"status": "completed", "message": f"Task '{task_name}' executed successfully, adding it to the map shortly."}
-        else: 
-                
-                return{
                     "status": "completed",
-                    "message": f"{result}. {explanation_text}"
+                    "message": f"The task completed but map display failed: {map_error}. \n {explanation_text}",
                 }
-        
-    
+
+        else:
+            return {"status": "completed", "message": f"{result}. {explanation_text}"}
+
     except Exception as e:
         print(f"Error during execution: {e}")
-        debug_response = long_debug(user_task,e)
-        #job_status[job_id] = {"status": "failed", "message": str(e)}
-        # return f"Error during execution: {str(e)}"
-        return f"Oops the server seems to be down! \n {debug_response}" 
-        #add error agent here too return message
+        debug_response = long_debug(user_task, e)
+        return f"Oops the server seems to be down! \n {debug_response}"
 
+# ============================================================
+#                     Simulated tools
+# ============================================================
 
-# === Simulated tools ===
 def get_geospatial_context_tool(coords: str) -> str:
-    #dynamically get based on map 
-    
     lat, lon = map(float, coords.split(","))
-    context = get_geospatial_context(lat, lon)  # Your GEE function
+    context = get_geospatial_context(lat, lon)
     return json.dumps(context)
-    
+
 def get_zoning_info(coords: str = "40.7128,-74.0060") -> str:
-    # Since zoning isn't directly in Earth Engine data, we use land cover and forest loss as proxy
     context_json = get_geospatial_context_tool(coords)
     context = json.loads(context_json)
 
     land_cover = context.get("Land Cover Class (ESA)", "Unknown")
     forest_loss_year = context.get("Forest Loss Year (avg)", "N/A")
-    
+
     zoning_msg = f"Land cover class: {land_cover}."
-    if forest_loss_year != 'N/A':
+    if forest_loss_year != "N/A":
         zoning_msg += f" Recent forest loss observed, average year: {forest_loss_year}."
     zoning_msg += " Tree planting recommended in reforestation or conservation zones."
+    return zoning_msg
 
 def get_climate_info(coords: str = "40.7128,-74.0060") -> str:
-    
     context_json = get_geospatial_context_tool(coords)
     context = json.loads(context_json)
-    
+
     precipitation = context.get("Precipitation (mm)", 0)
     temperature = context.get("Temperature (°C)", 0)
     ndvi = context.get("NDVI (mean)", 0)
 
     flood_risk = "High" if precipitation > 1000 else "Moderate" if precipitation > 500 else "Low"
-    sea_level_rise_estimate_m = 1.2  # Placeholder: for real, integrate NOAA data externally
+    sea_level_rise_estimate_m = 1.2  # Placeholder
 
-    climate_msg = (f"Climate summary at {coords}:\n"
-                   f"Precipitation: {precipitation} mm (Flood Risk: {flood_risk})\n"
-                   f"Mean Temperature: {temperature} °C\n"
-                   f"Vegetation Health (NDVI): {ndvi}\n"
-                   f"Estimated sea-level rise: {sea_level_rise_estimate_m} m over next decades")
-                   
+    climate_msg = (
+        f"Climate summary at {coords}:\n"
+        f"Precipitation: {precipitation} mm (Flood Risk: {flood_risk})\n"
+        f"Mean Temperature: {temperature} °C\n"
+        f"Vegetation Health (NDVI): {ndvi}\n"
+        f"Estimated sea-level rise: {sea_level_rise_estimate_m} m over next decades"
+    )
     return climate_msg
 
-    
-def check_tree_health(coords: str = "40.7128,-74.0060")  -> dict:
+def check_tree_health(coords: str = "40.7128,-74.0060") -> dict:
     ee_result = get_geospatial_context_tool(coords)
     context = json.loads(ee_result)
     health_comment = "Healthy canopy" if context["NDVI (mean)"] > 0.5 else "Canopy thinning or stress"
@@ -755,120 +785,116 @@ def check_tree_health(coords: str = "40.7128,-74.0060")  -> dict:
         "Health Assessment": f"{health_comment}; {drought_comment}",
         "Forestry Recommendation": (
             "Monitor for canopy decline; consider supplemental watering and replace non-native stressed species."
-        )
+        ),
     }
 
 def assess_tree_benefit(coords: str = "40.7128,-74.0060") -> dict:
-    # Example: Logic grounded in context
     geo = json.loads(get_geospatial_context_tool(coords))
-    benefit = "Excellent for carbon capture" if geo["NDVI (mean)"] > 0.7 and geo["Precipitation (mm)"] > 600 else "Moderate"
-    cooling = "Substantial cooling from mature canopy" if geo["Land Cover Class (ESA)"] == "Forest" else "Potential cooling with reforestation"
+    benefit = (
+        "Excellent for carbon capture"
+        if geo["NDVI (mean)"] > 0.7 and geo["Precipitation (mm)"] > 600
+        else "Moderate"
+    )
+    cooling = (
+        "Substantial cooling from mature canopy"
+        if geo["Land Cover Class (ESA)"] == "Forest"
+        else "Potential cooling with reforestation"
+    )
     return {
         "Location": coords,
         "Carbon Capture Potential": benefit,
         "Shade/Cooling Impact": cooling,
-        "Reference Data": geo
+        "Reference Data": geo,
     }
 
 def check_soil_suitability(coords: str) -> str:
     context_json = get_geospatial_context_tool(coords)
     context = json.loads(context_json)
-    
-    # Use soil moisture, elevation or land cover info as proxy for soil suitability
+
     soil_moisture = context.get("Soil Moisture (m3/m3)", None)
     elevation = context.get("Elevation (m)", None)
     land_cover = context.get("Land Cover Class (ESA)", "Unknown")
 
-    # Simplified interpretation rules (expand or replace with richer logic)
     if soil_moisture is not None and 0.2 <= soil_moisture <= 0.4:
         moisture_msg = "Suitable soil moisture for native tree species growth."
     else:
         moisture_msg = "Soil moisture outside ideal range; irrigation or species choice recommended."
 
-    return (f"Soil suitability at {coords}:\n"
-            f"{moisture_msg}\n"
-            f"Elevation: {elevation} m\n"
-            f"Land Cover Type: {land_cover}")
+    return (
+        f"Soil suitability at {coords}:\n"
+        f"{moisture_msg}\n"
+        f"Elevation: {elevation} m\n"
+        f"Land Cover Type: {land_cover}"
+    )
 
 def get_geospatial_context(lat=40.7128, lon=-74.0060):
     point = ee.Geometry.Point([lon, lat])
     year = datetime.date.today().year
     today = datetime.date.today()
 
-    # Try using current year
     try_start = ee.Date.fromYMD(year, 1, 1)
     try_end = ee.Date.fromYMD(year, today.month, today.day)
 
-    # Fallback default year
-    fallback_start = ee.Date('2023-01-01')
-    fallback_end = ee.Date('2023-12-31')
-    
+    fallback_start = ee.Date("2023-01-01")
+    fallback_end = ee.Date("2023-12-31")
+
     def fetch(collection_id, selector, start, end, scale):
         try:
-            coll = ee.ImageCollection(collection_id) \
-                .filterDate(start, end) \
-                .filterBounds(point) \
+            coll = (
+                ee.ImageCollection(collection_id)
+                .filterDate(start, end)
+                .filterBounds(point)
                 .select(selector)
-            return coll.mean().reduceRegion(
-                reducer=ee.Reducer.mean(),
-                geometry=point,
-                scale=scale
-            ).getInfo()
-        except:
+            )
+            return (
+                coll.mean()
+                .reduceRegion(reducer=ee.Reducer.mean(), geometry=point, scale=scale)
+                .getInfo()
+            )
+        except Exception:
             return {}
 
-    # Fetch NDVI (MODIS)
-    ndvi = fetch('MODIS/006/MOD13Q1', 'NDVI', try_start, try_end, 250) or \
-           fetch('MODIS/006/MOD13Q1', 'NDVI', fallback_start, fallback_end, 250)
+    ndvi = fetch("MODIS/006/MOD13Q1", "NDVI", try_start, try_end, 250) or fetch(
+        "MODIS/006/MOD13Q1", "NDVI", fallback_start, fallback_end, 250
+    )
 
-    # Fetch Precipitation (CHIRPS)
-    precip = fetch('UCSB-CHG/CHIRPS/DAILY', 'precipitation', try_start, try_end, 5000) or \
-             fetch('UCSB-CHG/CHIRPS/DAILY', 'precipitation', fallback_start, fallback_end, 5000)
+    precip = fetch("UCSB-CHG/CHIRPS/DAILY", "precipitation", try_start, try_end, 5000) or fetch(
+        "UCSB-CHG/CHIRPS/DAILY", "precipitation", fallback_start, fallback_end, 5000
+    )
 
-    # Fetch Temperature (ERA5-Land)
-    temp = fetch('ECMWF/ERA5_LAND/DAILY_AGGR', 'temperature_2m', try_start, try_end, 1000) or \
-           fetch('ECMWF/ERA5_LAND/DAILY_AGGR', 'temperature_2m', fallback_start, fallback_end, 1000)
+    temp = fetch("ECMWF/ERA5_LAND/DAILY_AGGR", "temperature_2m", try_start, try_end, 1000) or fetch(
+        "ECMWF/ERA5_LAND/DAILY_AGGR", "temperature_2m", fallback_start, fallback_end, 1000
+    )
 
-    # Land use from ESA (static - 2020)
-    landcover = ee.Image('ESA/WorldCover/v100/2020').sample(point, 10).first().getInfo()
+    landcover = ee.Image("ESA/WorldCover/v100/2020").sample(point, 10).first().getInfo()
 
-    # Soil Moisture from SMAP (daily 10km)
-    soil = fetch('NASA_USDA/HSL/SMAP10KM_soil_moisture', 'ssm', try_start, try_end, 10000) or \
-           fetch('NASA_USDA/HSL/SMAP10KM_soil_moisture', 'ssm', fallback_start, fallback_end, 10000)
+    soil = fetch("NASA_USDA/HSL/SMAP10KM_soil_moisture", "ssm", try_start, try_end, 10000) or fetch(
+        "NASA_USDA/HSL/SMAP10KM_soil_moisture", "ssm", fallback_start, fallback_end, 10000
+    )
 
-    # Forest loss (Hansen 2000–2022)
-    forest = ee.Image('UMD/hansen/global_forest_change_2023_v1_11')
-    forest_loss = forest.select('lossyear').reduceRegion(
-        reducer=ee.Reducer.mean(),
-        geometry=point,
-        scale=30
+    forest = ee.Image("UMD/hansen/global_forest_change_2023_v1_11")
+    forest_loss = forest.select("lossyear").reduceRegion(
+        reducer=ee.Reducer.mean(), geometry=point, scale=30
     ).getInfo()
 
-    # Elevation (SRTM, static)
-    elevation = ee.Image('USGS/SRTMGL1_003').sample(point, 30).first().getInfo()
+    elevation = ee.Image("USGS/SRTMGL1_003").sample(point, 30).first().getInfo()
 
-    # Assemble response
     return {
         "Latitude": lat,
         "Longitude": lon,
-        "NDVI (mean)": round(ndvi.get('NDVI', 0) / 10000.0, 3),
-        "Precipitation (mm)": round(precip.get('precipitation', 0), 2),
-        "Temperature (°C)": round(temp.get('temperature_2m', 273.15) - 273.15, 2),
-        "Soil Moisture (m3/m3)": round(soil.get('ssm', 0), 3),
-        "Forest Loss Year (avg)": forest_loss.get('lossyear', 'N/A'),
-        "Land Cover Class (ESA)": landcover.get('map', 'N/A'),
-        "Elevation (m)": elevation.get('elevation', 'N/A')
+        "NDVI (mean)": round(ndvi.get("NDVI", 0) / 10000.0, 3),
+        "Precipitation (mm)": round(precip.get("precipitation", 0), 2),
+        "Temperature (°C)": round(temp.get("temperature_2m", 273.15) - 273.15, 2),
+        "Soil Moisture (m3/m3)": round(soil.get("ssm", 0), 3),
+        "Forest Loss Year (avg)": forest_loss.get("lossyear", "N/A"),
+        "Land Cover Class (ESA)": landcover.get("map", "N/A"),
+        "Elevation (m)": elevation.get("elevation", "N/A"),
     }
 
 def cosine_similarity(a, b):
-    """Calculate cosine similarity between two vectors."""
     return np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b))
 
 def retrieve_rag_chunks(collection_name, query, top_k=5):
-    """
-    Retrieve top K most semantically similar chunks from the specified
-    subcollection under knowledge_chunks/root document in Firestore.
-    """
     root_ref = db.collection("knowledge_chunks").document("root")
     chunks_ref = root_ref.collection(collection_name).stream()
 
@@ -879,17 +905,12 @@ def retrieve_rag_chunks(collection_name, query, top_k=5):
         chunk = doc.to_dict()
         emb = chunk.get("embedding", None)
         if emb is not None:
-            # Convert embedding list to numpy array
             emb_np = np.array(emb)
             sim = cosine_similarity(query_emb, emb_np)
             scored_chunks.append((sim, chunk))
 
-    # Sort chunks by descending similarity
     scored_chunks.sort(key=lambda x: x[0], reverse=True)
-
-    # Return only the content field of top_k documents
     top_contents = [chunk["content"] for _, chunk in scored_chunks[:top_k]]
-
     return top_contents
 
 def prompt_template(query: str, context: str, format_instructions: str) -> str:
@@ -902,83 +923,40 @@ def prompt_template(query: str, context: str, format_instructions: str) -> str:
         "Return only valid JSON."
     )
     return prompt
-    
-# temp remove for rag_llm
-# def rag_tree_grants_tool(query: str) -> str:
-#     chunks = retrieve_rag_chunks("tree_grants", query)
-#     if not chunks:
-#         return json.dumps({"result": [], "message": "No relevant tree grants data found."})
-#     context_text = "\n".join(chunks)
-#     format_instructions=parser.get_format_instructions()
-#     prompt = prompt_template(query, context_text, format_instructions)
-    
-#     response = rag_llm.invoke(prompt)
-#     parsed = parser.parse(response.content)
-#     return json.dumps(parsed)
 
-# def rag_tree_info_tool(query: str) -> str:
-#     chunks = retrieve_rag_chunks("tree_info", query)
-#     if not chunks:
-#         return json.dumps({"result": [], "message": "No relevant tree info data found."})
-#     context_text = "\n".join(chunks)
-#     format_instructions=parser.get_format_instructions()
-#     prompt = prompt_template(query, context_text, format_instructions)
-    
-#     response = rag_llm.invoke(prompt)
-#     parsed = parser.parse(response.content)
-#     return json.dumps(parsed)
-
-
-
-#Can wrap the entire long process into this tool. so LLM orchestrator can handle. 
-# def gis_solution_tool(query: str) -> str:
-#     """
-#     Invokes your existing long_running_task with params parsed or defaulted from query.
-#     You may want to improve parsing logic depending on query format.
-#     """
-#     user_task = query
-#     task_name = "GIS_LongRunningTask"
-#     data_locations = []  # Fill as appropriate, could parse from query or configure by task_name
-
-#     result = long_running_task(user_task, task_name, data_locations)
-
-#     if isinstance(result, dict):
-#         message = result.get("message", str(result))
-#         if "tree_ids" in result:
-#             message += f"\nTree IDs found: {result['tree_ids']}"
-#         return message
-#     return str(result)
-
-
-# gis_batch_tool = Tool(
-#     name="GISBatchProcessor",
-#     func=gis_solution_tool,
-#     description="Executes advanced GIS batch processing tasks using the Solution pipeline."
-# )
+# ============================================================
+#        Initialize agent with tools and LangChain LLM
+# ============================================================
 
 tools = [
-    Tool(name="ZoningLookup", func=get_zoning_info, description="Provides zoning-related land cover and forest loss info as proxy to guide tree planting recommendations."),
-    Tool(name="ClimateLookUp", func=get_climate_info, description="Returns precipitation, temperature, vegetation health (NDVI), flood risk, and sea level rise estimates for forestry planning."),
-    Tool(name="CheckTreeHealth", func=check_tree_health, description="Assess how healthy the trees are using the canopy cover and soil."),
-    Tool(name="SoilSuitabilityCheck",func=check_soil_suitability,description="Analyzes soil moisture, elevation, and land cover to evaluate suitability for native tree species planting."), 
-    Tool(name="TreeBenefitAssessment", func=assess_tree_benefit, description="Estimates carbon capture potential and cooling benefits based on NDVI, precipitation, and land cover data.")
-    # Tool(
-    #     name="RAGTreeGrants",
-    #     func=rag_tree_grants_tool,
-    #     description="Retrieves recent tree grant and licensing information based on the users query."
-    # ),
-
-    # Tool(
-    #     name="RAGTreeInfo",
-    #     func=rag_tree_info_tool,
-    #     description="Retrieves additional forestry and tree information from based on UK forestry records and rules."
-    # )
-    # gis_batch_tool
+    Tool(
+        name="ZoningLookup",
+        func=get_zoning_info,
+        description="Provides zoning-related land cover and forest loss info as proxy to guide tree planting recommendations.",
+    ),
+    Tool(
+        name="ClimateLookUp",
+        func=get_climate_info,
+        description="Returns precipitation, temperature, vegetation health (NDVI), flood risk, and sea level rise estimates for forestry planning.",
+    ),
+    Tool(
+        name="CheckTreeHealth",
+        func=check_tree_health,
+        description="Assess how healthy the trees are using the canopy cover and soil.",
+    ),
+    Tool(
+        name="SoilSuitabilityCheck",
+        func=check_soil_suitability,
+        description="Analyzes soil moisture, elevation, and land cover to evaluate suitability for native tree species planting.",
+    ),
+    Tool(
+        name="TreeBenefitAssessment",
+        func=assess_tree_benefit,
+        description="Estimates carbon capture potential and cooling benefits based on NDVI, precipitation, and land cover data.",
+    ),
 ]
-
-# --------------------- Initialize agent with tools and LangChain LLM ---------------------
 
 agent = create_react_agent(
     model=llm.bind_tools(tools),
-    tools=tools
+    tools=tools,
 )
