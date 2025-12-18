@@ -22,6 +22,9 @@ from typing import Any, Dict, List, Optional, Union, Tuple
 from pandas.api.types import is_datetime64_any_dtype, is_datetime64tz_dtype
 import time
 
+# READS: long-lived API key (ArcGIS calls accept it via `token=<API_KEY>`), reset per yesr
+ARCGIS_READ_API_KEY = os.getenv("ARCGIS_READ_API_KEY", "").strip()
+
 ARCGIS_TOKEN_API = os.getenv(
     "ARCGIS_TOKEN_API",
     "https://arcgis-token-microservice-1042524106019.europe-west1.run.app",
@@ -80,6 +83,18 @@ class ClearRequest(BaseModel):
 
 
 # --------------------- ARC GIS TOKEN + HELPERS ---------------------
+
+def get_arcgis_read_token() -> str:
+    """
+    READ token = API key (preferred).
+    Fallback: if API key missing, use write token to avoid hard failures.
+    """
+    if ARCGIS_READ_API_KEY:
+        return ARCGIS_READ_API_KEY
+    # fallback (optional, but pragmatic)
+    return get_arcgis_write_token()
+
+
 def get_arcgis_token(force_refresh: bool = False) -> str:
     """
     Get an ArcGIS token from your Cloud Run microservice.
@@ -131,49 +146,48 @@ def get_arcgis_token(force_refresh: bool = False) -> str:
     return token
 
 
-def _with_token_params(params: dict | None = None) -> dict:
-    """
-    Return a copy of params with an ArcGIS token attached.
-    Safe to call for both public and secured services.
-    """
+def _with_read_token_params(params: dict | None = None) -> dict:
     p = dict(params or {})
     try:
-        token = get_arcgis_token()
+        token = get_arcgis_read_token()
     except Exception as exc:
-        logger.error(f"Failed to get ArcGIS token: {exc}")
+        logger.error(f"Failed to get ArcGIS READ token: {exc}")
         return p
-
     if token and "token" not in p:
         p["token"] = token
     return p
 
+def _with_write_token_params(params: dict | None = None) -> dict:
+    p = dict(params or {})
+    try:
+        token = get_arcgis_write_token()
+    except Exception as exc:
+        logger.error(f"Failed to get ArcGIS WRITE token: {exc}")
+        return p
+    if token and "token" not in p:
+        p["token"] = token
+    return p
 
-def _with_token_data(data: dict | None = None) -> dict:
-    """
-    Same as _with_token_params but semantically for POST data.
-    """
-    return _with_token_params(data)
+def _with_read_token_data(data: dict | None = None) -> dict:
+    return _with_read_token_params(data)
+
+def _with_write_token_data(data: dict | None = None) -> dict:
+    return _with_write_token_params(data)
 
 
 def _append_token_to_url(url: str) -> str:
-    """
-    Append &token=... to a URL string if not already present.
-    Used for pre-built query URLs when making requests.
-    """
     try:
-        token = get_arcgis_token()
+        token = get_arcgis_read_token()
     except Exception as exc:
-        logger.error(f"Failed to get ArcGIS token for URL '{url}': {exc}")
+        logger.error(f"Failed to get ArcGIS READ token for URL '{url}': {exc}")
         return url
 
-    if not token:
-        return url
-
-    if re.search(r"[?&]token=", url):
+    if not token or re.search(r"[?&]token=", url):
         return url
 
     sep = "&" if "?" in url else "?"
     return f"{url}{sep}token={_q(token)}"
+
 
 
 def _json_default(obj):
@@ -463,7 +477,7 @@ def get_project_urls(project_name):
         "outFields": ",".join(fields),
         "f": "json",
     }
-    params = _with_token_params(params)
+    params = _with_read_token_params(params)
     logger.debug(f"Querying project index with WHERE clause: {params['where']}")
 
     try:
@@ -538,7 +552,7 @@ def _get_layer_max_record_count(layer_url: str, timeout: int = 20) -> int:
     logger.debug(f"Attempting to fetch maxRecordCount for {layer_url}")
     default_mrc = 1000
     try:
-        params = _with_token_params({"f": "json"})
+        params = _with_read_token_params({"f": "json"})
         r = _session.get(layer_url.rstrip("/"), params=params, timeout=timeout)
         r.raise_for_status()
         if "json" not in r.headers.get("Content-Type", ""):
@@ -611,7 +625,7 @@ def extract_geojson(
                 "resultOffset": offset,
                 "resultRecordCount": page_size,
             }
-            params = _with_token_params(params)
+            params = _with_read_token_params(params)
             logger.debug(f"Querying with offset={offset}, count={page_size}")
 
             resp = _session.get(f"{layer_url}/query", params=params, timeout=timeout)
@@ -955,7 +969,7 @@ def _get_layer_epsg(layer_url: str) -> int:
     """Fetch target layer EPSG from ArcGIS REST."""
     try:
         url = layer_url.rstrip("/")
-        params = _with_token_params({"f": "json"})
+        params = _with_read_token_params({"f": "json"})
         resp = requests.get(url, params=params, timeout=10)
         resp.raise_for_status()
         js = resp.json()
@@ -1466,7 +1480,7 @@ def fetch_crs(base_url, timeout=20, default_wkid=4326):
         f"Fetching CRS for base URL: {base_url}. Default WKID: {default_wkid}"
     )
     try:
-        params = _with_token_params({"f": "json"})
+        params = _with_read_token_params({"f": "json"})
         r = _session.get(base_url.rstrip("/"), params=params, timeout=timeout)
         r.raise_for_status()
         ctype = r.headers.get("Content-Type", "")
@@ -1595,7 +1609,7 @@ def get_project_aoi_geometry(project_name: str):
     logger.info(f"Using ORTHOMOSAIC URL: {ortho_url}")
     try:
         base = ortho_url.rstrip("/")
-        params = _with_token_params({"f": "json"})
+        params = _with_read_token_params({"f": "json"})
         r = _session.get(base, params=params, timeout=30)
         r.raise_for_status()
         if "json" not in r.headers.get("Content-Type", ""):
@@ -1666,7 +1680,7 @@ def get_project_coords(project_name: str):
     try:
         # Request metadata from the ArcGIS Service
         base = ortho_url.rstrip("/")
-        params = _with_token_params({"f": "json"})
+        params = _with_read_token_params({"f": "json"})
         r = _session.get(base, params=params, timeout=30)
         r.raise_for_status()
         meta = r.json()
@@ -1748,7 +1762,7 @@ def _supports_pagination(layer_url: str) -> bool:
     try:
         lu = _sanitise_layer_url(layer_url)
         meta = _session.get(
-            lu, params=_with_token_params({"f": "json"}), timeout=20
+            lu, params=_with_read_token_params({"f": "json"}), timeout=20
         ).json()
         return bool(
             meta.get("advancedQueryCapabilities", {}).get(
@@ -1763,7 +1777,7 @@ def _get_objectid_field(layer_url: str) -> str:
     try:
         lu = _sanitise_layer_url(layer_url)
         meta = _session.get(
-            lu, params=_with_token_params({"f": "json"}), timeout=20
+            lu, params=_with_read_token_params({"f": "json"}), timeout=20
         ).json()
         if meta.get("objectIdField"):
             return meta["objectIdField"]
@@ -1792,7 +1806,7 @@ def _count_features_in_aoi(
         "returnCountOnly": "true",
         "f": "json",
     }
-    params = _with_token_data(params)
+    params = _with_read_token_params(params)
     try:
         r = _session.post(f"{lyr}/query", data=params, timeout=timeout)
         r.raise_for_status()
@@ -1884,7 +1898,7 @@ def _supports_distinct(layer_url: str) -> bool:
     try:
         lu = _sanitise_layer_url(layer_url)
         meta = _session.get(
-            lu, params=_with_token_params({"f": "json"}), timeout=20
+            lu, params=_with_read_token_params({"f": "json"}), timeout=20
         ).json()
         return bool(
             meta.get("advancedQueryCapabilities", {}).get("supportsDistinct", False)
@@ -1946,7 +1960,7 @@ def _distinct_values_via_service(
             params["resultRecordCount"] = page_size
             params["resultOffset"] = offset
 
-        params = _with_token_data(params)
+        params = _with_read_token_params(params)
         r = _session.post(f"{lyr}/query", data=params, timeout=40)
         r.raise_for_status()
         js = r.json()
@@ -2078,7 +2092,7 @@ def _get_layer_columns(layer_url: str, timeout: int = 20) -> list[str]:
     # Fast path: metadata fields[]
     try:
         r = _session.get(
-            lu, params=_with_token_params({"f": "json"}), timeout=timeout
+            lu, params=_with_read_token_params({"f": "json"}), timeout=timeout
         )
         r.raise_for_status()
         if "json" in (r.headers.get("Content-Type") or "").lower():
@@ -2174,7 +2188,7 @@ def _get_layer_last_edit_metadata(layer_url: str):
     if base_url.lower().endswith("/query"):
         base_url = base_url[: base_url.lower().rfind("/query")]
 
-    params = _with_token_params({"f": "json"})
+    params = _with_read_token_params({"f": "json"})
     try:
         r = _session.get(base_url, params=params, timeout=30)
         r.raise_for_status()
