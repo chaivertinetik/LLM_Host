@@ -87,12 +87,128 @@ class ClearRequest(BaseModel):
 
 ALLOW_READ_FALLBACK_TO_WRITE = os.getenv("ALLOW_READ_FALLBACK_TO_WRITE", "0") == "1"
 
+# --------------------- READ AUTH SELECTION (API key OR token service) ---------------------
+
+# One-time decision cache: "api_key" or "token"
+_READ_AUTH_MODE: Optional[str] = None
+_READ_AUTH_REASON: Optional[str] = None
+
+# Use something that is very likely to be readable if key works.
+# ArcGIS REST endpoint accepts token=<api_key> for API keys.
+_ARCGIS_READ_PROBE_URL = os.getenv(
+    "ARCGIS_READ_PROBE_URL",
+    "https://www.arcgis.com/sharing/rest/community/self"
+)
+
+def _is_arcgis_auth_error(js: Any) -> bool:
+    if not isinstance(js, dict):
+        return False
+    err = js.get("error")
+    if not isinstance(err, dict):
+        return False
+    code = err.get("code")
+    # 498/499 are common token errors; 403/401 can appear depending on endpoint.
+    return code in (498, 499, 401, 403) or bool(err.get("message"))
+
+def _probe_api_key_once() -> Tuple[bool, str]:
+    """
+    Returns (ok, reason). OK means ARCGIS_READ_API_KEY can read ArcGIS REST.
+    Only used once during auth selection.
+    """
+    if not ARCGIS_READ_API_KEY:
+        return False, "ARCGIS_READ_API_KEY missing"
+
+    try:
+        params = {"f": "json", "token": ARCGIS_READ_API_KEY}
+        r = _session.get(_ARCGIS_READ_PROBE_URL, params=params, timeout=15)
+        # Even if HTTP 200, ArcGIS might return {"error": {...}}
+        try:
+            js = r.json()
+        except Exception:
+            return False, f"Probe non-JSON (HTTP {r.status_code})"
+
+        if _is_arcgis_auth_error(js):
+            return False, f"Probe ArcGIS error: {js.get('error')}"
+        # community/self returns user info when valid
+        return True, "API key probe succeeded"
+    except Exception as e:
+        return False, f"Probe exception: {e}"
+
+def _ensure_read_auth_mode() -> str:
+    """
+    Decide once per process whether READs use API key or token service.
+    """
+    global _READ_AUTH_MODE, _READ_AUTH_REASON
+
+    if _READ_AUTH_MODE:
+        return _READ_AUTH_MODE
+
+    ok, reason = _probe_api_key_once()
+    if ok:
+        _READ_AUTH_MODE = "api_key"
+        _READ_AUTH_REASON = reason
+        logger.info(f"READ auth mode selected: api_key ({reason})")
+        return _READ_AUTH_MODE
+
+    # fallback (optional)
+    if not ALLOW_READ_FALLBACK_TO_WRITE:
+        _READ_AUTH_MODE = "api_key"  # stays "api_key" but will fail later; explicit reason logged
+        _READ_AUTH_REASON = f"API key failed and fallback disabled ({reason})"
+        logger.warning(f"READ auth mode could not fallback: {_READ_AUTH_REASON}")
+        return _READ_AUTH_MODE
+
+    _READ_AUTH_MODE = "token"
+    _READ_AUTH_REASON = f"API key failed, falling back to token service ({reason})"
+    logger.warning(f"READ auth mode selected: token ({_READ_AUTH_REASON})")
+    return _READ_AUTH_MODE
+
 def get_arcgis_read_token() -> str:
-    if ARCGIS_READ_API_KEY:
+    """
+    Return the working READ credential:
+    - If API key works: return ARCGIS_READ_API_KEY
+    - Else: return token from token microservice (requires ALLOW_READ_FALLBACK_TO_WRITE=1)
+    """
+    mode = _ensure_read_auth_mode()
+
+    if mode == "api_key":
+        if not ARCGIS_READ_API_KEY:
+            raise RuntimeError("ARCGIS_READ_API_KEY missing.")
         return ARCGIS_READ_API_KEY
+
+    # token mode
     if ALLOW_READ_FALLBACK_TO_WRITE:
         return get_arcgis_write_token()
-    raise RuntimeError("ARCGIS_READ_API_KEY missing and fallback disabled.")
+    raise RuntimeError("READ mode is token but fallback disabled.")
+
+def _with_read_token_params(params: dict | None = None) -> dict:
+    p = dict(params or {})
+    try:
+        token = get_arcgis_read_token()
+    except Exception as exc:
+        logger.error(f"Failed to get ArcGIS READ credential: {exc}")
+        return p
+    if token and "token" not in p:
+        p["token"] = token
+    return p
+
+def _append_token_to_url(url: str) -> str:
+    """
+    Append the chosen READ credential (API key or token) to a URL (if token not already present).
+    Used ONLY for display / data_locations outputs, NOT for caching.
+    """
+    if not isinstance(url, str) or not url.strip():
+        return url
+    if re.search(r"[?&]token=", url):
+        return url
+
+    try:
+        token = get_arcgis_read_token()
+    except Exception as exc:
+        logger.error(f"Failed to get ArcGIS READ credential for URL '{url}': {exc}")
+        return url
+
+    sep = "&" if "?" in url else "?"
+    return f"{url}{sep}token={_q(token)}"
 
 
 def get_arcgis_write_token(force_refresh: bool = False) -> str:
@@ -101,7 +217,8 @@ def get_arcgis_write_token(force_refresh: bool = False) -> str:
 def _with_token_params(params: Optional[Dict] = None) -> Dict:
     return _with_read_token_params(params)
 
-def _with_token_data(data: Optional[Dict] = None) -> dict:
+
+def _with_token_data(data: dict | None = None) -> dict:
     return _with_read_token_data(data)
 
 
@@ -156,16 +273,6 @@ def get_arcgis_token(force_refresh: bool = False) -> str:
     return token
 
 
-def _with_read_token_params(params: dict | None = None) -> dict:
-    p = dict(params or {})
-    try:
-        token = get_arcgis_read_token()
-    except Exception as exc:
-        logger.error(f"Failed to get ArcGIS READ token: {exc}")
-        return p
-    if token and "token" not in p:
-        p["token"] = token
-    return p
 
 def _with_write_token_params(params: dict | None = None) -> dict:
     p = dict(params or {})
@@ -177,26 +284,20 @@ def _with_write_token_params(params: dict | None = None) -> dict:
     if token and "token" not in p:
         p["token"] = token
     return p
-
+    
 def _with_read_token_data(data: dict | None = None) -> dict:
-    return _with_read_token_params(data)
-
-def _with_write_token_data(data: dict | None = None) -> dict:
-    return _with_write_token_params(data)
-
-
-def _append_token_to_url(url: str) -> str:
+    d = dict(data or {})
     try:
         token = get_arcgis_read_token()
     except Exception as exc:
-        logger.error(f"Failed to get ArcGIS READ token for URL '{url}': {exc}")
-        return url
+        logger.error(f"Failed to get ArcGIS READ credential: {exc}")
+        return d
+    if token and "token" not in d:
+        d["token"] = token
+    return d
 
-    if not token or re.search(r"[?&]token=", url):
-        return url
-
-    sep = "&" if "?" in url else "?"
-    return f"{url}{sep}token={_q(token)}"
+def _with_write_token_data(data: dict | None = None) -> dict:
+    return _with_write_token_params(data)
 
 
 
