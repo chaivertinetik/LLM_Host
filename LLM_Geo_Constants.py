@@ -198,6 +198,9 @@ graph_requirement = [
                         'If the query asks for something like show me the tallest ash tree, that means they want a visual result so the final output should be a geodataframe that will be sent to the map on ArcGIS, dont generate a textual summary in this case, but if the user asks for what the height of the tallest tree is then the result should be a textual summary containing that value (string).',
                         'If the user asks about the trees lost in a storm you need to compare the tree ids that survived before and after the storm from the two respective data sources.',
                         #'To calculate volume of wood use "Height" * "Shape__Area"',
+                        'When a user asks for features “near”, “nearby”, “by”, “around”, “close to”, “within walking distance of” a location (road, building, park, point, polygon, etc.), interpret this as a buffer query, not an intersection. Example: “Show me the trees near this road” → buffer the road by 20 m, return trees that intersect the buffer.',
+                        'By default, use a 20‑metre buffer around the reference feature (or around the trees, whichever is more natural for the query) when answering “near / by” questions, unless the user explicitly specifies another distance (e.g. “within 50 m”, “within 40 metres”). Example: “Show me trees within 50 m of this building” → buffer the building by 50 m, return intersecting trees.',
+                        'Only use intersection (no buffer) when the user clearly says things like “on”, “inside”, “within the boundary of”, “in this park”, “on this road”, “along this street”, meaning the trees must lie directly on or within that geometry. For example: “Show me the trees on this road” → do not buffer; return trees whose geometries intersect the road geometry. OR “Show me trees inside this park boundary” → do not buffer; return trees whose geometries are within or intersect the park polygon.',
                         'To calculate the volume of wood fit a Fit a regression species model using this allometric equation: log(DBH) = β0 + β1·log(height) + β2·log(crown area). Then use DBH to find basal area, Basal area = (π/4) × (DBH)^2 and volume = form factor (default:0.42) × basal area × tree height and display unit (cubic metre)', 
                         'The connection between a node and an operation node is an edge.', 
                         'Add all nodes and edges, including node attributes to a NetworkX instance, DO NOT change the attribute names.',
@@ -578,6 +581,7 @@ sampling_data_requirement = [
  
                         #
                         ]
+
 
 
 
