@@ -178,7 +178,8 @@ class GeminiLLMWrapper(LLM):
         return {"model": "gemini"}
 
 # === Create Gemini model ===
-model = GenerativeModel("gemini-2.0-flash-001")
+model = GenerativeModel("gemini-2.5-flash")
+smart_model = GenerativeModel("gemini-3-flash-preview")
 llm = GeminiLLMWrapper(gemini_llm=model)
 
 # ============================================================
@@ -246,7 +247,7 @@ def geospatial_helper(prompt: str):
         f"They may ask for assistance for things like how to remove ash trees safely or other diseases and pest infestations. "
         f"Pull from trusted geospatial resources and respond within these constraints as a geospatial expert in a friendly way."
     )
-    response = model.generate_content(geospatial_prompt).text.strip()
+    response = smart_model.generate_content(geospatial_prompt).text.strip()
     return str(response)
 
 def long_debug(prompt: str, error: str):
@@ -254,10 +255,10 @@ def long_debug(prompt: str, error: str):
         f"The user is asking about geospatial or forestry information: {prompt}. "
         f"But encountered the following error: {error}. "
         f"As a geospatial helper in simple terms (two or three lines max, dont overexplain) can you explain to the user "
-        f"what the error is (in a non technical way, don't refer to the code) and whow they should requery the system "
+        f"what the error is (in a non technical way, don't refer to the code) and how they should requery the system to not get an error (don't mention technical info about the code)"
         f"to prevent this from happening."
     )
-    response = model.generate_content(geospatial_prompt).text.strip()
+    response = smart_model.generate_content(geospatial_prompt).text.strip()
     return str(response)
 
 def wants_map_output_keyword(prompt: str) -> bool:
@@ -621,7 +622,7 @@ def long_running_task(user_task: str, task_name: str, data_locations: list):
         # Generate assembly code
         assembly_LLM_response = solution.get_LLM_assembly_response(review=False)
 
-        model_local = GenerativeModel("gemini-2.0-flash-001")
+        model_local = GenerativeModel("gemini-3-flash-preview")
         for attempt in range(10):
             try:
                 response = model_local.generate_content(solution.assembly_prompt)
