@@ -271,7 +271,7 @@ def wants_map_output_genai(prompt: str) -> bool:
     # credentials = service_account.Credentials.from_service_account_info(credentials_data)
     # vertexai.init(project="disco-parsec-444415-c4", location="us-central1", credentials=credentials)
 
-    model_local = GenerativeModel("gemini-2.5-flash")
+    model_local = GenerativeModel("gemini-2.0-flash-001")
     system_prompt = (
         "Decide if the user's input is asking for a map, geodataframe, or visual display of spatial features. "
         "Return only 'yes' for dispalying on the map or 'no' for things that can't be mapped. Examples:\n"
@@ -293,7 +293,7 @@ def wants_map_output_genai(prompt: str) -> bool:
     full_prompt = f"{system_prompt}\n\nUser input: {prompt}\nAnswer:"
     response = model_local.generate_content(
         full_prompt,
-        generation_config={"temperature": 0.0, "max_output_tokens": 50, "thinking_budget": 0},
+        generation_config={"temperature": 0.0, "max_output_tokens": 20},
     )
     answer = response.text.strip().lower()
     return answer.startswith("yes")
@@ -309,7 +309,7 @@ def is_geospatial_task(prompt: str) -> bool:
     # credentials = service_account.Credentials.from_service_account_info(credentials_data)
     # vertexai.init(project="disco-parsec-444415-c4", location="us-central1", credentials=credentials)
 
-    model_local = GenerativeModel("gemini-2.5-flash")
+    model_local = GenerativeModel("gemini-2.0-flash-001")
     system_prompt = (
         "Decide if the user's input is related to geospatial analysis or geospatial data. "
         "This includes queries about map features, tree health, species, spatial attributes, survey date, "
@@ -326,7 +326,7 @@ def is_geospatial_task(prompt: str) -> bool:
     full_prompt = f"{system_prompt}\n\nUser input: {prompt}\nAnswer:"
     response = model_local.generate_content(
         full_prompt,
-        generation_config={"temperature": 0.0, "max_output_tokens": 50, "thinking_budget": 0},
+        generation_config={"temperature": 0.0, "max_output_tokens": 20},
     )
     answer = response.text.strip().lower()
     return answer.startswith("yes")
@@ -365,7 +365,7 @@ def wants_additional_info_genai(prompt: str) -> bool:
     # credentials = service_account.Credentials.from_service_account_info(credentials_data)
     # vertexai.init(project="disco-parsec-444415-c4", location="us-central1", credentials=credentials)
 
-    model_local = GenerativeModel("gemini-2.5-flash")
+    model_local = GenerativeModel("gemini-2.0-flash-001")
     system_prompt = (
         "Decide if the user's input is asking for additional geospatial explanation or advice, "
         "beyond simply showing or listing features. This includes queries about reasons, causes, impact, "
@@ -386,7 +386,7 @@ def wants_additional_info_genai(prompt: str) -> bool:
     full_prompt = f"{system_prompt}\n\nUser input: {prompt}\nAnswer:"
     response = model_local.generate_content(
         full_prompt,
-        generation_config={"temperature": 0.0, "max_output_tokens": 50, "thinking_budget": 0},
+        generation_config={"temperature": 0.0, "max_output_tokens": 20},
     )
     answer = response.text.strip().lower()
     return answer.startswith("yes")
@@ -429,7 +429,7 @@ def wants_gis_task_genai(prompt: str) -> bool:
     # credentials = service_account.Credentials.from_service_account_info(credentials_data)
     # vertexai.init(project="disco-parsec-444415-c4", location="us-central1", credentials=credentials)
 
-    model_local = GenerativeModel("gemini-2.5-flash")
+    model_local = GenerativeModel("gemini-2.0-flash-001")
     system_prompt = (
         "Decide if the user's input is asking for a geospatial operation involving spatial data processing or analysis. "
         "This includes tasks like mapping, buffering, spatial querying, extraction of features, overlays, joins, or any "
@@ -450,7 +450,7 @@ def wants_gis_task_genai(prompt: str) -> bool:
     full_prompt = f"{system_prompt}\n\nUser input: {prompt}\nAnswer:"
     response = model_local.generate_content(
         full_prompt,
-        generation_config={"temperature": 0.0, "max_output_tokens": 50, "thinking_budget": 0},
+        generation_config={"temperature": 0.0, "max_output_tokens": 20},
     )
     answer = response.text.strip().lower()
     return answer.startswith("yes")
