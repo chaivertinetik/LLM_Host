@@ -622,7 +622,7 @@ def long_running_task(user_task: str, task_name: str, data_locations: list):
         # Generate assembly code
         assembly_LLM_response = solution.get_LLM_assembly_response(review=False)
 
-        model_local = GenerativeModel("gemini-3-flash-preview")
+        model_local = GenerativeModel("gemini-2.5-flash")
         for attempt in range(10):
             try:
                 response = model_local.generate_content(solution.assembly_prompt)
