@@ -179,7 +179,7 @@ class GeminiLLMWrapper(LLM):
 
 # === Create Gemini model ===
 model = GenerativeModel("gemini-2.5-flash")
-smart_model = GenerativeModel("gemini-3-flash-preview")
+smart_model = GenerativeModel("gemini-2.5-flash")
 llm = GeminiLLMWrapper(gemini_llm=model)
 
 # ============================================================
