@@ -53,6 +53,7 @@ sentence-transformers
 google-cloud-firestore
 statsmodels
 httpx[http2]
+google-cloud-aiplatform
 
 
 
