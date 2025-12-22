@@ -293,7 +293,7 @@ def wants_map_output_genai(prompt: str) -> bool:
     full_prompt = f"{system_prompt}\n\nUser input: {prompt}\nAnswer:"
     response = model_local.generate_content(
         full_prompt,
-        generation_config={"temperature": 0.0, "max_output_tokens": 5},
+        generation_config={"temperature": 0.0, "max_output_tokens": 50, "thinking_budget": 0},
     )
     answer = response.text.strip().lower()
     return answer.startswith("yes")
@@ -326,7 +326,7 @@ def is_geospatial_task(prompt: str) -> bool:
     full_prompt = f"{system_prompt}\n\nUser input: {prompt}\nAnswer:"
     response = model_local.generate_content(
         full_prompt,
-        generation_config={"temperature": 0.0, "max_output_tokens": 5},
+        generation_config={"temperature": 0.0, "max_output_tokens": 50, "thinking_budget": 0},
     )
     answer = response.text.strip().lower()
     return answer.startswith("yes")
@@ -386,7 +386,7 @@ def wants_additional_info_genai(prompt: str) -> bool:
     full_prompt = f"{system_prompt}\n\nUser input: {prompt}\nAnswer:"
     response = model_local.generate_content(
         full_prompt,
-        generation_config={"temperature": 0.0, "max_output_tokens": 5},
+        generation_config={"temperature": 0.0, "max_output_tokens": 50, "thinking_budget": 0},
     )
     answer = response.text.strip().lower()
     return answer.startswith("yes")
@@ -450,7 +450,7 @@ def wants_gis_task_genai(prompt: str) -> bool:
     full_prompt = f"{system_prompt}\n\nUser input: {prompt}\nAnswer:"
     response = model_local.generate_content(
         full_prompt,
-        generation_config={"temperature": 0.0, "max_output_tokens": 5},
+        generation_config={"temperature": 0.0, "max_output_tokens": 50, "thinking_budget": 0},
     )
     answer = response.text.strip().lower()
     return answer.startswith("yes")
