@@ -267,11 +267,11 @@ def wants_map_output_keyword(prompt: str) -> bool:
     return any(kw in prompt_lower for kw in keywords)
 
 def wants_map_output_genai(prompt: str) -> bool:
-    credentials_data = json.loads(os.getenv("GOOGLE_CREDENTIALS"))
-    credentials = service_account.Credentials.from_service_account_info(credentials_data)
-    vertexai.init(project="disco-parsec-444415-c4", location="us-central1", credentials=credentials)
+    # credentials_data = json.loads(os.getenv("GOOGLE_CREDENTIALS"))
+    # credentials = service_account.Credentials.from_service_account_info(credentials_data)
+    # vertexai.init(project="disco-parsec-444415-c4", location="us-central1", credentials=credentials)
 
-    model_local = GenerativeModel("gemini-2.0-flash-001")
+    model_local = GenerativeModel("gemini-2.5-flash")
     system_prompt = (
         "Decide if the user's input is asking for a map, geodataframe, or visual display of spatial features. "
         "Return only 'yes' for dispalying on the map or 'no' for things that can't be mapped. Examples:\n"
@@ -305,11 +305,11 @@ def wants_map_output(prompt: str) -> bool:
 
 def is_geospatial_task(prompt: str) -> bool:
     """Vertex AI intent classification to determine if the task is geo-spatial related"""
-    credentials_data = json.loads(os.getenv("GOOGLE_CREDENTIALS"))
-    credentials = service_account.Credentials.from_service_account_info(credentials_data)
-    vertexai.init(project="disco-parsec-444415-c4", location="us-central1", credentials=credentials)
+    # credentials_data = json.loads(os.getenv("GOOGLE_CREDENTIALS"))
+    # credentials = service_account.Credentials.from_service_account_info(credentials_data)
+    # vertexai.init(project="disco-parsec-444415-c4", location="us-central1", credentials=credentials)
 
-    model_local = GenerativeModel("gemini-2.0-flash-001")
+    model_local = GenerativeModel("gemini-2.5-flash")
     system_prompt = (
         "Decide if the user's input is related to geospatial analysis or geospatial data. "
         "This includes queries about map features, tree health, species, spatial attributes, survey date, "
@@ -361,11 +361,11 @@ def wants_additional_info_keyword(prompt: str) -> bool:
     return any(kw in prompt_lower for kw in keywords)
 
 def wants_additional_info_genai(prompt: str) -> bool:
-    credentials_data = json.loads(os.getenv("GOOGLE_CREDENTIALS"))
-    credentials = service_account.Credentials.from_service_account_info(credentials_data)
-    vertexai.init(project="disco-parsec-444415-c4", location="us-central1", credentials=credentials)
+    # credentials_data = json.loads(os.getenv("GOOGLE_CREDENTIALS"))
+    # credentials = service_account.Credentials.from_service_account_info(credentials_data)
+    # vertexai.init(project="disco-parsec-444415-c4", location="us-central1", credentials=credentials)
 
-    model_local = GenerativeModel("gemini-2.0-flash-001")
+    model_local = GenerativeModel("gemini-2.5-flash")
     system_prompt = (
         "Decide if the user's input is asking for additional geospatial explanation or advice, "
         "beyond simply showing or listing features. This includes queries about reasons, causes, impact, "
@@ -425,11 +425,11 @@ def wants_gis_task_keyword(prompt: str) -> bool:
     return any(kw in prompt_lower for kw in keywords)
 
 def wants_gis_task_genai(prompt: str) -> bool:
-    credentials_data = json.loads(os.getenv("GOOGLE_CREDENTIALS"))
-    credentials = service_account.Credentials.from_service_account_info(credentials_data)
-    vertexai.init(project="disco-parsec-444415-c4", location="us-central1", credentials=credentials)
+    # credentials_data = json.loads(os.getenv("GOOGLE_CREDENTIALS"))
+    # credentials = service_account.Credentials.from_service_account_info(credentials_data)
+    # vertexai.init(project="disco-parsec-444415-c4", location="us-central1", credentials=credentials)
 
-    model_local = GenerativeModel("gemini-2.0-flash-001")
+    model_local = GenerativeModel("gemini-2.5-flash")
     system_prompt = (
         "Decide if the user's input is asking for a geospatial operation involving spatial data processing or analysis. "
         "This includes tasks like mapping, buffering, spatial querying, extraction of features, overlays, joins, or any "
