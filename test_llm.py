@@ -82,7 +82,7 @@ def save_results(results, filename="test_results.json"):
     print(f"Saved full results to {filename}")
 
 def main():
-    test_prompts_path = "test_prompts.geojson"
+    test_prompts_path = "test_prompts.json"
     test_cases = load_test_cases(test_prompts_path)
     results = run_tests(test_cases)
     print_summary(results)

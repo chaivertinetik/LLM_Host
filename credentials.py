@@ -24,7 +24,7 @@ credentials = service_account.Credentials.from_service_account_info(credentials_
 # === Init Vertex AI ===
 vertexai.init(
     project="disco-parsec-444415-c4",
-    location="us-central1",
+    location="us-east1",
     credentials=credentials
 )
 
