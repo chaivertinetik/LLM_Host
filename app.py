@@ -67,8 +67,7 @@ PROJECT_ID = os.getenv("GOOGLE_CLOUD_PROJECT", "1042524106019").strip()
 TASKS_LOCATION = os.getenv("TASKS_LOCATION", "us-central1").strip()
 TASKS_QUEUE = os.getenv("TASKS_QUEUE", "llm-dev-jobs").strip()
 WORKER_URL = os.getenv("WORKER_URL", "https://llmgeo-dev-1042524106019.us-central1.run.app/run_job").strip()
-TASKS_INVOKER_SA = os.getenv("TASKS_INVOKER_SA", "service-1042524106019@gcp-sa-cloudtasks.iam.gserviceaccount.com
-").strip()
+TASKS_INVOKER_SA = os.getenv("TASKS_INVOKER_SA", "service-1042524106019@gcp-sa-cloudtasks.iam.gserviceaccount.com").strip()
 
 if not PROJECT_ID:
     print("WARN: GOOGLE_CLOUD_PROJECT is not set (Cloud Run usually sets this automatically).")
