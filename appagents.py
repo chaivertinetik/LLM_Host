@@ -1,5 +1,4 @@
 from credentials import db, emd_model, parser
-
 # rag_llm
 import torch
 import vertexai
