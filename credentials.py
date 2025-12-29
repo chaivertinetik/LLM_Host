@@ -4,7 +4,7 @@ import vertexai
 import ee
 from google.oauth2 import service_account
 from google.cloud import firestore
-from google.cloud import aiplatform
+# from google.cloud import aiplatform
 from langchain_core.output_parsers import JsonOutputParser
 # from langchain_google_genai import ChatGoogleGenerativeAI
 from sentence_transformers import SentenceTransformer
@@ -23,18 +23,18 @@ credentials = service_account.Credentials.from_service_account_info(credentials_
 # print(service_account_email)
 
 # === Init Vertex AI ===
-# vertexai.init(
-#     project="disco-parsec-444415-c4",
-#     location="us-east1",
-#     credentials=credentials
-# )
-
-aiplatform.init(
+vertexai.init(
     project="disco-parsec-444415-c4",
-    location="global",  
-    api_endpoint="aiplatform.googleapis.com", 
+    location="us-central1",
     credentials=credentials
 )
+
+# aiplatform.init(
+#     project="disco-parsec-444415-c4",
+#     location="global",  
+#     api_endpoint="aiplatform.googleapis.com", 
+#     credentials=credentials
+# )
 
 SERVICE_ACCOUNT= 'earthengine@disco-parsec-444415-c4.iam.gserviceaccount.com'
 key_path = '/tmp/earthengine-key.json'
