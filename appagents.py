@@ -177,9 +177,9 @@ class GeminiLLMWrapper(LLM):
     def _identifying_params(self) -> dict:
         return {"model": "gemini"}
 
-# === Create Gemini model ===
-model = GenerativeModel("gemini-2.5-flash")
-smart_model = GenerativeModel("gemini-2.5-flash")
+# === Create Gemini model === gemini-2.5-flash
+model = GenerativeModel("gemini-3-flash-preview")
+smart_model = GenerativeModel("gemini-3-flash-preview")
 llm = GeminiLLMWrapper(gemini_llm=model)
 
 # ============================================================
@@ -622,7 +622,7 @@ def long_running_task(user_task: str, task_name: str, data_locations: list):
         # Generate assembly code
         assembly_LLM_response = solution.get_LLM_assembly_response(review=False)
 
-        model_local = GenerativeModel("gemini-2.5-flash")
+        model_local = GenerativeModel("gemini-3-flash-preview")
         for attempt in range(10):
             try:
                 response = model_local.generate_content(solution.assembly_prompt)
