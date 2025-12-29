@@ -85,7 +85,7 @@ class ClearRequest(BaseModel):
 
 # --------------------- ARC GIS TOKEN + HELPERS ---------------------
 
-ALLOW_READ_FALLBACK_TO_WRITE = os.getenv("ALLOW_READ_FALLBACK_TO_WRITE", "0") == "1"
+ALLOW_READ_FALLBACK_TO_WRITE = os.getenv("ALLOW_READ_FALLBACK_TO_WRITE", "1") == "1"
 
 # --------------------- READ AUTH SELECTION (API key OR token service) ---------------------
 
