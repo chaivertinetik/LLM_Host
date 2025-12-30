@@ -32,10 +32,18 @@ from appagents import (
 from appbackend import trigger_cleanup, ClearRequest, get_project_urls, get_attr, make_project_data_locations, get_project_coords
 from appbackend import filter as push_to_map
 
-# Cloud Tasks (queueing)
-from google.cloud import tasks_v2
-from google.protobuf import timestamp_pb2
-import datetime
+# Cloud Tasks (queueing) - optional
+try:
+    from google.cloud import tasks_v2
+    from google.protobuf import timestamp_pb2
+    import datetime
+    _TASKS_IMPORT_OK = True
+except Exception as _e:
+    tasks_v2 = None
+    timestamp_pb2 = None
+    datetime = None
+    _TASKS_IMPORT_OK = False
+    _TASKS_IMPORT_ERR = str(_e)
 
 
 # --------------------- Setup FASTAPI app ---------------------
@@ -53,31 +61,38 @@ class RequestData(BaseModel):
     task: str = "No task provided."
     task_name: str = "default_task"
 
+
 # --------------------- Cloud Tasks config ---------------------
-# Required env vars for Cloud Run:
-# - GOOGLE_CLOUD_PROJECT (usually set automatically)
-# - TASKS_LOCATION e.g. "europe-west1"
-# - TASKS_QUEUE e.g. "gis-job-queue"
+# NOTE:
+# - GOOGLE_CLOUD_PROJECT on Cloud Run is the PROJECT ID (e.g. "disco-parsec-444415-c4")
+#   not the project number. Don’t hardcode a number.
+#
+# Optional env vars:
+# - TASKS_LOCATION e.g. "us-central1"
+# - TASKS_QUEUE e.g. "llm-dev-jobs"
 # - WORKER_URL e.g. "https://<service>.run.app/run_job"
+# - FORCE_INLINE_IF_QUEUE_FAIL: "1" => if queue fails, run inline instead (default: 1)
 #
-# Optional (recommended): make /run_job authenticated
-# - TASKS_INVOKER_SA e.g. "<cloud-run-service-account>@<project>.iam.gserviceaccount.com"
-#
-PROJECT_ID = os.getenv("GOOGLE_CLOUD_PROJECT", "1042524106019").strip()
+PROJECT_ID = os.getenv("GOOGLE_CLOUD_PROJECT", "disco-parsec-444415-c4").strip()
 TASKS_LOCATION = os.getenv("TASKS_LOCATION", "us-central1").strip()
 TASKS_QUEUE = os.getenv("TASKS_QUEUE", "llm-dev-jobs").strip()
 WORKER_URL = os.getenv("WORKER_URL", "https://llmgeo-dev-1042524106019.us-central1.run.app/run_job").strip()
-TASKS_INVOKER_SA = os.getenv("TASKS_INVOKER_SA", "service-1042524106019@gcp-sa-cloudtasks.iam.gserviceaccount.com").strip()
+
+# If you keep /run_job public, do NOT set TASKS_INVOKER_SA.
+# If you secure /run_job, set TASKS_INVOKER_SA to the Cloud Run service SA you want Cloud Tasks to use for OIDC.
+TASKS_INVOKER_SA = os.getenv("TASKS_INVOKER_SA", "").strip()
+
+FORCE_INLINE_IF_QUEUE_FAIL = os.getenv("FORCE_INLINE_IF_QUEUE_FAIL", "1").strip() not in ("0", "false", "False", "")
 
 if not PROJECT_ID:
     print("WARN: GOOGLE_CLOUD_PROJECT is not set (Cloud Run usually sets this automatically).")
 if not WORKER_URL:
     print("WARN: WORKER_URL is not set. Queueing will fail until it's configured.")
+if not _TASKS_IMPORT_OK:
+    print(f"WARN: google-cloud-tasks not available; queueing disabled. Import error: {_TASKS_IMPORT_ERR}")
 
 
-# --------------------- Firestore job tracking (recommended on Cloud Run) ---------------------
-# In-memory dicts won't survive instance restarts; use Firestore for status.
-# Collection: jobs/{job_id}
+# --------------------- Firestore job tracking ---------------------
 def _job_ref(job_id: str):
     return db.collection("jobs").document(job_id)
 
@@ -88,7 +103,7 @@ def set_job(job_id: str, payload: dict, status: str, message: str = "", result: 
         "message": message,
         "payload": payload,
         "error": error,
-        "updated_at": datetime.datetime.utcnow().isoformat() + "Z",
+        "updated_at": (datetime.datetime.utcnow().isoformat() + "Z") if datetime else time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
     }
     if result is not None:
         doc["result"] = result
@@ -101,12 +116,37 @@ def get_job(job_id: str) -> dict:
     return snap.to_dict() or {"status": "unknown", "message": "Job empty", "job_id": job_id}
 
 
-# --------------------- Cloud Tasks enqueue helper ---------------------
+# --------------------- Queue health check + enqueue helper ---------------------
+def _queue_can_enqueue() -> tuple[bool, str]:
+    """
+    Quick “is queue usable?” check:
+      - tasks client import OK
+      - WORKER_URL configured
+      - queue exists and is RUNNING (requires cloudtasks.queues.get permission, usually granted)
+    This does NOT prove tasks.create permission, but catches the common misconfig cases.
+    """
+    if not _TASKS_IMPORT_OK or tasks_v2 is None:
+        return False, f"cloud-tasks client not available: {_TASKS_IMPORT_ERR}"
+    if not WORKER_URL:
+        return False, "WORKER_URL not configured"
+    try:
+        client = tasks_v2.CloudTasksClient()
+        qname = client.queue_path(PROJECT_ID, TASKS_LOCATION, TASKS_QUEUE)
+        q = client.get_queue(name=qname)
+        state = getattr(q, "state", None)
+        if str(state).endswith("RUNNING") or str(state) == "RUNNING":
+            return True, "queue RUNNING"
+        return False, f"queue not RUNNING (state={state})"
+    except Exception as e:
+        return False, f"queue get_queue failed: {e}"
+
 def enqueue_cloud_task(payload: dict, job_id: Optional[str] = None, delay_seconds: int = 0) -> str:
     """
     Enqueue a Cloud Task that POSTs JSON to WORKER_URL.
-    Uses OIDC token if TASKS_INVOKER_SA is set (recommended).
+    If this fails (e.g. IAM 403 cloudtasks.tasks.create), caller can fall back to inline.
     """
+    if not _TASKS_IMPORT_OK or tasks_v2 is None:
+        raise RuntimeError(f"Cloud Tasks not available: {_TASKS_IMPORT_ERR}")
     if not WORKER_URL:
         raise RuntimeError("WORKER_URL is not configured")
 
@@ -114,7 +154,6 @@ def enqueue_cloud_task(payload: dict, job_id: Optional[str] = None, delay_second
     parent = client.queue_path(PROJECT_ID, TASKS_LOCATION, TASKS_QUEUE)
 
     job_id = job_id or str(uuid.uuid4())
-
     body = json.dumps({"job_id": job_id, **payload}).encode("utf-8")
 
     http_request: dict = {
@@ -124,14 +163,12 @@ def enqueue_cloud_task(payload: dict, job_id: Optional[str] = None, delay_second
         "body": body,
     }
 
-    # If your /run_job endpoint requires auth, Cloud Tasks should attach an OIDC token
-    # for the provided service account.
+    # If your /run_job endpoint requires auth, Cloud Tasks can attach an OIDC token
     if TASKS_INVOKER_SA:
         http_request["oidc_token"] = {"service_account_email": TASKS_INVOKER_SA}
 
     task: dict = {"http_request": http_request}
 
-    # Optional: schedule with a delay
     if delay_seconds and delay_seconds > 0:
         schedule_time = timestamp_pb2.Timestamp()
         schedule_time.FromDatetime(datetime.datetime.utcnow() + datetime.timedelta(seconds=delay_seconds))
@@ -139,6 +176,27 @@ def enqueue_cloud_task(payload: dict, job_id: Optional[str] = None, delay_second
 
     client.create_task(parent=parent, task=task)
     return job_id
+
+
+# --------------------- Core worker logic (shared by /run_job and inline fallback) ---------------------
+def _do_heavy_work(user_task: str, task_name: str) -> dict:
+    """
+    Runs the heavy GIS pipeline and returns a dict with at least {"message": "..."}.
+    """
+    # Build data locations (same logic you already have)
+    attrs = get_project_urls(task_name)
+    if task_name in ["TT_GCW1_Summer", "TT_GCW1_Winter"]:
+        data_locations = make_project_data_locations(task_name, include_seasons=True, attrs=attrs)
+    else:
+        data_locations = make_project_data_locations(task_name, include_seasons=False, attrs=attrs)
+
+    # Run heavy GIS pipeline
+    result = long_running_task(user_task, task_name, data_locations)
+
+    # Normalize return
+    if isinstance(result, dict):
+        return result
+    return {"message": str(result)}
 
 
 # --------------------- Clear endpoint ---------------------
@@ -151,12 +209,8 @@ async def clear_state(req: ClearRequest):
 @app.post("/run_job")
 async def run_job(request: Request):
     """
-    This endpoint is called by Cloud Tasks.
-    It runs the heavy work and writes status/result to Firestore.
-
-    IMPORTANT:
-    - If this raises an exception, Cloud Tasks will retry (good).
-    - If it returns 2xx, Cloud Tasks considers it done.
+    Called by Cloud Tasks (or manually).
+    Runs heavy work and writes status/result to Firestore.
     """
     data = await request.json()
     job_id = data.get("job_id")
@@ -171,17 +225,8 @@ async def run_job(request: Request):
         task_name = payload["task_name"]
         session_id = task_name
 
-        # Build data locations (same logic you already have)
-        attrs = get_project_urls(task_name)
-        if task_name in ["TT_GCW1_Summer", "TT_GCW1_Winter"]:
-            data_locations = make_project_data_locations(task_name, include_seasons=True, attrs=attrs)
-        else:
-            data_locations = make_project_data_locations(task_name, include_seasons=False, attrs=attrs)
-
-        # Run heavy GIS pipeline
-        result = long_running_task(user_task, task_name, data_locations)
-
-        message = result.get("message") if isinstance(result, dict) else str(result)
+        result = _do_heavy_work(user_task, task_name)
+        message = result.get("message", str(result))
 
         # Save history (optional)
         history = load_history(session_id, max_turns=10)
@@ -189,8 +234,7 @@ async def run_job(request: Request):
         history.append({'role': 'assistant', 'content': message})
         save_history(session_id, history)
 
-        # Persist result
-        # Keep result payload reasonably sized; for big GeoJSON you already push_to_map separately.
+        # Persist result (keep small)
         result_payload = {
             "message": message,
             "tree_ids": result.get("tree_ids") if isinstance(result, dict) else None,
@@ -200,19 +244,22 @@ async def run_job(request: Request):
 
     except Exception as e:
         set_job(job_id, payload, status="failed", message="Job failed", error=str(e))
-        # Raise so Cloud Tasks retries (unless you prefer not to retry)
         raise
 
 
-# --------------------- Main API endpoint (enqueue work instead of running inline) ---------------------
+# --------------------- Main API endpoint ---------------------
 @app.post("/process")
 async def process_request(request_data: RequestData):
     """
     UI calls this endpoint.
-    - Fast, non-blocking: it ENQUEUES a job for heavy tasks
-    - Immediate responses for non-geo tasks or simple info tasks
+
+    Behavior:
+      - Non-geo or info-only tasks: run synchronously (no queue)
+      - GIS operation: try Cloud Tasks queue first
+          * If enqueue works: return queued + job_id (UI polls /status/{job_id})
+          * If enqueue fails (IAM etc): FALL BACK to inline processing and return completed response
+            (and still writes a job doc for UI consistency)
     """
-    message = ""
     user_task = (request_data.task or "").strip()
     task_name = request_data.task_name
     session_id = request_data.task_name
@@ -233,7 +280,7 @@ async def process_request(request_data: RequestData):
         history.append({'role': 'assistant', 'content': "Not programmed to do that."})
         save_history(session_id, history)
 
-        prompt_options = prompt_suggetions(task_name, message)
+        prompt_options = prompt_suggetions(task_name, "")
         return {
             "status": "completed",
             "message": "I haven't been programmed to do that",
@@ -258,34 +305,77 @@ async def process_request(request_data: RequestData):
             "prompt_options": prompt_options,
         }
 
-    # GIS operation required (GIS only OR GIS+info) -> queue it
+    # GIS operation required -> try queue, fall back to inline
     if do_gis_op:
-        # Create job payload
         payload = {
             "task": user_task,
             "task_name": task_name,
             "do_info": bool(do_info),
         }
 
-        # Create job_id and store "queued" status
         job_id = str(uuid.uuid4())
         set_job(job_id, payload, status="queued", message="Job queued")
 
-        # Enqueue Cloud Task
-        try:
-            enqueue_cloud_task(payload=payload, job_id=job_id, delay_seconds=0)
-        except Exception as e:
-            set_job(job_id, payload, status="failed", message="Failed to enqueue job", error=str(e))
-            raise HTTPException(status_code=500, detail=f"Failed to enqueue job: {e}")
+        # Check queue health first (quick)
+        q_ok, q_msg = _queue_can_enqueue()
 
-        # Return immediately for UI to poll /status/{job_id}
-        return {
-            "status": "queued",
-            "job_id": job_id,
-            "message": "Your request has been queued.",
-            "poll": f"/status/{job_id}",
-            "prompt_options": prompt_suggetions(task_name, user_task),
-        }
+        if q_ok:
+            try:
+                enqueue_cloud_task(payload=payload, job_id=job_id, delay_seconds=0)
+                return {
+                    "status": "queued",
+                    "job_id": job_id,
+                    "message": "Your request has been queued.",
+                    "poll": f"/status/{job_id}",
+                    "queue": {"ok": True, "message": q_msg},
+                    "prompt_options": prompt_suggetions(task_name, user_task),
+                }
+            except Exception as e:
+                # Typical here: 403 cloudtasks.tasks.create
+                err = str(e)
+                set_job(job_id, payload, status="failed", message="Failed to enqueue job", error=err)
+
+                if not FORCE_INLINE_IF_QUEUE_FAIL:
+                    raise HTTPException(status_code=500, detail=f"Failed to enqueue job: {err}")
+
+                # FALLBACK: run inline
+                set_job(job_id, payload, status="running", message="Queue failed; running inline", error=err)
+        else:
+            # Queue not healthy -> inline fallback
+            if not FORCE_INLINE_IF_QUEUE_FAIL:
+                set_job(job_id, payload, status="failed", message="Queue unavailable", error=q_msg)
+                raise HTTPException(status_code=503, detail=f"Queue unavailable: {q_msg}")
+            set_job(job_id, payload, status="running", message="Queue unavailable; running inline", error=q_msg)
+
+        # ---- Inline processing path ----
+        try:
+            result = _do_heavy_work(user_task, task_name)
+            message = result.get("message", str(result))
+
+            # Save history (optional)
+            history.append({'role': 'user', 'content': user_task})
+            history.append({'role': 'assistant', 'content': message})
+            save_history(session_id, history)
+
+            result_payload = {
+                "message": message,
+                "tree_ids": result.get("tree_ids") if isinstance(result, dict) else None,
+                "ran_inline": True,
+            }
+            set_job(job_id, payload, status="completed", message=message, result=result_payload)
+
+            return {
+                "status": "completed",
+                "job_id": job_id,
+                "message": message,
+                "ran_inline": True,
+                "poll": f"/status/{job_id}",
+                "prompt_options": prompt_suggetions(task_name, user_task),
+            }
+
+        except Exception as e:
+            set_job(job_id, payload, status="failed", message="Inline job failed", error=str(e))
+            raise HTTPException(status_code=500, detail=f"Inline job failed: {e}")
 
     # Fallback
     return {
