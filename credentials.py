@@ -20,9 +20,10 @@ google_creds = os.environ.get("GOOGLE_CREDENTIALS")
 if not google_creds:
    raise EnvironmentError("GOOGLE_CREDENTIALS env var is missing")
 
+SCOPES = ["https://www.googleapis.com/auth/cloud-platform"]
 
 credentials_data = json.loads(google_creds)
-credentials = service_account.Credentials.from_service_account_info(credentials_data)
+credentials = service_account.Credentials.from_service_account_info(credentials_data, scopes= SCOPES)
 # service_account_email = credentials_data.get("client_email")
 # print(service_account_email)
 
