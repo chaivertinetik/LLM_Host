@@ -292,7 +292,7 @@ def geospatial_helper(prompt: str):
                        # Gemini 3.0 uses "Thinking Levels" instead of just a boolean
                        thinking_config=types.ThinkingConfig(
                        include_thoughts=True,
-                       thinking_level=types.ThinkingLevel.MEDIUM
+                       thinking_level="medium"
                        )
                    )
                ).text.strip()
@@ -315,7 +315,7 @@ def long_debug(prompt: str, error: str):
                        # Gemini 3.0 uses "Thinking Levels" instead of just a boolean
                        thinking_config=types.ThinkingConfig(
                        include_thoughts=True,
-                       thinking_level=types.ThinkingLevel.MEDIUM
+                       thinking_level="medium"
                        )
                    )
                ).text.strip()
@@ -659,7 +659,7 @@ def try_llm_fix(code, error_message=None, max_attempts=2):
            # Gemini 3.0 uses "Thinking Levels" instead of just a boolean
                thinking_config=types.ThinkingConfig(
                include_thoughts=True,
-               thinking_level=types.ThinkingLevel.MEDIUM
+               thinking_level="medium"
                )
            )
        ).text.strip()
@@ -744,7 +744,7 @@ def long_running_task(user_task: str, task_name: str, data_locations: list):
                        # Gemini 3.0 uses "Thinking Levels" instead of just a boolean
                        thinking_config=types.ThinkingConfig(
                        include_thoughts=True,
-                       thinking_level=types.ThinkingLevel.MEDIUM
+                       thinking_level="medium"
                        )
                    )
                ).text.strip()
@@ -811,7 +811,7 @@ def long_running_task(user_task: str, task_name: str, data_locations: list):
                        # Gemini 3.0 uses "Thinking Levels" instead of just a boolean
                        thinking_config=types.ThinkingConfig(
                        include_thoughts=True,
-                       thinking_level=types.ThinkingLevel.MEDIUM
+                       thinking_level="medium"
                        )
                    )
                ).text.strip()
