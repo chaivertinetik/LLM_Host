@@ -287,13 +287,8 @@ def geospatial_helper(prompt: str):
    # response = smart_model.generate_content(geospatial_prompt).text.strip()
    response= client.models.generate_content(
                    model="gemini-3-flash-preview",
-                   contents=geospatial_prompt,
-                   config=types.GenerateContentConfig(
-                       # Gemini 3.0 uses "Thinking Levels" instead of just a boolean
-                       thinking_config=types.ThinkingConfig(
-                       temperature=0.1
-                       )
-                   )
+                   contents=geospatial_prompt
+                  
                ).text.strip()
    return str(response)
 
@@ -309,13 +304,8 @@ def long_debug(prompt: str, error: str):
    # response = smart_model.generate_content(geospatial_prompt).text.strip()
    response= client.models.generate_content(
                    model="gemini-3-flash-preview",
-                   contents=geospatial_prompt,
-                   config=types.GenerateContentConfig(
-                       # Gemini 3.0 uses "Thinking Levels" instead of just a boolean
-                       thinking_config=types.ThinkingConfig(
-                       temperature=0.1
-                       )
-                   )
+                   contents=geospatial_prompt
+                   
                ).text.strip()
   
    return str(response)
@@ -652,13 +642,8 @@ def try_llm_fix(code, error_message=None, max_attempts=2):
        # explanation = model.generate_content(explanation_prompt).text.strip()
        explanation= client.models.generate_content(
            model="gemini-3-flash-preview",
-           contents=explanation_prompt,
-           config=types.GenerateContentConfig(
-           # Gemini 3.0 uses "Thinking Levels" instead of just a boolean
-               thinking_config=types.ThinkingConfig(
-               temperature=0.1
-               )
-           )
+           contents=explanation_prompt
+           
        ).text.strip()
    except Exception:
        explanation = (
@@ -736,13 +721,8 @@ def long_running_task(user_task: str, task_name: str, data_locations: list):
                # response = model_local.generate_content(solution.assembly_prompt)
                response= client.models.generate_content(
                    model="gemini-3-flash-preview",
-                   contents=solution.assembly_prompt,
-                   config=types.GenerateContentConfig(
-                       # Gemini 3.0 uses "Thinking Levels" instead of just a boolean
-                       thinking_config=types.ThinkingConfig(
-                       temperature=0.1
-                       )
-                   )
+                   contents=solution.assembly_prompt
+                   
                ).text.strip()
                break
            except ResourceExhausted:
@@ -802,13 +782,8 @@ def long_running_task(user_task: str, task_name: str, data_locations: list):
        # explanation_response = model_local.generate_content(explanation_prompt)
        explanation_response= client.models.generate_content(
                    model="gemini-3-flash-preview",
-                   contents=explanation_prompt,
-                   config=types.GenerateContentConfig(
-                       # Gemini 3.0 uses "Thinking Levels" instead of just a boolean
-                       thinking_config=types.ThinkingConfig(
-                       temperature=0.1
-                       )
-                   )
+                   contents=explanation_prompt
+                   
                ).text.strip()
        explanation_text = explanation_response.text.strip()
 
