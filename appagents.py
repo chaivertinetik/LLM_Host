@@ -291,8 +291,7 @@ def geospatial_helper(prompt: str):
                    config=types.GenerateContentConfig(
                        # Gemini 3.0 uses "Thinking Levels" instead of just a boolean
                        thinking_config=types.ThinkingConfig(
-                       include_thoughts=True,
-                       thinking_level="medium"
+                       temperature=0.1
                        )
                    )
                ).text.strip()
@@ -314,8 +313,7 @@ def long_debug(prompt: str, error: str):
                    config=types.GenerateContentConfig(
                        # Gemini 3.0 uses "Thinking Levels" instead of just a boolean
                        thinking_config=types.ThinkingConfig(
-                       include_thoughts=True,
-                       thinking_level="MEDIUM"
+                       temperature=0.1
                        )
                    )
                ).text.strip()
@@ -658,8 +656,7 @@ def try_llm_fix(code, error_message=None, max_attempts=2):
            config=types.GenerateContentConfig(
            # Gemini 3.0 uses "Thinking Levels" instead of just a boolean
                thinking_config=types.ThinkingConfig(
-               include_thoughts=True,
-               thinking_level="MEDIUM"
+               temperature=0.1
                )
            )
        ).text.strip()
@@ -743,8 +740,7 @@ def long_running_task(user_task: str, task_name: str, data_locations: list):
                    config=types.GenerateContentConfig(
                        # Gemini 3.0 uses "Thinking Levels" instead of just a boolean
                        thinking_config=types.ThinkingConfig(
-                       include_thoughts=True,
-                       thinking_level="MEDIUM"
+                       temperature=0.1
                        )
                    )
                ).text.strip()
@@ -810,8 +806,7 @@ def long_running_task(user_task: str, task_name: str, data_locations: list):
                    config=types.GenerateContentConfig(
                        # Gemini 3.0 uses "Thinking Levels" instead of just a boolean
                        thinking_config=types.ThinkingConfig(
-                       include_thoughts=True,
-                       thinking_level="MEDIUM"
+                       temperature=0.1
                        )
                    )
                ).text.strip()
