@@ -285,11 +285,7 @@ def geospatial_helper(prompt: str):
        f"Pull from trusted geospatial resources and respond within these constraints as a geospatial expert in a friendly way."
    )
    # response = smart_model.generate_content(geospatial_prompt).text.strip()
-   response= client.models.generate_content(
-                   model="gemini-3-flash-preview",
-                   contents=geospatial_prompt
-                  
-               ).text.strip()
+   response = smart_model.generate_content(cache_prompt).text.strip()
    return str(response)
 
 
@@ -302,11 +298,8 @@ def long_debug(prompt: str, error: str):
        f"to prevent this from happening."
    )
    # response = smart_model.generate_content(geospatial_prompt).text.strip()
-   response= client.models.generate_content(
-                   model="gemini-3-flash-preview",
-                   contents=geospatial_prompt
-                   
-               ).text.strip()
+   response = smart_model.generate_content(geospatial_prompt).text.strip()
+     
   
    return str(response)
 
@@ -639,12 +632,8 @@ def try_llm_fix(code, error_message=None, max_attempts=2):
 
 
    try:
-       # explanation = model.generate_content(explanation_prompt).text.strip()
-       explanation= client.models.generate_content(
-           model="gemini-3-flash-preview",
-           contents=explanation_prompt
-           
-       ).text.strip()
+       
+        explanation = model.generate_content(explanation_prompt).text.strip()
    except Exception:
        explanation = (
            "There was an unexpected problem executing your request. "
@@ -715,15 +704,11 @@ def long_running_task(user_task: str, task_name: str, data_locations: list):
        assembly_LLM_response = solution.get_LLM_assembly_response(review=False)
 
 
-       # model_local = GenerativeModel("gemini-2.5-flash")
+       model_local = GenerativeModel("gemini-2.5-flash")
        for attempt in range(10):
            try:
-               # response = model_local.generate_content(solution.assembly_prompt)
-               response= client.models.generate_content(
-                   model="gemini-3-flash-preview",
-                   contents=solution.assembly_prompt
-                   
-               ).text.strip()
+               
+               response = model_local.generate_content(solution.assembly_prompt)
                break
            except ResourceExhausted:
                if attempt < 9:
@@ -779,12 +764,8 @@ def long_running_task(user_task: str, task_name: str, data_locations: list):
            f"Do not mention or describe any code or programming; just summarize the GIS action you took in a simple friendly way "
            f"and what the result means for the user's query.\n"
        )
-       # explanation_response = model_local.generate_content(explanation_prompt)
-       explanation_response= client.models.generate_content(
-                   model="gemini-3-flash-preview",
-                   contents=explanation_prompt
-                   
-               ).text.strip()
+       explanation_response = model_local.generate_content(explanation_prompt)
+       
        explanation_text = explanation_response.text.strip()
 
 
