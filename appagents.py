@@ -808,14 +808,14 @@ def long_running_task(user_task: str, task_name: str, data_locations: list):
                message = f"The task has been executed successfully, and the results should be on your screen. \n {explanation_text}"
                return {
                    "status": "completed",
-                   "message": message,
-                   "tree_ids": result
-                   if isinstance(result, list)
-                   else (
-                       result.to_json()
-                       if hasattr(result, "to_json") and "GeoDataFrame" in str(type(result))
-                       else None
-                   ),
+                   "message": message
+                   # "tree_ids": result
+                   # if isinstance(result, list)
+                   # else (
+                   #     result.to_json()
+                   #     if hasattr(result, "to_json") and "GeoDataFrame" in str(type(result))
+                   #     else None
+                   # ),
                }
            except Exception as map_error:
                print(f"Map push failed: {map_error}")
