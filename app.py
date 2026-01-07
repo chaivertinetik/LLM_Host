@@ -14,7 +14,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from credentials import db, parser, emd_model
 from appagents import (
-    agent, llm,
+    llm,
     load_history, save_history, build_conversation_prompt,
     wants_map_output_keyword, wants_map_output_genai, wants_map_output,
     is_geospatial_task,
