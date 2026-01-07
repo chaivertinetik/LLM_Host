@@ -293,7 +293,7 @@ def geospatial_helper(prompt: str):
        f"Pull from trusted geospatial resources and respond within these constraints as a geospatial expert in a friendly way."
    )
    # response = smart_model.generate_content(geospatial_prompt).text.strip()
-   response = smart_model.generate_content(cache_prompt).text.strip()
+   response = smart_model.generate_content(geospatial_prompt).text.strip()
    return str(response)
 
 

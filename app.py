@@ -267,20 +267,26 @@ async def process_request(request_data: RequestData):
 
     # INFO-ONLY: answer immediately (no queue)
     if (not do_gis_op) and do_info:
-        agent = get_forestry_agent(bbox, task_name, llm)
-        result = agent.invoke({"messages": [("user", user_task)]})
-        content = result["messages"][-1].content
-        # content = geospatial_helper(user_task)
-        history.append({'role': 'user', 'content': user_task})
-        history.append({'role': 'assistant', 'content': content})
-        save_history(session_id, history)
+        try: 
+            agent = get_forestry_agent(bbox, task_name, llm)
+            result = agent.invoke({"messages": [("user", user_task)]})
+            content = result["messages"][-1].content
+            # content = geospatial_helper(user_task)
+            history.append({'role': 'user', 'content': user_task})
+            history.append({'role': 'assistant', 'content': content})
+            save_history(session_id, history)
 
-        prompt_options = prompt_suggetions(task_name, content)
-        return {
-            "status": "completed",
-            "response": content,
-            "prompt_options": prompt_options,
-        }
+            prompt_options = prompt_suggetions(task_name, content)
+            return {
+                "status": "completed",
+                "response": content,
+                "prompt_options": prompt_options,
+            }
+        except Exception as e: 
+            print(f"Agent Reasoning Error: {e}")
+            # Fallback to the old simple helper if the agent fails
+            content = geospatial_helper(user_task)
+    
 
     # GIS operation required -> queue (optional) with inline fallback
     if do_gis_op:
