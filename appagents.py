@@ -23,9 +23,11 @@ from pydantic import PrivateAttr
 from vertexai.generative_models import GenerativeModel
 from google.api_core.exceptions import ResourceExhausted
 from appbackend import filter as push_to_map
+from appbackend import get_project_coords
 from LLM_Heroku_Kernel import Solution
 from google import genai
 from google.genai import types
+
 
 
 import hashlib
@@ -840,187 +842,240 @@ def long_running_task(user_task: str, task_name: str, data_locations: list):
 # ============================================================
 
 
-def get_geospatial_context_tool(coords: str) -> str:
-   lat, lon = map(float, coords.split(","))
-   context = get_geospatial_context(lat, lon)
-   return json.dumps(context)
+# def get_geospatial_context_tool(coords: str) -> str:
+#    lat, lon = map(float, coords.split(","))
+#    context = get_geospatial_context(lat, lon)
+#    return json.dumps(context)
+
+def get_geospatial_context_tool(bbox: dict, project_name: str) -> dict:
+    """
+    Core logic: Takes a pre-fetched bbox and project name, 
+    calls Earth Engine, and returns the context dictionary.
+    """
+    if not bbox:
+        return {"error": f"Missing bounding box for project: {project_name}"}
+
+    # Pass the dict directly to your EE processing logic
+    context = get_geospatial_context(bbox, project_name)
+    return context
 
 
-def get_zoning_info(coords: str = "40.7128,-74.0060") -> str:
-   context_json = get_geospatial_context_tool(coords)
-   context = json.loads(context_json)
-
-
+def get_zoning_info(bbox: dict, project_name: str) -> str:
+   context = get_geospatial_context_tool(bbox, project_name)
+   
    land_cover = context.get("Land Cover Class (ESA)", "Unknown")
    forest_loss_year = context.get("Forest Loss Year (avg)", "N/A")
 
-
-   zoning_msg = f"Land cover class: {land_cover}."
+   zoning_msg = f"In project area '{project_name}', the land cover class is {land_cover}."
    if forest_loss_year != "N/A":
-       zoning_msg += f" Recent forest loss observed, average year: {forest_loss_year}."
-   zoning_msg += " Tree planting recommended in reforestation or conservation zones."
+       zoning_msg += f" Recent forest loss was observed (average year: {forest_loss_year})."
+   
+   zoning_msg += " Recommendation: Target reforestation in designated conservation zones."
    return zoning_msg
 
 
-def get_climate_info(coords: str = "40.7128,-74.0060") -> str:
-   context_json = get_geospatial_context_tool(coords)
-   context = json.loads(context_json)
+def get_climate_info(bbox: dict, project_name: str) -> str:
+   context = get_geospatial_context_tool(bbox, project_name)
 
-
-   precipitation = context.get("Precipitation (mm)", 0)
-   temperature = context.get("Temperature (°C)", 0)
+   precip = context.get("Precipitation (mm)", 0)
+   temp = context.get("Temperature (°C)", 0)
    ndvi = context.get("NDVI (mean)", 0)
 
-
-   flood_risk = "High" if precipitation > 1000 else "Moderate" if precipitation > 500 else "Low"
-   sea_level_rise_estimate_m = 1.2  # Placeholder
-
-
-   climate_msg = (
-       f"Climate summary at {coords}:\n"
-       f"Precipitation: {precipitation} mm (Flood Risk: {flood_risk})\n"
-       f"Mean Temperature: {temperature} °C\n"
-       f"Vegetation Health (NDVI): {ndvi}\n"
-       f"Estimated sea-level rise: {sea_level_rise_estimate_m} m over next decades"
-   )
-   return climate_msg
-
-
-def check_tree_health(coords: str = "40.7128,-74.0060") -> dict:
-   ee_result = get_geospatial_context_tool(coords)
-   context = json.loads(ee_result)
-   health_comment = "Healthy canopy" if context["NDVI (mean)"] > 0.5 else "Canopy thinning or stress"
-   drought_comment = "Low drought stress" if context["Soil Moisture (m3/m3)"] > 0.25 else "Signs of drought stress"
-   return {
-       "Location": coords,
-       "Canopy NDVI": context["NDVI (mean)"],
-       "Soil Moisture": context["Soil Moisture (m3/m3)"],
-       "Health Assessment": f"{health_comment}; {drought_comment}",
-       "Forestry Recommendation": (
-           "Monitor for canopy decline; consider supplemental watering and replace non-native stressed species."
-       ),
-   }
-
-
-def assess_tree_benefit(coords: str = "40.7128,-74.0060") -> dict:
-   geo = json.loads(get_geospatial_context_tool(coords))
-   benefit = (
-       "Excellent for carbon capture"
-       if geo["NDVI (mean)"] > 0.7 and geo["Precipitation (mm)"] > 600
-       else "Moderate"
-   )
-   cooling = (
-       "Substantial cooling from mature canopy"
-       if geo["Land Cover Class (ESA)"] == "Forest"
-       else "Potential cooling with reforestation"
-   )
-   return {
-       "Location": coords,
-       "Carbon Capture Potential": benefit,
-       "Shade/Cooling Impact": cooling,
-       "Reference Data": geo,
-   }
-
-
-def check_soil_suitability(coords: str) -> str:
-   context_json = get_geospatial_context_tool(coords)
-   context = json.loads(context_json)
-
-
-   soil_moisture = context.get("Soil Moisture (m3/m3)", None)
-   elevation = context.get("Elevation (m)", None)
-   land_cover = context.get("Land Cover Class (ESA)", "Unknown")
-
-
-   if soil_moisture is not None and 0.2 <= soil_moisture <= 0.4:
-       moisture_msg = "Suitable soil moisture for native tree species growth."
-   else:
-       moisture_msg = "Soil moisture outside ideal range; irrigation or species choice recommended."
-
+   flood_risk = "High" if precip > 1000 else "Moderate" if precip > 500 else "Low"
 
    return (
-       f"Soil suitability at {coords}:\n"
-       f"{moisture_msg}\n"
-       f"Elevation: {elevation} m\n"
-       f"Land Cover Type: {land_cover}"
+       f"Climate summary for {project_name}:\n"
+       f"- Precipitation: {precip} mm (Flood Risk: {flood_risk})\n"
+       f"- Mean Temperature: {temp} °C\n"
+       f"- Vegetation Health (NDVI): {ndvi:.2f}\n"
+       f"- Sea-level rise vulnerability is currently estimated at 1.2m over coming decades."
    )
 
 
-def get_geospatial_context(lat=40.7128, lon=-74.0060):
-   point = ee.Geometry.Point([lon, lat])
-   year = datetime.date.today().year
-   today = datetime.date.today()
-
-
-   try_start = ee.Date.fromYMD(year, 1, 1)
-   try_end = ee.Date.fromYMD(year, today.month, today.day)
-
-
-   fallback_start = ee.Date("2023-01-01")
-   fallback_end = ee.Date("2023-12-31")
-
-
-   def fetch(collection_id, selector, start, end, scale):
-       try:
-           coll = (
-               ee.ImageCollection(collection_id)
-               .filterDate(start, end)
-               .filterBounds(point)
-               .select(selector)
-           )
-           return (
-               coll.mean()
-               .reduceRegion(reducer=ee.Reducer.mean(), geometry=point, scale=scale)
-               .getInfo()
-           )
-       except Exception:
-           return {}
-
-
-   ndvi = fetch("MODIS/006/MOD13Q1", "NDVI", try_start, try_end, 250) or fetch(
-       "MODIS/006/MOD13Q1", "NDVI", fallback_start, fallback_end, 250
-   )
-
-
-   precip = fetch("UCSB-CHG/CHIRPS/DAILY", "precipitation", try_start, try_end, 5000) or fetch(
-       "UCSB-CHG/CHIRPS/DAILY", "precipitation", fallback_start, fallback_end, 5000
-   )
-
-
-   temp = fetch("ECMWF/ERA5_LAND/DAILY_AGGR", "temperature_2m", try_start, try_end, 1000) or fetch(
-       "ECMWF/ERA5_LAND/DAILY_AGGR", "temperature_2m", fallback_start, fallback_end, 1000
-   )
-
-
-   landcover = ee.Image("ESA/WorldCover/v100/2020").sample(point, 10).first().getInfo()
-
-
-   soil = fetch("NASA_USDA/HSL/SMAP10KM_soil_moisture", "ssm", try_start, try_end, 10000) or fetch(
-       "NASA_USDA/HSL/SMAP10KM_soil_moisture", "ssm", fallback_start, fallback_end, 10000
-   )
-
-
-   forest = ee.Image("UMD/hansen/global_forest_change_2023_v1_11")
-   forest_loss = forest.select("lossyear").reduceRegion(
-       reducer=ee.Reducer.mean(), geometry=point, scale=30
-   ).getInfo()
-
-
-   elevation = ee.Image("USGS/SRTMGL1_003").sample(point, 30).first().getInfo()
-
-
+def check_tree_health(bbox: dict, project_name: str) -> dict:
+   context = get_geospatial_context_tool(bbox, project_name)
+   
+   ndvi = context.get("NDVI (mean)", 0)
+   soil_m = context.get("Soil Moisture (m3/m3)", 0)
+   
+   health_comment = "Healthy canopy" if ndvi > 0.5 else "Canopy thinning or stress detected"
+   drought_comment = "Low drought stress" if soil_m > 0.25 else "Signs of drought stress"
+   
    return {
-       "Latitude": lat,
-       "Longitude": lon,
-       "NDVI (mean)": round(ndvi.get("NDVI", 0) / 10000.0, 3),
-       "Precipitation (mm)": round(precip.get("precipitation", 0), 2),
-       "Temperature (°C)": round(temp.get("temperature_2m", 273.15) - 273.15, 2),
-       "Soil Moisture (m3/m3)": round(soil.get("ssm", 0), 3),
-       "Forest Loss Year (avg)": forest_loss.get("lossyear", "N/A"),
-       "Land Cover Class (ESA)": landcover.get("map", "N/A"),
-       "Elevation (m)": elevation.get("elevation", "N/A"),
+       "Project": project_name,
+       "Canopy NDVI": f"{ndvi:.2f}",
+       "Soil Moisture": f"{soil_m:.2f}",
+       "Assessment": f"{health_comment}; {drought_comment}",
+       "Recommendation": "Monitor for canopy decline; prioritize supplemental watering for stressed zones."
    }
 
+
+def assess_tree_benefit(bbox: dict, project_name: str) -> dict:
+   geo = get_geospatial_context_tool(bbox, project_name)
+   
+   ndvi = geo.get("NDVI (mean)", 0)
+   precip = geo.get("Precipitation (mm)", 0)
+   
+   benefit = "Excellent" if ndvi > 0.7 and precip > 600 else "Moderate"
+   cooling = "Substantial" if geo.get("Land Cover Class (ESA)") == "Forest" else "Potential"
+   
+   return {
+       "Project": project_name,
+       "Carbon Capture Potential": benefit,
+       "Shade Impact": f"{cooling} cooling effect observed/potential.",
+       "NDVI Reference": ndvi
+   }
+
+
+def check_soil_suitability(bbox: dict, project_name: str) -> str:
+   context = get_geospatial_context_tool(bbox, project_name)
+
+   soil_moisture = context.get("Soil Moisture (m3/m3)", 0)
+   elevation = context.get("Elevation (m)", 0)
+   land_cover = context.get("Land Cover Class (ESA)", "Unknown")
+
+   if 0.2 <= soil_moisture <= 0.4:
+       moisture_msg = "Soil moisture is in the ideal range for native tree species."
+   else:
+       moisture_msg = "Soil moisture is outside the ideal range; consider irrigation or drought-resistant species."
+
+   return (
+       f"Soil suitability for {project_name}:\n"
+       f"- {moisture_msg} (Current: {soil_moisture:.2f})\n"
+       f"- Elevation: {elevation} m\n"
+       f"- Land Cover Type: {land_cover}"
+   )
+
+
+# def get_geospatial_context(lat=40.7128, lon=-74.0060):
+#    point = ee.Geometry.Point([lon, lat])
+#    year = datetime.date.today().year
+#    today = datetime.date.today()
+
+
+#    try_start = ee.Date.fromYMD(year, 1, 1)
+#    try_end = ee.Date.fromYMD(year, today.month, today.day)
+
+
+#    fallback_start = ee.Date("2023-01-01")
+#    fallback_end = ee.Date("2023-12-31")
+
+
+#    def fetch(collection_id, selector, start, end, scale):
+#        try:
+#            coll = (
+#                ee.ImageCollection(collection_id)
+#                .filterDate(start, end)
+#                .filterBounds(point)
+#                .select(selector)
+#            )
+#            return (
+#                coll.mean()
+#                .reduceRegion(reducer=ee.Reducer.mean(), geometry=point, scale=scale)
+#                .getInfo()
+#            )
+#        except Exception:
+#            return {}
+
+
+#    ndvi = fetch("MODIS/006/MOD13Q1", "NDVI", try_start, try_end, 250) or fetch(
+#        "MODIS/006/MOD13Q1", "NDVI", fallback_start, fallback_end, 250
+#    )
+
+
+#    precip = fetch("UCSB-CHG/CHIRPS/DAILY", "precipitation", try_start, try_end, 5000) or fetch(
+#        "UCSB-CHG/CHIRPS/DAILY", "precipitation", fallback_start, fallback_end, 5000
+#    )
+
+
+#    temp = fetch("ECMWF/ERA5_LAND/DAILY_AGGR", "temperature_2m", try_start, try_end, 1000) or fetch(
+#        "ECMWF/ERA5_LAND/DAILY_AGGR", "temperature_2m", fallback_start, fallback_end, 1000
+#    )
+
+
+#    landcover = ee.Image("ESA/WorldCover/v100/2020").sample(point, 10).first().getInfo()
+
+
+#    soil = fetch("NASA_USDA/HSL/SMAP10KM_soil_moisture", "ssm", try_start, try_end, 10000) or fetch(
+#        "NASA_USDA/HSL/SMAP10KM_soil_moisture", "ssm", fallback_start, fallback_end, 10000
+#    )
+
+
+#    forest = ee.Image("UMD/hansen/global_forest_change_2023_v1_11")
+#    forest_loss = forest.select("lossyear").reduceRegion(
+#        reducer=ee.Reducer.mean(), geometry=point, scale=30
+#    ).getInfo()
+
+
+#    elevation = ee.Image("USGS/SRTMGL1_003").sample(point, 30).first().getInfo()
+
+
+#    return {
+#        "Latitude": lat,
+#        "Longitude": lon,
+#        "NDVI (mean)": round(ndvi.get("NDVI", 0) / 10000.0, 3),
+#        "Precipitation (mm)": round(precip.get("precipitation", 0), 2),
+#        "Temperature (°C)": round(temp.get("temperature_2m", 273.15) - 273.15, 2),
+#        "Soil Moisture (m3/m3)": round(soil.get("ssm", 0), 3),
+#        "Forest Loss Year (avg)": forest_loss.get("lossyear", "N/A"),
+#        "Land Cover Class (ESA)": landcover.get("map", "N/A"),
+#        "Elevation (m)": elevation.get("elevation", "N/A"),
+#    }
+
+def get_geospatial_context(bbox: dict, location_label: str):
+    """
+    Converts the bbox dictionary into GEE Geometry and fetches data.
+    """
+    # Create GEE Rectangle from the dictionary keys
+    # Order: [west, south, east, north] -> [xmin, ymin, xmax, ymax]
+    geometry = ee.Geometry.Rectangle(
+        [bbox["xmin"], bbox["ymin"], bbox["xmax"], bbox["ymax"]],
+        proj=f'EPSG:{bbox["wkid"]}',
+        geodetic=True
+    )
+    
+    # Define center for point-based metadata (like Landcover)
+    center_point = geometry.centroid()
+
+    today = datetime.date.today()
+    start_date = ee.Date.fromYMD(today.year, 1, 1)
+    end_date = ee.Date.fromYMD(today.year, today.month, today.day)
+
+    def fetch_stat(collection_id, selector, scale):
+        try:
+            # .mean() is used because we are looking at the whole bounding box area
+            img = ee.ImageCollection(collection_id).filterBounds(geometry).filterDate(start_date, end_date).select(selector).mean()
+            
+            # reduceRegion calculates the average value across your ArcGIS extent
+            return img.reduceRegion(
+                reducer=ee.Reducer.mean(),
+                geometry=geometry,
+                scale=scale,
+                bestEffort=True
+            ).getInfo()
+        except Exception: return {}
+
+    # Data Fetching
+    ndvi = fetch_stat("MODIS/006/MOD13Q1", "NDVI", 250)
+    precip = fetch_stat("UCSB-CHG/CHIRPS/DAILY", "precipitation", 5000)
+    soil = fetch_stat("NASA_USDA/HSL/SMAP10KM_soil_moisture", "ssm", 1000)
+
+    # Elevation (Average across the project extent)
+    elev_img = ee.Image("USGS/SRTMGL1_003")
+    elevation = elev_img.reduceRegion(ee.Reducer.mean(), geometry, 30).getInfo()
+
+    # Land Cover (Sampled at the center of the project)
+    lc_img = ee.Image("ESA/WorldCover/v100/2020")
+    landcover = lc_img.reduceRegion(ee.Reducer.first(), center_point, 10).getInfo()
+
+    return {
+        "Project": location_label,
+        "NDVI (Mean)": round((ndvi.get("NDVI") or 0) / 10000.0, 3),
+        "Precipitation (mm)": round(precip.get("precipitation") or 0, 2),
+        "Soil Moisture": round(soil.get("ssm") or 0, 3),
+        "Avg Elevation (m)": round(elevation.get("elevation") or 0, 1),
+        "Primary Landcover": landcover.get("map", "N/A")
+    }
 
 def cosine_similarity(a, b):
    return np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b))
@@ -1065,40 +1120,47 @@ def prompt_template(query: str, context: str, format_instructions: str) -> str:
 #        Initialize agent with tools and LangChain LLM
 # ============================================================
 
+def get_forestry_agent(bbox:dict, task_name: str, llm):
+    tools = [
+    Tool(
+        name="ZoningLookup",
+        func=lambda q: get_zoning_info(bbox=bbox, project_name=task_name),
+        description="Use this ONLY for zoning-related land cover and forest loss info as a proxy to guide tree planting recommendations. Not for general advice.",
+    ),
+    Tool(
+        name="ClimateLookUp",
+        func=lambda q: get_climate_info(bbox=bbox, project_name=task_name),
+        description="Returns precipitation, temperature, vegetation health (NDVI), flood risk, and sea level rise estimates for forestry planning.",
+    ),
+    Tool(
+        name="CheckTreeHealth",
+        func=lambda q: check_tree_health(bbox=bbox, project_name=task_name),
+        description="Assess how healthy the trees are using the canopy cover and soil.",
+    ),
+    Tool(
+        name="SoilSuitabilityCheck",
+        func=lambda q: check_soil_suitability(bbox=bbox, project_name=task_name),
+        description="Analyzes soil moisture, elevation, and land cover to evaluate suitability for native tree species planting.",
+    ),
+    Tool(
+        name="TreeBenefitAssessment",
+        func=lambda q: assess_tree_benefit(bbox=bbox, project_name=task_name),
+        description="Estimates carbon capture potential and cooling benefits based on NDVI, precipitation, and land cover data.",
+    ),
+    Tool(
+                name="GeneralGeospatialExpert",
+                func=geospatial_helper, 
+                description="Use this for general geospatial or forestry questions, like tree removal, pests, diseases, or best practices. Use this when the user asks 'how' or 'why' rather than 'what is the data'.",
+            )
+    ]
 
-tools = [
-   Tool(
-       name="ZoningLookup",
-       func=get_zoning_info,
-       description="Provides zoning-related land cover and forest loss info as proxy to guide tree planting recommendations.",
-   ),
-   Tool(
-       name="ClimateLookUp",
-       func=get_climate_info,
-       description="Returns precipitation, temperature, vegetation health (NDVI), flood risk, and sea level rise estimates for forestry planning.",
-   ),
-   Tool(
-       name="CheckTreeHealth",
-       func=check_tree_health,
-       description="Assess how healthy the trees are using the canopy cover and soil.",
-   ),
-   Tool(
-       name="SoilSuitabilityCheck",
-       func=check_soil_suitability,
-       description="Analyzes soil moisture, elevation, and land cover to evaluate suitability for native tree species planting.",
-   ),
-   Tool(
-       name="TreeBenefitAssessment",
-       func=assess_tree_benefit,
-       description="Estimates carbon capture potential and cooling benefits based on NDVI, precipitation, and land cover data.",
-   ),
-]
+    return create_react_agent(llm,tools)
 
-
-agent = create_react_agent(
-   model=llm.bind_tools(tools),
-   tools=tools,
-)
+#this should happen internally now! 
+# agent = create_react_agent(
+#    model=llm.bind_tools(tools),
+#    tools=tools,
+# )
 
 
 

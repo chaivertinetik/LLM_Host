@@ -27,7 +27,7 @@ from appagents import (
     check_tree_health, assess_tree_benefit, check_soil_suitability,
     get_geospatial_context, cosine_similarity, retrieve_rag_chunks,
     geospatial_helper,
-    get_query_hash, check_firestore_for_cached_answer, store_answer_in_firestore, cache_load_helper
+    get_query_hash, check_firestore_for_cached_answer, store_answer_in_firestore, cache_load_helper, get_forestry_agent
 )
 from appbackend import trigger_cleanup, ClearRequest, get_project_urls, get_attr, make_project_data_locations, get_project_coords
 from appbackend import filter as push_to_map
@@ -236,6 +236,7 @@ async def process_request(request_data: RequestData):
     user_task = (request_data.task or "").strip()
     task_name = request_data.task_name
     session_id = request_data.task_name
+    bbox = get_project_coords(task_name)
 
     if not user_task:
         raise HTTPException(status_code=400, detail="Empty task")
@@ -266,7 +267,10 @@ async def process_request(request_data: RequestData):
 
     # INFO-ONLY: answer immediately (no queue)
     if (not do_gis_op) and do_info:
-        content = geospatial_helper(user_task)
+        agent = get_forestry_agent(bbox, task_name, llm)
+        result = agent.invoke({"messages": [("user", user_task)]})
+        content = result["messages"][-1].content
+        # content = geospatial_helper(user_task)
         history.append({'role': 'user', 'content': user_task})
         history.append({'role': 'assistant', 'content': content})
         save_history(session_id, history)
