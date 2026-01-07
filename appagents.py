@@ -18,6 +18,7 @@ from langchain_core.tools import Tool
 from langgraph.prebuilt import create_react_agent
 from langchain_core.language_models import LLM
 from langchain_core.messages import AIMessage
+from langchain_google_genai import ChatGoogleGenerativeAI
 from typing import List, Optional, Any, Tuple
 from pydantic import PrivateAttr
 from vertexai.generative_models import GenerativeModel
@@ -209,7 +210,12 @@ class GeminiLLMWrapper(LLM):
 # === Create Gemini model ===
 model = GenerativeModel("gemini-2.5-flash")
 smart_model = GenerativeModel("gemini-2.5-flash")
-llm = GeminiLLMWrapper(gemini_llm=model)
+
+llm = ChatGoogleGenerativeAI(
+    model="gemini-2.5-flash", # Use 1.5-flash or your preferred version
+    temperature=0,
+)
+# llm = GeminiLLMWrapper(gemini_llm=model)
 
 
 # ============================================================
