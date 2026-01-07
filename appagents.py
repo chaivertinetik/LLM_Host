@@ -176,35 +176,35 @@ import re
 # ============================================================
 
 
-class GeminiLLMWrapper(LLM):
-   _gemini_llm: Any = PrivateAttr()
-   _tools: Optional[List[Any]] = PrivateAttr(default=None)
+# class GeminiLLMWrapper(LLM):
+#    _gemini_llm: Any = PrivateAttr()
+#    _tools: Optional[List[Any]] = PrivateAttr(default=None)
 
 
-   def __init__(self, gemini_llm, **kwargs):
-       super().__init__(**kwargs)
-       self._gemini_llm = gemini_llm
+#    def __init__(self, gemini_llm, **kwargs):
+#        super().__init__(**kwargs)
+#        self._gemini_llm = gemini_llm
 
 
-   def _call(self, prompt: str, stop=None, **kwargs) -> str:
-       raw_response = self._gemini_llm.generate_content(prompt)
-       print("DEBUG type:", type(raw_response.text), "value:", raw_response.text)
-       return raw_response.text if isinstance(raw_response.text, str) else str(raw_response.text)
+#    def _call(self, prompt: str, stop=None, **kwargs) -> str:
+#        raw_response = self._gemini_llm.generate_content(prompt)
+#        print("DEBUG type:", type(raw_response.text), "value:", raw_response.text)
+#        return raw_response.text if isinstance(raw_response.text, str) else str(raw_response.text)
 
 
-   def bind_tools(self, tools: List[Any]) -> "GeminiLLMWrapper":
-       self._tools = tools
-       return self
+#    def bind_tools(self, tools: List[Any]) -> "GeminiLLMWrapper":
+#        self._tools = tools
+#        return self
 
 
-   @property
-   def _llm_type(self) -> str:
-       return "gemini"
+#    @property
+#    def _llm_type(self) -> str:
+#        return "gemini"
 
 
-   @property
-   def _identifying_params(self) -> dict:
-       return {"model": "gemini"}
+#    @property
+#    def _identifying_params(self) -> dict:
+#        return {"model": "gemini"}
 
 
 # === Create Gemini model ===
