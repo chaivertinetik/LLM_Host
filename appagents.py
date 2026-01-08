@@ -29,6 +29,7 @@ from appbackend import get_project_coords
 from LLM_Heroku_Kernel import Solution
 from google import genai
 from google.genai import types
+from functools import wraps
 
 
 
@@ -867,10 +868,12 @@ def get_geospatial_context_tool(bbox: dict, project_name: str) -> dict:
     return context
 
 
-def get_zoning_info(bbox: dict, project_name: str) -> str:
+def get_zoning_info(bbox, project_name: str) -> str:
+   # Ensure context tool handles the new MODIS 061 version internally
    context = get_geospatial_context_tool(bbox, project_name)
    
    land_cover = context.get("Land Cover Class (ESA)", "Unknown")
+   # 'Forest Loss Year' usually comes from the Hansen GFC dataset (UMD)
    forest_loss_year = context.get("Forest Loss Year (avg)", "N/A")
 
    zoning_msg = f"In project area '{project_name}', the land cover class is {land_cover}."
@@ -880,12 +883,12 @@ def get_zoning_info(bbox: dict, project_name: str) -> str:
    zoning_msg += " Recommendation: Target reforestation in designated conservation zones."
    return zoning_msg
 
-
-def get_climate_info(bbox: dict, project_name: str) -> str:
+def get_climate_info(bbox, project_name: str) -> str:
    context = get_geospatial_context_tool(bbox, project_name)
 
    precip = context.get("Precipitation (mm)", 0)
    temp = context.get("Temperature (°C)", 0)
+   # NDVI updated from MODIS 061
    ndvi = context.get("NDVI (mean)", 0)
 
    flood_risk = "High" if precip > 1000 else "Moderate" if precip > 500 else "Low"
@@ -898,11 +901,11 @@ def get_climate_info(bbox: dict, project_name: str) -> str:
        f"- Sea-level rise vulnerability is currently estimated at 1.2m over coming decades."
    )
 
-
-def check_tree_health(bbox: dict, project_name: str) -> dict:
+def check_tree_health(bbox, project_name: str) -> dict:
    context = get_geospatial_context_tool(bbox, project_name)
    
    ndvi = context.get("NDVI (mean)", 0)
+   # Soil Moisture updated from NASA/SMAP/SPL4SMGP/007
    soil_m = context.get("Soil Moisture (m3/m3)", 0)
    
    health_comment = "Healthy canopy" if ndvi > 0.5 else "Canopy thinning or stress detected"
@@ -916,25 +919,7 @@ def check_tree_health(bbox: dict, project_name: str) -> dict:
        "Recommendation": "Monitor for canopy decline; prioritize supplemental watering for stressed zones."
    }
 
-
-def assess_tree_benefit(bbox: dict, project_name: str) -> dict:
-   geo = get_geospatial_context_tool(bbox, project_name)
-   
-   ndvi = geo.get("NDVI (mean)", 0)
-   precip = geo.get("Precipitation (mm)", 0)
-   
-   benefit = "Excellent" if ndvi > 0.7 and precip > 600 else "Moderate"
-   cooling = "Substantial" if geo.get("Land Cover Class (ESA)") == "Forest" else "Potential"
-   
-   return {
-       "Project": project_name,
-       "Carbon Capture Potential": benefit,
-       "Shade Impact": f"{cooling} cooling effect observed/potential.",
-       "NDVI Reference": ndvi
-   }
-
-
-def check_soil_suitability(bbox: dict, project_name: str) -> str:
+def check_soil_suitability(bbox, project_name: str) -> str:
    context = get_geospatial_context_tool(bbox, project_name)
 
    soil_moisture = context.get("Soil Moisture (m3/m3)", 0)
@@ -954,173 +939,90 @@ def check_soil_suitability(bbox: dict, project_name: str) -> str:
    )
 
 
-# def get_geospatial_context(lat=40.7128, lon=-74.0060):
-#    point = ee.Geometry.Point([lon, lat])
-#    year = datetime.date.today().year
-#    today = datetime.date.today()
+def assess_tree_benefit(bbox, project_name: str) -> dict:
+   # 'bbox' is now the ee.Geometry object passed from the shield
+   geo = get_geospatial_context_tool(bbox, project_name)
+   
+   # Using updated NDVI from MODIS/061/MOD13Q1
+   ndvi = geo.get("NDVI (mean)", 0)
+   precip = geo.get("Precipitation (mm)", 0)
+   
+   # Logic remains the same, but now uses the version 061 data
+   benefit = "Excellent" if ndvi > 0.7 and precip > 600 else "Moderate"
+   
+   # Land Cover check (now pulling from versioned ESA WorldCover 2021/2026 data)
+   land_cover = geo.get("Land Cover Class (ESA)")
+   cooling = "Substantial" if land_cover == "Forest" else "Potential"
+   
+   return {
+       "Project": project_name,
+       "Carbon Capture Potential": benefit,
+       "Shade Impact": f"{cooling} cooling effect observed/potential.",
+       "NDVI Reference": round(ndvi, 3) # Added rounding for cleaner agent output
+   }
 
-
-#    try_start = ee.Date.fromYMD(year, 1, 1)
-#    try_end = ee.Date.fromYMD(year, today.month, today.day)
-
-
-#    fallback_start = ee.Date("2023-01-01")
-#    fallback_end = ee.Date("2023-12-31")
-
-
-#    def fetch(collection_id, selector, start, end, scale):
-#        try:
-#            coll = (
-#                ee.ImageCollection(collection_id)
-#                .filterDate(start, end)
-#                .filterBounds(point)
-#                .select(selector)
-#            )
-#            return (
-#                coll.mean()
-#                .reduceRegion(reducer=ee.Reducer.mean(), geometry=point, scale=scale)
-#                .getInfo()
-#            )
-#        except Exception:
-#            return {}
-
-
-#    ndvi = fetch("MODIS/006/MOD13Q1", "NDVI", try_start, try_end, 250) or fetch(
-#        "MODIS/006/MOD13Q1", "NDVI", fallback_start, fallback_end, 250
-#    )
-
-
-#    precip = fetch("UCSB-CHG/CHIRPS/DAILY", "precipitation", try_start, try_end, 5000) or fetch(
-#        "UCSB-CHG/CHIRPS/DAILY", "precipitation", fallback_start, fallback_end, 5000
-#    )
-
-
-#    temp = fetch("ECMWF/ERA5_LAND/DAILY_AGGR", "temperature_2m", try_start, try_end, 1000) or fetch(
-#        "ECMWF/ERA5_LAND/DAILY_AGGR", "temperature_2m", fallback_start, fallback_end, 1000
-#    )
-
-
-#    landcover = ee.Image("ESA/WorldCover/v100/2020").sample(point, 10).first().getInfo()
-
-
-#    soil = fetch("NASA_USDA/HSL/SMAP10KM_soil_moisture", "ssm", try_start, try_end, 10000) or fetch(
-#        "NASA_USDA/HSL/SMAP10KM_soil_moisture", "ssm", fallback_start, fallback_end, 10000
-#    )
-
-
-#    forest = ee.Image("UMD/hansen/global_forest_change_2023_v1_11")
-#    forest_loss = forest.select("lossyear").reduceRegion(
-#        reducer=ee.Reducer.mean(), geometry=point, scale=30
-#    ).getInfo()
-
-
-#    elevation = ee.Image("USGS/SRTMGL1_003").sample(point, 30).first().getInfo()
-
-
-#    return {
-#        "Latitude": lat,
-#        "Longitude": lon,
-#        "NDVI (mean)": round(ndvi.get("NDVI", 0) / 10000.0, 3),
-#        "Precipitation (mm)": round(precip.get("precipitation", 0), 2),
-#        "Temperature (°C)": round(temp.get("temperature_2m", 273.15) - 273.15, 2),
-#        "Soil Moisture (m3/m3)": round(soil.get("ssm", 0), 3),
-#        "Forest Loss Year (avg)": forest_loss.get("lossyear", "N/A"),
-#        "Land Cover Class (ESA)": landcover.get("map", "N/A"),
-#        "Elevation (m)": elevation.get("elevation", "N/A"),
-#    }
 
 def get_geospatial_context(bbox: dict, location_label: str):
-    """
-    Converts the bbox dictionary into GEE Geometry and fetches data.
-    """
-    # Create GEE Rectangle from the dictionary keys
-    # Order: [west, south, east, north] -> [xmin, ymin, xmax, ymax]
+   
+    # FIX: Use evenOdd=False and geodesic=False to stop the Rectangle Reasoning Error
     geometry = ee.Geometry.Rectangle(
-        [bbox["xmin"], bbox["ymin"], bbox["xmax"], bbox["ymax"]],
-        proj=f'EPSG:{bbox["wkid"]}',
-        geodetic=True
+        coords=[bbox["min_lon"], bbox["min_lat"], bbox["max_lon"], bbox["max_lat"]],
+        proj=f'EPSG:4326', # Standard WGS84
+        geodesic=False,
+        evenOdd=False
     )
     
-    # Define center for point-based metadata (like Landcover)
     center_point = geometry.centroid()
 
+    # Time window for the current year (2026)
     today = datetime.date.today()
     start_date = ee.Date.fromYMD(today.year, 1, 1)
     end_date = ee.Date.fromYMD(today.year, today.month, today.day)
 
     def fetch_stat(collection_id, selector, scale):
         try:
-            # .mean() is used because we are looking at the whole bounding box area
             img = ee.ImageCollection(collection_id).filterBounds(geometry).filterDate(start_date, end_date).select(selector).mean()
-            
-            # reduceRegion calculates the average value across your ArcGIS extent
-            return img.reduceRegion(
+            stats = img.reduceRegion(
                 reducer=ee.Reducer.mean(),
                 geometry=geometry,
                 scale=scale,
                 bestEffort=True
             ).getInfo()
+            return stats if stats else {}
         except Exception: return {}
 
-    # Data Fetching
-    ndvi = fetch_stat("MODIS/006/MOD13Q1", "NDVI", 250)
-    precip = fetch_stat("UCSB-CHG/CHIRPS/DAILY", "precipitation", 5000)
-    soil = fetch_stat("NASA_USDA/HSL/SMAP10KM_soil_moisture", "ssm", 1000)
+    # --- Updated Dataset IDs ---
+    # MODIS: 006 -> 061
+    ndvi_data = fetch_stat("MODIS/061/MOD13Q1", "NDVI", 250)
+    
+    # Precipitation: CHIRPS is stable
+    precip_data = fetch_stat("UCSB-CHG/CHIRPS/DAILY", "precipitation", 5000)
+    
+    # Soil Moisture: NASA_USDA -> NASA/SMAP/SPL4SMGP/007
+    # Note: Band name is 'sm_surface' in the new SPL4SMGP/007 collection
+    soil_data = fetch_stat("NASA/SMAP/SPL4SMGP/007", "sm_surface", 1000)
 
-    # Elevation (Average across the project extent)
+    # Elevation
     elev_img = ee.Image("USGS/SRTMGL1_003")
     elevation = elev_img.reduceRegion(ee.Reducer.mean(), geometry, 30).getInfo()
 
-    # Land Cover (Sampled at the center of the project)
-    lc_img = ee.Image("ESA/WorldCover/v100/2020")
+    # Land Cover: v100 -> v200 (2021/2026 Baseline)
+    lc_img = ee.Image("ESA/WorldCover/v200/2021")
     landcover = lc_img.reduceRegion(ee.Reducer.first(), center_point, 10).getInfo()
 
     return {
         "Project": location_label,
-        "NDVI (Mean)": round((ndvi.get("NDVI") or 0) / 10000.0, 3),
-        "Precipitation (mm)": round(precip.get("precipitation") or 0, 2),
-        "Soil Moisture": round(soil.get("ssm") or 0, 3),
-        "Avg Elevation (m)": round(elevation.get("elevation") or 0, 1),
-        "Primary Landcover": landcover.get("map", "N/A")
+        "NDVI (mean)": round((ndvi_data.get("NDVI") or 0) / 10000.0, 3),
+        "Precipitation (mm)": round((precip_data.get("precipitation") or 0) * 30, 2), # Estimated monthly
+        "Soil Moisture (m3/m3)": round(soil_data.get("sm_surface") or 0, 3),
+        "Elevation (m)": round(elevation.get("elevation") or 0, 1),
+        "Land Cover Class (ESA)": interpret_esa_code(landcover.get("Map"))
     }
 
-def cosine_similarity(a, b):
-   return np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b))
-
-
-def retrieve_rag_chunks(collection_name, query, top_k=5):
-   root_ref = db.collection("knowledge_chunks").document("root")
-   chunks_ref = root_ref.collection(collection_name).stream()
-
-
-   query_emb = emd_model.encode([query])[0]
-
-
-   scored_chunks = []
-   for doc in chunks_ref:
-       chunk = doc.to_dict()
-       emb = chunk.get("embedding", None)
-       if emb is not None:
-           emb_np = np.array(emb)
-           sim = cosine_similarity(query_emb, emb_np)
-           scored_chunks.append((sim, chunk))
-
-
-   scored_chunks.sort(key=lambda x: x[0], reverse=True)
-   top_contents = [chunk["content"] for _, chunk in scored_chunks[:top_k]]
-   return top_contents
-
-
-def prompt_template(query: str, context: str, format_instructions: str) -> str:
-   prompt = (
-       "Use the following forestry data extracted from documents:\n"
-       f"{context}\n\n"
-       "Answer the query with geospatial reasoning:\n"
-       f"{query}\n\n"
-       f"{format_instructions}\n"
-       "Return only valid JSON."
-   )
-   return prompt
+def interpret_esa_code(code):
+    """Helper to turn ESA numbers into readable names for the LLM."""
+    mapping = {10: "Trees", 20: "Shrubland", 30: "Grassland", 40: "Cropland", 50: "Built-up", 60: "Bare/Sparse", 70: "Snow/Ice", 80: "Water", 90: "Wetland", 95: "Mangroves", 100: "Moss/Lichen"}
+    return mapping.get(code, "Unknown")
 
 
 # ============================================================
@@ -1176,14 +1078,26 @@ def sanitize_input(q):
         return str(q[0]) if q else ""
     return str(q)
 
-def get_forestry_agent(bbox:dict, task_name: str, llm):
+def get_forestry_agent(bbox_dict:dict, task_name: str, llm):
     # We define a 'shield' that we can apply to every tool
+    bbox_geom = ee.Geometry.Rectangle(
+        coords=[
+            bbox_dict['min_lon'], bbox_dict['min_lat'], 
+            bbox_dict['max_lon'], bbox_dict['max_lat']
+        ],
+        proj=None, 
+        geodesic=False, # Set to False for standard planar rectangles
+        evenOdd=False   # FIX: This removes the "Interiors currently only supported..." error
+    )
+
     def shield(func, uses_query=False):
+        @wraps(func)
         def wrapper(q):
             clean_q = sanitize_input(q)
             if uses_query:
                 return func(clean_q)
-            return func(bbox=bbox, project_name=task_name)
+            # Pass the corrected bbox_geom instead of the raw dict
+            return func(bbox=bbox_geom, project_name=task_name)
         return wrapper
 
     tools = [
