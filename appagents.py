@@ -855,18 +855,14 @@ def long_running_task(user_task: str, task_name: str, data_locations: list):
 #    context = get_geospatial_context(lat, lon)
 #    return json.dumps(context)
 
-def get_geospatial_context_tool(bbox: dict, project_name: str) -> dict:
-    """
-    Core logic: Takes a pre-fetched bbox and project name, 
-    calls Earth Engine, and returns the context dictionary.
-    """
-    if not bbox:
-        return {"error": f"Missing bounding box for project: {project_name}"}
+def get_geospatial_context_tool(bbox, project_name: str) -> dict:
+    # bbox is now an ee.Geometry object, not a dict
+    if bbox is None:
+        return {"error": f"Missing geometry for project: {project_name}"}
 
-    # Pass the dict directly to your EE processing logic
+    # Call the EE processing logic
     context = get_geospatial_context(bbox, project_name)
     return context
-
 
 def get_zoning_info(bbox, project_name: str) -> str:
    # Ensure context tool handles the new MODIS 061 version internally
@@ -962,20 +958,15 @@ def assess_tree_benefit(bbox, project_name: str) -> dict:
    }
 
 def get_geospatial_context(geometry, location_label: str):
-    """
-    Updated to accept an ee.Geometry object directly instead of a dict.
-    """
-    # We no longer create the geometry here because it's passed in from the shield
+    # geometry is already an ee.Geometry.Rectangle passed from the shield
     center_point = geometry.centroid()
 
-    # Time window for 2026
     today = datetime.date.today()
     start_date = ee.Date.fromYMD(today.year, 1, 1)
     end_date = ee.Date.fromYMD(today.year, today.month, today.day)
 
     def fetch_stat(collection_id, selector, scale):
         try:
-            # Uses the geometry passed into the function
             img = ee.ImageCollection(collection_id).filterBounds(geometry).filterDate(start_date, end_date).select(selector).mean()
             stats = img.reduceRegion(
                 reducer=ee.Reducer.mean(),
@@ -986,16 +977,14 @@ def get_geospatial_context(geometry, location_label: str):
             return stats if stats else {}
         except Exception: return {}
 
-    # Data Fetching (IDs updated for 2026)
+    # Datasets updated for 2026
     ndvi_data = fetch_stat("MODIS/061/MOD13Q1", "NDVI", 250)
     precip_data = fetch_stat("UCSB-CHG/CHIRPS/DAILY", "precipitation", 5000)
     soil_data = fetch_stat("NASA/SMAP/SPL4SMGP/007", "sm_surface", 1000)
 
-    # Elevation
+    # Elevation & Landcover
     elev_img = ee.Image("USGS/SRTMGL1_003")
     elevation = elev_img.reduceRegion(ee.Reducer.mean(), geometry, 30).getInfo()
-
-    # Land Cover
     lc_img = ee.Image("ESA/WorldCover/v200/2021")
     landcover = lc_img.reduceRegion(ee.Reducer.first(), center_point, 10).getInfo()
 
@@ -1105,16 +1094,16 @@ def sanitize_input(q):
         return str(q[0]) if q else ""
     return str(q)
 
-def get_forestry_agent(bbox_dict:dict, task_name: str, llm):
-    # We define a 'shield' that we can apply to every tool
+def get_forestry_agent(bbox_dict: dict, task_name: str, llm):
+    # Use the keys from get_project_coords (xmin, ymin, xmax, ymax)
     bbox_geom = ee.Geometry.Rectangle(
         coords=[
-            bbox_dict['min_lon'], bbox_dict['min_lat'], 
-            bbox_dict['max_lon'], bbox_dict['max_lat']
+            bbox_dict['xmin'], bbox_dict['ymin'], 
+            bbox_dict['xmax'], bbox_dict['ymax']
         ],
-        proj=None, 
-        geodesic=False, # Set to False for standard planar rectangles
-        evenOdd=False   # FIX: This removes the "Interiors currently only supported..." error
+        proj=f'EPSG:{bbox_dict.get("wkid", 4326)}', # Use the WKID from ArcGIS
+        geodesic=False, 
+        evenOdd=False   
     )
 
     def shield(func, uses_query=False):
@@ -1123,7 +1112,7 @@ def get_forestry_agent(bbox_dict:dict, task_name: str, llm):
             clean_q = sanitize_input(q)
             if uses_query:
                 return func(clean_q)
-            # Pass the corrected bbox_geom instead of the raw dict
+            # Pass the GEE Geometry Object (bbox_geom)
             return func(bbox=bbox_geom, project_name=task_name)
         return wrapper
 
