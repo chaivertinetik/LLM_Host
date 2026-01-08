@@ -961,26 +961,21 @@ def assess_tree_benefit(bbox, project_name: str) -> dict:
        "NDVI Reference": round(ndvi, 3) # Added rounding for cleaner agent output
    }
 
-
-def get_geospatial_context(bbox: dict, location_label: str):
-   
-    # FIX: Use evenOdd=False and geodesic=False to stop the Rectangle Reasoning Error
-    geometry = ee.Geometry.Rectangle(
-        coords=[bbox["min_lon"], bbox["min_lat"], bbox["max_lon"], bbox["max_lat"]],
-        proj=f'EPSG:4326', # Standard WGS84
-        geodesic=False,
-        evenOdd=False
-    )
-    
+def get_geospatial_context(geometry, location_label: str):
+    """
+    Updated to accept an ee.Geometry object directly instead of a dict.
+    """
+    # We no longer create the geometry here because it's passed in from the shield
     center_point = geometry.centroid()
 
-    # Time window for the current year (2026)
+    # Time window for 2026
     today = datetime.date.today()
     start_date = ee.Date.fromYMD(today.year, 1, 1)
     end_date = ee.Date.fromYMD(today.year, today.month, today.day)
 
     def fetch_stat(collection_id, selector, scale):
         try:
+            # Uses the geometry passed into the function
             img = ee.ImageCollection(collection_id).filterBounds(geometry).filterDate(start_date, end_date).select(selector).mean()
             stats = img.reduceRegion(
                 reducer=ee.Reducer.mean(),
@@ -991,29 +986,23 @@ def get_geospatial_context(bbox: dict, location_label: str):
             return stats if stats else {}
         except Exception: return {}
 
-    # --- Updated Dataset IDs ---
-    # MODIS: 006 -> 061
+    # Data Fetching (IDs updated for 2026)
     ndvi_data = fetch_stat("MODIS/061/MOD13Q1", "NDVI", 250)
-    
-    # Precipitation: CHIRPS is stable
     precip_data = fetch_stat("UCSB-CHG/CHIRPS/DAILY", "precipitation", 5000)
-    
-    # Soil Moisture: NASA_USDA -> NASA/SMAP/SPL4SMGP/007
-    # Note: Band name is 'sm_surface' in the new SPL4SMGP/007 collection
     soil_data = fetch_stat("NASA/SMAP/SPL4SMGP/007", "sm_surface", 1000)
 
     # Elevation
     elev_img = ee.Image("USGS/SRTMGL1_003")
     elevation = elev_img.reduceRegion(ee.Reducer.mean(), geometry, 30).getInfo()
 
-    # Land Cover: v100 -> v200 (2021/2026 Baseline)
+    # Land Cover
     lc_img = ee.Image("ESA/WorldCover/v200/2021")
     landcover = lc_img.reduceRegion(ee.Reducer.first(), center_point, 10).getInfo()
 
     return {
         "Project": location_label,
         "NDVI (mean)": round((ndvi_data.get("NDVI") or 0) / 10000.0, 3),
-        "Precipitation (mm)": round((precip_data.get("precipitation") or 0) * 30, 2), # Estimated monthly
+        "Precipitation (mm)": round((precip_data.get("precipitation") or 0) * 30, 2),
         "Soil Moisture (m3/m3)": round(soil_data.get("sm_surface") or 0, 3),
         "Elevation (m)": round(elevation.get("elevation") or 0, 1),
         "Land Cover Class (ESA)": interpret_esa_code(landcover.get("Map"))
