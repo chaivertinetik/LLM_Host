@@ -30,9 +30,7 @@ from LLM_Heroku_Kernel import Solution
 from google import genai
 from google.genai import types
 from functools import wraps
-
-from langchain.tools import StructuredTool
-
+from langchain_core.tools import StructuredTool
 import hashlib
 import io
 import geopandas as gpd
