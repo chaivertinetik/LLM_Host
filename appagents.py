@@ -1071,6 +1071,44 @@ def interpret_esa_code(code):
 
 #     return create_react_agent(llm,tools)
 
+def cosine_similarity(a, b):
+   return np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b))
+
+
+def retrieve_rag_chunks(collection_name, query, top_k=5):
+   root_ref = db.collection("knowledge_chunks").document("root")
+   chunks_ref = root_ref.collection(collection_name).stream()
+
+
+   query_emb = emd_model.encode([query])[0]
+
+
+   scored_chunks = []
+   for doc in chunks_ref:
+       chunk = doc.to_dict()
+       emb = chunk.get("embedding", None)
+       if emb is not None:
+           emb_np = np.array(emb)
+           sim = cosine_similarity(query_emb, emb_np)
+           scored_chunks.append((sim, chunk))
+
+
+   scored_chunks.sort(key=lambda x: x[0], reverse=True)
+   top_contents = [chunk["content"] for _, chunk in scored_chunks[:top_k]]
+   return top_contents
+
+
+def prompt_template(query: str, context: str, format_instructions: str) -> str:
+   prompt = (
+       "Use the following forestry data extracted from documents:\n"
+       f"{context}\n\n"
+       "Answer the query with geospatial reasoning:\n"
+       f"{query}\n\n"
+       f"{format_instructions}\n"
+       "Return only valid JSON."
+   )
+   return prompt
+
 
 def sanitize_input(q):
     """Shields the tool from list/object inputs by forcing a string return."""
