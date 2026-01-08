@@ -1127,47 +1127,103 @@ def prompt_template(query: str, context: str, format_instructions: str) -> str:
 #        Initialize agent with tools and LangChain LLM
 # ============================================================
 
+# def sanitize_input(q):
+#     """Ensures the agent input is a string, even if the LLM sends a list."""
+#     if isinstance(q, list):
+#         return str(q[0]) if q else ""
+#     return str(q)
+
+# def get_forestry_agent(bbox:dict, task_name: str, llm):
+#     tools = [
+#     Tool(
+#         name="ZoningLookup",
+#         func=lambda q: get_zoning_info(bbox=bbox, project_name=task_name),
+#         description="Use this ONLY for zoning-related land cover and forest loss info as a proxy to guide tree planting recommendations. Not for general advice.",
+#     ),
+#     Tool(
+#         name="ClimateLookUp",
+#         func=lambda q: get_climate_info(bbox=bbox, project_name=task_name),
+#         description="Returns precipitation, temperature, vegetation health (NDVI), flood risk, and sea level rise estimates for forestry planning.",
+#     ),
+#     Tool(
+#         name="CheckTreeHealth",
+#         func=lambda q: check_tree_health(bbox=bbox, project_name=task_name),
+#         description="Assess how healthy the trees are using the canopy cover and soil.",
+#     ),
+#     Tool(
+#         name="SoilSuitabilityCheck",
+#         func=lambda q: check_soil_suitability(bbox=bbox, project_name=task_name),
+#         description="Analyzes soil moisture, elevation, and land cover to evaluate suitability for native tree species planting.",
+#     ),
+#     Tool(
+#         name="TreeBenefitAssessment",
+#         func=lambda q: assess_tree_benefit(bbox=bbox, project_name=task_name),
+#         description="Estimates carbon capture potential and cooling benefits based on NDVI, precipitation, and land cover data.",
+#     ),
+#     Tool(
+#                 name="GeneralGeospatialExpert",
+#                 func=lambda q: geospatial_helper(sanitize_input(q)), 
+#                 description="Use this for general geospatial or forestry questions, like tree removal, pests, diseases, or best practices. Use this when the user asks 'how' or 'why' rather than 'what is the data'.",
+#             )
+#     ]
+
+#     return create_react_agent(llm,tools)
+
+
 def sanitize_input(q):
-    """Ensures the agent input is a string, even if the LLM sends a list."""
+    """Shields the tool from list/object inputs by forcing a string return."""
     if isinstance(q, list):
         return str(q[0]) if q else ""
     return str(q)
 
 def get_forestry_agent(bbox:dict, task_name: str, llm):
+    # We define a 'shield' that we can apply to every tool
+    def shield(func, uses_query=False):
+        def wrapper(q):
+            clean_q = sanitize_input(q)
+            if uses_query:
+                return func(clean_q)
+            return func(bbox=bbox, project_name=task_name)
+        return wrapper
+
     tools = [
-    Tool(
-        name="ZoningLookup",
-        func=lambda q: get_zoning_info(bbox=bbox, project_name=task_name),
-        description="Use this ONLY for zoning-related land cover and forest loss info as a proxy to guide tree planting recommendations. Not for general advice.",
-    ),
-    Tool(
-        name="ClimateLookUp",
-        func=lambda q: get_climate_info(bbox=bbox, project_name=task_name),
-        description="Returns precipitation, temperature, vegetation health (NDVI), flood risk, and sea level rise estimates for forestry planning.",
-    ),
-    Tool(
-        name="CheckTreeHealth",
-        func=lambda q: check_tree_health(bbox=bbox, project_name=task_name),
-        description="Assess how healthy the trees are using the canopy cover and soil.",
-    ),
-    Tool(
-        name="SoilSuitabilityCheck",
-        func=lambda q: check_soil_suitability(bbox=bbox, project_name=task_name),
-        description="Analyzes soil moisture, elevation, and land cover to evaluate suitability for native tree species planting.",
-    ),
-    Tool(
-        name="TreeBenefitAssessment",
-        func=lambda q: assess_tree_benefit(bbox=bbox, project_name=task_name),
-        description="Estimates carbon capture potential and cooling benefits based on NDVI, precipitation, and land cover data.",
-    ),
-    Tool(
-                name="GeneralGeospatialExpert",
-                func=lambda q: geospatial_helper(sanitize_input(q)), 
-                description="Use this for general geospatial or forestry questions, like tree removal, pests, diseases, or best practices. Use this when the user asks 'how' or 'why' rather than 'what is the data'.",
-            )
+        Tool(
+            name="ZoningLookup",
+            func=shield(get_zoning_info),
+            description="Use for zoning, land cover, and forest loss info.",
+        ),
+        Tool(
+            name="ClimateLookUp",
+            func=shield(get_climate_info),
+            description="Returns precipitation, temperature, and flood risk.",
+        ),
+        Tool(
+            name="CheckTreeHealth",
+            func=shield(check_tree_health),
+            description="Assess tree health using canopy cover.",
+        ),
+        Tool(
+            name="SoilSuitabilityCheck",
+            func=shield(check_soil_suitability),
+            description="Analyzes soil and land cover suitability.",
+        ),
+        Tool(
+            name="TreeBenefitAssessment",
+            func=shield(assess_tree_benefit),
+            description="Estimates carbon and cooling benefits.",
+        ),
+        Tool(
+            name="GeneralGeospatialExpert",
+            # We set 'uses_query=True' because this tool actually needs the string
+            func=shield(geospatial_helper, uses_query=True), 
+            description="Use this for general geospatial or forestry questions, like tree removal, pests, diseases, or best practices. Use this when the user asks 'how' or 'why' rather than 'what is the data",
+        )
     ]
 
-    return create_react_agent(llm,tools)
+    return create_react_agent(llm, tools)
+
+
+
 
 #this should happen internally now! 
 # agent = create_react_agent(
