@@ -21,7 +21,7 @@ from langchain_core.messages import AIMessage
 from langchain_google_genai import ChatGoogleGenerativeAI
 # from langchain.tools import StructuredTool
 from typing import List, Optional, Any, Tuple
-from pydantic import PrivateAttr
+from pydantic import PrivateAttr, BaseModel, Field 
 from vertexai.generative_models import GenerativeModel
 from google.api_core.exceptions import ResourceExhausted
 from appbackend import filter as push_to_map
@@ -31,7 +31,7 @@ from google import genai
 from google.genai import types
 from functools import wraps
 
-
+from langchain.tools import StructuredTool
 
 import hashlib
 import io
@@ -1094,53 +1094,54 @@ def sanitize_input(q):
         return str(q[0]) if q else ""
     return str(q)
 
-def get_forestry_agent(bbox_dict: dict, task_name: str, llm):
-    # 1. Create the GEE Geometry ONCE here using your ArcGIS keys
-    # This fixes the "GeometryConstructors.Rectangle" error
-    try:
-        bbox_geom = ee.Geometry.Rectangle(
-            coords=[bbox_dict['xmin'], bbox_dict['ymin'], bbox_dict['xmax'], bbox_dict['ymax']],
-            proj=f'EPSG:{bbox_dict.get("wkid", 4326)}', 
-            geodesic=False, 
-            evenOdd=False   
-        )
-    except Exception as e:
-        print(f"GEE Geometry Creation Failed: {e}")
-        bbox_geom = None
+class ToolInput(BaseModel):
+    tool_input: str = Field(description="The query or input string")
 
-    # 2. Use the Lambda approach that previously worked for your 'list' error
-    # But we pass 'bbox_geom' (the GEE Object) instead of 'bbox' (the dict)
+def get_forestry_agent(bbox_dict: dict, task_name: str, llm):
+    # Create the GEE Geometry once
+    bbox_geom = ee.Geometry.Rectangle(
+        coords=[bbox_dict['xmin'], bbox_dict['ymin'], bbox_dict['xmax'], bbox_dict['ymax']],
+        proj=f'EPSG:{bbox_dict.get("wkid", 4326)}', 
+        geodesic=False, evenOdd=False
+    )
+
+    # 2. Define tools using StructuredTool to force string validation
     tools = [
-        Tool(
+        StructuredTool.from_function(
             name="ZoningLookup",
-            func=lambda q: get_zoning_info(bbox=bbox_geom, project_name=task_name),
+            func=lambda tool_input: get_zoning_info(bbox=bbox_geom, project_name=task_name),
             description="Use for zoning, land cover, and forest loss info.",
+            args_schema=ToolInput
         ),
-        Tool(
+        StructuredTool.from_function(
             name="ClimateLookUp",
-            func=lambda q: get_climate_info(bbox=bbox_geom, project_name=task_name),
+            func=lambda tool_input: get_climate_info(bbox=bbox_geom, project_name=task_name),
             description="Returns precipitation, temperature, and flood risk.",
+            args_schema=ToolInput
         ),
-        Tool(
+        StructuredTool.from_function(
             name="CheckTreeHealth",
-            func=lambda q: check_tree_health(bbox=bbox_geom, project_name=task_name),
+            func=lambda tool_input: check_tree_health(bbox=bbox_geom, project_name=task_name),
             description="Assess tree health using canopy cover.",
+            args_schema=ToolInput
         ),
-        Tool(
+        StructuredTool.from_function(
             name="SoilSuitabilityCheck",
-            func=lambda q: check_soil_suitability(bbox=bbox_geom, project_name=task_name),
+            func=lambda tool_input: check_soil_suitability(bbox=bbox_geom, project_name=task_name),
             description="Analyzes soil and land cover suitability.",
+            args_schema=ToolInput
         ),
-        Tool(
+        StructuredTool.from_function(
             name="TreeBenefitAssessment",
-            func=lambda q: assess_tree_benefit(bbox=bbox_geom, project_name=task_name),
+            func=lambda tool_input: assess_tree_benefit(bbox=bbox_geom, project_name=task_name),
             description="Estimates carbon and cooling benefits.",
+            args_schema=ToolInput
         ),
-        Tool(
+        StructuredTool.from_function(
             name="GeneralGeospatialExpert",
-            # We wrap the input in sanitize_input just like your working version
-            func=lambda q: geospatial_helper(sanitize_input(q)), 
-            description="Use for questions about pests, diseases, or 'how-to' forestry advice.",
+            func=lambda tool_input: geospatial_helper(sanitize_input(tool_input)),
+            description="Use for questions about pests, diseases, or forestry advice.",
+            args_schema=ToolInput
         )
     ]
 
