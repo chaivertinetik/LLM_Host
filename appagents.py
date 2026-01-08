@@ -1153,7 +1153,7 @@ def get_forestry_agent(bbox_dict: dict, task_name: str, llm):
         Tool(
             name="GeneralGeospatialExpert",
             # We set 'uses_query=True' because this tool actually needs the string
-            func=shield(geospatial_helper, uses_query=True), 
+            func=lambda q: geospatial_helper(sanitize_input(q)), 
             description="Use this for general geospatial or forestry questions, like tree removal, pests, diseases, or best practices. Use this when the user asks 'how' or 'why' rather than 'what is the data",
         )
     ]
