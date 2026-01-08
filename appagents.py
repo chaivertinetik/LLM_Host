@@ -1108,12 +1108,20 @@ def get_forestry_agent(bbox_dict: dict, task_name: str, llm):
 
     def shield(func, uses_query=False):
         @wraps(func)
-        def wrapper(q):
-            clean_q = sanitize_input(q)
+        def wrapper(tool_input=""): # Default to empty string
+            # --- THE FIX: Force tool_input to be a string immediately ---
+            # This prevents the 'list' has no attribute 'lower' error
+            if isinstance(tool_input, list):
+                tool_input = str(tool_input[0]) if tool_input else ""
+            else:
+                tool_input = str(tool_input)
+
             if uses_query:
-                return func(clean_q)
-            # Pass the GEE Geometry Object (bbox_geom)
+                return func(tool_input)
+            
+            # For non-query tools, we ignore tool_input and use our preset vars
             return func(bbox=bbox_geom, project_name=task_name)
+        
         return wrapper
 
     tools = [
