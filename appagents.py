@@ -1095,66 +1095,52 @@ def sanitize_input(q):
     return str(q)
 
 def get_forestry_agent(bbox_dict: dict, task_name: str, llm):
-    # Use the keys from get_project_coords (xmin, ymin, xmax, ymax)
-    bbox_geom = ee.Geometry.Rectangle(
-        coords=[
-            bbox_dict['xmin'], bbox_dict['ymin'], 
-            bbox_dict['xmax'], bbox_dict['ymax']
-        ],
-        proj=f'EPSG:{bbox_dict.get("wkid", 4326)}', # Use the WKID from ArcGIS
-        geodesic=False, 
-        evenOdd=False   
-    )
+    # 1. Create the GEE Geometry ONCE here using your ArcGIS keys
+    # This fixes the "GeometryConstructors.Rectangle" error
+    try:
+        bbox_geom = ee.Geometry.Rectangle(
+            coords=[bbox_dict['xmin'], bbox_dict['ymin'], bbox_dict['xmax'], bbox_dict['ymax']],
+            proj=f'EPSG:{bbox_dict.get("wkid", 4326)}', 
+            geodesic=False, 
+            evenOdd=False   
+        )
+    except Exception as e:
+        print(f"GEE Geometry Creation Failed: {e}")
+        bbox_geom = None
 
-    def shield(func, uses_query=False):
-        @wraps(func)
-        def wrapper(tool_input=""): # Default to empty string
-            # --- THE FIX: Force tool_input to be a string immediately ---
-            # This prevents the 'list' has no attribute 'lower' error
-            if isinstance(tool_input, list):
-                tool_input = str(tool_input[0]) if tool_input else ""
-            else:
-                tool_input = str(tool_input)
-
-            if uses_query:
-                return func(tool_input)
-            
-            # For non-query tools, we ignore tool_input and use our preset vars
-            return func(bbox=bbox_geom, project_name=task_name)
-        
-        return wrapper
-
+    # 2. Use the Lambda approach that previously worked for your 'list' error
+    # But we pass 'bbox_geom' (the GEE Object) instead of 'bbox' (the dict)
     tools = [
         Tool(
             name="ZoningLookup",
-            func=shield(get_zoning_info),
+            func=lambda q: get_zoning_info(bbox=bbox_geom, project_name=task_name),
             description="Use for zoning, land cover, and forest loss info.",
         ),
         Tool(
             name="ClimateLookUp",
-            func=shield(get_climate_info),
+            func=lambda q: get_climate_info(bbox=bbox_geom, project_name=task_name),
             description="Returns precipitation, temperature, and flood risk.",
         ),
         Tool(
             name="CheckTreeHealth",
-            func=shield(check_tree_health),
+            func=lambda q: check_tree_health(bbox=bbox_geom, project_name=task_name),
             description="Assess tree health using canopy cover.",
         ),
         Tool(
             name="SoilSuitabilityCheck",
-            func=shield(check_soil_suitability),
+            func=lambda q: check_soil_suitability(bbox=bbox_geom, project_name=task_name),
             description="Analyzes soil and land cover suitability.",
         ),
         Tool(
             name="TreeBenefitAssessment",
-            func=shield(assess_tree_benefit),
+            func=lambda q: assess_tree_benefit(bbox=bbox_geom, project_name=task_name),
             description="Estimates carbon and cooling benefits.",
         ),
         Tool(
             name="GeneralGeospatialExpert",
-            # We set 'uses_query=True' because this tool actually needs the string
+            # We wrap the input in sanitize_input just like your working version
             func=lambda q: geospatial_helper(sanitize_input(q)), 
-            description="Use this for general geospatial or forestry questions, like tree removal, pests, diseases, or best practices. Use this when the user asks 'how' or 'why' rather than 'what is the data",
+            description="Use for questions about pests, diseases, or 'how-to' forestry advice.",
         )
     ]
 
