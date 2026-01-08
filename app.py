@@ -269,6 +269,8 @@ async def process_request(request_data: RequestData):
     if (not do_gis_op) and do_info:
         try: 
             agent = get_forestry_agent(bbox, task_name, llm)
+            if isinstance(user_task, list):
+                user_task = " ".join(map(str, user_task))
             result = agent.invoke({"messages": [("user", user_task)]})
             content = result["messages"][-1].content
             # content = geospatial_helper(user_task)

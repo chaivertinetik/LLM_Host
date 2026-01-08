@@ -19,6 +19,7 @@ from langgraph.prebuilt import create_react_agent
 from langchain_core.language_models import LLM
 from langchain_core.messages import AIMessage
 from langchain_google_genai import ChatGoogleGenerativeAI
+# from langchain.tools import StructuredTool
 from typing import List, Optional, Any, Tuple
 from pydantic import PrivateAttr
 from vertexai.generative_models import GenerativeModel
@@ -1126,6 +1127,12 @@ def prompt_template(query: str, context: str, format_instructions: str) -> str:
 #        Initialize agent with tools and LangChain LLM
 # ============================================================
 
+def sanitize_input(q):
+    """Ensures the agent input is a string, even if the LLM sends a list."""
+    if isinstance(q, list):
+        return str(q[0]) if q else ""
+    return str(q)
+
 def get_forestry_agent(bbox:dict, task_name: str, llm):
     tools = [
     Tool(
@@ -1155,7 +1162,7 @@ def get_forestry_agent(bbox:dict, task_name: str, llm):
     ),
     Tool(
                 name="GeneralGeospatialExpert",
-                func=geospatial_helper, 
+                func=lambda q: geospatial_helper(sanitize_input(q)), 
                 description="Use this for general geospatial or forestry questions, like tree removal, pests, diseases, or best practices. Use this when the user asks 'how' or 'why' rather than 'what is the data'.",
             )
     ]
