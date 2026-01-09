@@ -270,8 +270,8 @@ async def process_request(request_data: RequestData):
         try: 
             agent = get_forestry_agent(bbox, task_name, llm)
             user_task = str(user_task[0]) if isinstance(user_task, list) else str(user_task)
-            result = agent.invoke({"messages": [HumanMessage(content=user_task)]})
-            content = result["messages"][-1].content
+            result = agent.invoke({"input": user_task})
+            content = result["output"]
             # content = geospatial_helper(user_task)
             history.append({'role': 'user', 'content': user_task})
             history.append({'role': 'assistant', 'content': content})

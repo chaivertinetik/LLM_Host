@@ -19,6 +19,8 @@ from langgraph.prebuilt import create_react_agent
 from langchain_core.language_models import LLM
 from langchain_core.messages import AIMessage
 from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain.agents import AgentExecutor, create_tool_calling_agent
+from langchain_core.prompts import ChatPromptTemplate
 # from langchain.tools import StructuredTool
 from typing import List, Optional, Any, Tuple
 from pydantic import PrivateAttr, BaseModel, Field 
@@ -1107,43 +1109,52 @@ def get_forestry_agent(bbox_dict: dict, task_name: str, llm):
     tools = [
         StructuredTool.from_function(
             name="ZoningLookup",
-            func=lambda tool_input: get_zoning_info(bbox=bbox_geom, project_name=task_name),
+            func=lambda **kwargs: get_zoning_info(bbox=bbox_geom, project_name=task_name),
             description="Use for zoning, land cover, and forest loss info.",
             args_schema=ToolInput
         ),
         StructuredTool.from_function(
             name="ClimateLookUp",
-            func=lambda tool_input: get_climate_info(bbox=bbox_geom, project_name=task_name),
+            func=lambda **kwargs: get_climate_info(bbox=bbox_geom, project_name=task_name),
             description="Returns precipitation, temperature, and flood risk.",
             args_schema=ToolInput
         ),
         StructuredTool.from_function(
             name="CheckTreeHealth",
-            func=lambda tool_input: check_tree_health(bbox=bbox_geom, project_name=task_name),
+            func=lambda **kwargs: check_tree_health(bbox=bbox_geom, project_name=task_name),
             description="Assess tree health using canopy cover.",
             args_schema=ToolInput
         ),
         StructuredTool.from_function(
             name="SoilSuitabilityCheck",
-            func=lambda tool_input: check_soil_suitability(bbox=bbox_geom, project_name=task_name),
+            func=lambda **kwargs: check_soil_suitability(bbox=bbox_geom, project_name=task_name),
             description="Analyzes soil and land cover suitability.",
             args_schema=ToolInput
         ),
         StructuredTool.from_function(
             name="TreeBenefitAssessment",
-            func=lambda tool_input: assess_tree_benefit(bbox=bbox_geom, project_name=task_name),
+            func=lambda **kwargs: assess_tree_benefit(bbox=bbox_geom, project_name=task_name),
             description="Estimates carbon and cooling benefits.",
             args_schema=ToolInput
         ),
         StructuredTool.from_function(
             name="GeneralGeospatialExpert",
-            func=lambda tool_input: geospatial_helper(sanitize_input(tool_input)),
+            func=lambda query: geospatial_helper(str(query)),
             description="Use for questions about pests, diseases, or forestry advice.",
             args_schema=ToolInput
         )
     ]
 
-    return create_react_agent(llm, tools)
+    prompt = ChatPromptTemplate.from_messages([
+        ("system", "You are a forestry expert. Use tools to provide data-driven advice."),
+        ("placeholder", "{chat_history}"),
+        ("human", "{input}"),
+        ("placeholder", "{agent_scratchpad}"),
+    ])
+
+    agent = create_tool_calling_agent(llm, tools, prompt)
+
+    return AgentExecutor(agent=agent, tools=tools, verbose=True, handle_parsing_errors=True)
 
 
 
