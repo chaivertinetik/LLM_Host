@@ -19,7 +19,12 @@ from langgraph.prebuilt import create_react_agent
 from langchain_core.language_models import LLM
 from langchain_core.messages import AIMessage
 from langchain_google_genai import ChatGoogleGenerativeAI
-from langchain.agents import AgentExecutor, create_tool_calling_agent
+try:
+    from langchain.agents import AgentExecutor, create_tool_calling_agent
+except ImportError:
+    # Fallback for older/unusual package structures
+    from langchain.agents.agent import AgentExecutor
+    from langchain.agents.tool_calling_agent.base import create_tool_calling_agent
 from langchain_core.prompts import ChatPromptTemplate
 # from langchain.tools import StructuredTool
 from typing import List, Optional, Any, Tuple
