@@ -21,18 +21,7 @@ from langgraph.prebuilt import create_react_agent
 from langchain_core.language_models import LLM
 from langchain_core.messages import AIMessage
 from langchain_google_genai import ChatGoogleGenerativeAI
-try:
-    from langchain.agents import AgentExecutor
-except ImportError:
-    try:
-        from langchain.agents.agent import AgentExecutor
-    except ImportError:
-        from langchain.agents.executor import AgentExecutor
-try:
-    from langchain.agents import create_tool_calling_agent
-except ImportError:
-    from langchain.agents.tool_calling_agent.base import create_tool_calling_agent
-from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.messages import HumanMessage, ToolMessage
 # from langchain.tools import StructuredTool
 from typing import List, Optional, Any, Tuple
 from pydantic import PrivateAttr, BaseModel, Field 
@@ -1109,7 +1098,7 @@ def sanitize_input(q):
 class ToolInput(BaseModel):
     tool_input: str = Field(description="The query or input string")
 
-def get_forestry_agent(bbox_dict: dict, task_name: str, llm):
+def run_forestry_agent(user_input: str, bbox_dict: dict, project_name: str, llm):
     # Create the GEE Geometry once
     bbox_geom = ee.Geometry.Rectangle(
         coords=[bbox_dict['xmin'], bbox_dict['ymin'], bbox_dict['xmax'], bbox_dict['ymax']],
@@ -1157,16 +1146,43 @@ def get_forestry_agent(bbox_dict: dict, task_name: str, llm):
         )
     ]
 
-    prompt = ChatPromptTemplate.from_messages([
-        ("system", "You are a forestry expert. Use tools to provide data-driven advice."),
-        ("placeholder", "{chat_history}"),
-        ("human", "{input}"),
-        ("placeholder", "{agent_scratchpad}"),
-    ])
+    
+    llm_with_tools = llm.bind_tools(tools)
+    messages = [HumanMessage(content=user_input)]
+    ai_msg = llm_with_tools.invoke(messages)
+    messages.append(ai_msg)
 
-    agent = create_tool_calling_agent(llm, tools, prompt)
-
-    return AgentExecutor(agent=agent, tools=tools, verbose=True, handle_parsing_errors=True)
+    if ai_msg.tool_calls:
+        # Create a dynamic lookup for all tools in your list
+        tool_map = {tool.name: tool for tool in tools}
+        
+        for tool_call in ai_msg.tool_calls:
+            tool_name = tool_call["name"]
+            
+            # Check if the tool actually exists before calling it
+            if tool_name in tool_map:
+                selected_tool = tool_map[tool_name]
+                
+                # Execute and get result
+                tool_output = selected_tool.invoke(tool_call["args"])
+                
+                # Add result to history
+                messages.append(ToolMessage(
+                    content=str(tool_output), 
+                    tool_call_id=tool_call["id"]
+                ))
+            else:
+                # If the LLM hallucinated a tool name, tell it!
+                messages.append(ToolMessage(
+                    content=f"Error: Tool '{tool_name}' not found.", 
+                    tool_call_id=tool_call["id"]
+                ))
+        
+        # Final call: LLM generates response based on tool data
+        final_response = llm_with_tools.invoke(messages)
+        return final_response.content
+    
+    return ai_msg.content
 
 
 

@@ -11,7 +11,6 @@ from typing import Dict, Optional, Any
 from pydantic import BaseModel
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from langchain_core.messages import HumanMessage
 from credentials import db, parser, emd_model
 from appagents import (
     llm,
@@ -268,10 +267,7 @@ async def process_request(request_data: RequestData):
     # INFO-ONLY: answer immediately (no queue)
     if (not do_gis_op) and do_info:
         try: 
-            agent = get_forestry_agent(bbox, task_name, llm)
-            user_task = str(user_task[0]) if isinstance(user_task, list) else str(user_task)
-            result = agent.invoke({"input": user_task})
-            content = result["output"]
+            content = get_forestry_agent(user_task, bbox, task_name, llm)
             # content = geospatial_helper(user_task)
             history.append({'role': 'user', 'content': user_task})
             history.append({'role': 'assistant', 'content': content})
