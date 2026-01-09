@@ -1100,7 +1100,7 @@ def get_forestry_agent(bbox_dict: dict, task_name: str, llm):
     bbox_geom = ee.Geometry.Rectangle(
         coords=[bbox_dict['xmin'], bbox_dict['ymin'], bbox_dict['xmax'], bbox_dict['ymax']],
         proj=f'EPSG:{bbox_dict.get("wkid", 4326)}', 
-        geodesic=False, evenOdd=False
+        geodesic=False, evenOdd=True 
     )
 
     # 2. Define tools using StructuredTool to force string validation
