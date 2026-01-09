@@ -957,7 +957,7 @@ def assess_tree_benefit(bbox, project_name: str) -> dict:
 
 def get_geospatial_context(geometry, location_label: str):
     # geometry is already an ee.Geometry.Rectangle passed from the shield
-    center_point = geometry.centroid()
+    center_point = geometry.centroid(maxError=1)
 
     today = datetime.date.today()
     start_date = ee.Date.fromYMD(today.year, 1, 1)
@@ -978,7 +978,7 @@ def get_geospatial_context(geometry, location_label: str):
     # Datasets updated for 2026
     ndvi_data = fetch_stat("MODIS/061/MOD13Q1", "NDVI", 250)
     precip_data = fetch_stat("UCSB-CHG/CHIRPS/DAILY", "precipitation", 5000)
-    soil_data = fetch_stat("NASA/SMAP/SPL4SMGP/007", "sm_surface", 1000)
+    soil_data = fetch_stat("NASA/SMAP/SPL4SMGP/008", "sm_surface", 1000)
 
     # Elevation & Landcover
     elev_img = ee.Image("USGS/SRTMGL1_003")
