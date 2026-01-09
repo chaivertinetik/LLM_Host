@@ -12,14 +12,26 @@ import ast
 import textwrap
 import ee
 import numpy as np
+import langchain
 from google.oauth2 import service_account
 from sentence_transformers import util
 from langchain_core.tools import Tool
+from langchain_core.tools import StructuredTool
 from langgraph.prebuilt import create_react_agent
 from langchain_core.language_models import LLM
 from langchain_core.messages import AIMessage
 from langchain_google_genai import ChatGoogleGenerativeAI
-from langchain.agents import AgentExecutor, create_tool_calling_agent
+try:
+    from langchain.agents import AgentExecutor
+except ImportError:
+    try:
+        from langchain.agents.agent import AgentExecutor
+    except ImportError:
+        from langchain.agents.executor import AgentExecutor
+try:
+    from langchain.agents import create_tool_calling_agent
+except ImportError:
+    from langchain.agents.tool_calling_agent.base import create_tool_calling_agent
 from langchain_core.prompts import ChatPromptTemplate
 # from langchain.tools import StructuredTool
 from typing import List, Optional, Any, Tuple
@@ -32,7 +44,7 @@ from LLM_Heroku_Kernel import Solution
 from google import genai
 from google.genai import types
 from functools import wraps
-from langchain_core.tools import StructuredTool
+
 import hashlib
 import io
 import geopandas as gpd

@@ -48,6 +48,7 @@ langchain>=0.2.0
 langchain-core
 langchain-google-genai
 langchain-community
+langchain-openai
 earthengine-api
 sentence-transformers
 google-cloud-firestore
