@@ -1098,7 +1098,7 @@ def sanitize_input(q):
 class ToolInput(BaseModel):
     tool_input: str = Field(description="The query or input string")
 
-def get_forestry_agent(user_input: str, bbox_dict: dict, project_name: str, llm):
+def get_forestry_agent(user_input: str, bbox_dict: dict, task_name: str, llm):
     # Create the GEE Geometry once
     bbox_geom = ee.Geometry.Rectangle(
         coords=[bbox_dict['xmin'], bbox_dict['ymin'], bbox_dict['xmax'], bbox_dict['ymax']],
