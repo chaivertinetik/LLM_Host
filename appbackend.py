@@ -193,12 +193,18 @@ def _with_read_token_params(params: dict | None = None) -> dict:
 
 def _append_token_to_url(url: str) -> str:
     """
-    Append the chosen READ credential (API key or token) to a URL (if token not already present).
-    Used ONLY for display / data_locations outputs, NOT for caching.
+    Append the chosen READ credential to a URL using formal parsing.
+    Prevents character mutation by avoiding redundant regex/encoding.
     """
     if not isinstance(url, str) or not url.strip():
         return url
-    if re.search(r"[?&]token=", url):
+    
+    # Use formal parsing to check for existing token
+    parsed = urlparse(url)
+    qs_pairs = parse_qsl(parsed.query, keep_blank_values=True)
+    qs_dict = {k.lower(): v for k, v in qs_pairs}
+    
+    if "token" in qs_dict:
         return url
 
     try:
@@ -207,8 +213,12 @@ def _append_token_to_url(url: str) -> str:
         logger.error(f"Failed to get ArcGIS READ credential for URL '{url}': {exc}")
         return url
 
-    sep = "&" if "?" in url else "?"
-    return f"{url}{sep}token={_q(token)}"
+    # Reconstruct query string with the new token
+    # We append to the original list to preserve order and duplicate keys if any
+    new_qs = qs_pairs + [("token", token)]
+    new_query = urlencode(new_qs, doseq=True)
+    
+    return urlunparse(parsed._replace(query=new_query))
 
 
 def get_arcgis_write_token(force_refresh: bool = False) -> str:
@@ -430,16 +440,21 @@ def _looks_like_url(u: str) -> bool:
 def _strip_token_param(url: str) -> str:
     """
     Return the URL with any 'token' query parameter removed.
-    Keeps all other params intact. Used so cached data_locations
-    never store tokens, and only live requests carry tokens.
+    Uses URL parsing instead of regex to prevent mangling token characters (e.g., q to 0).
     """
-    if not isinstance(url, str) or "token=" not in url:
+    if not isinstance(url, str) or "token=" not in url.lower():
         return url
     try:
         parsed = urlparse(url)
         qs = parse_qsl(parsed.query, keep_blank_values=True)
-        qs = [(k, v) for (k, v) in qs if k.lower() != "token"]
-        new_query = urlencode(qs, doseq=True)
+        # Filter out the token regardless of case
+        filtered_qs = [(k, v) for (k, v) in qs if k.lower() != "token"]
+        
+        # If lengths match, no token was actually found in the key position
+        if len(qs) == len(filtered_qs):
+            return url
+            
+        new_query = urlencode(filtered_qs, doseq=True)
         return urlunparse(parsed._replace(query=new_query))
     except Exception:
         return url
@@ -447,25 +462,23 @@ def _strip_token_param(url: str) -> str:
 
 def _attach_token_in_entry(entry: str) -> str:
     """
-    Given an entry like 'Label: URL[\\nextra...]', append a token to the URL part
-    while leaving the label and any extra lines unchanged.
+    Safely injects a token into a data location entry string.
+    Splits by line to ensure only the URL portion is modified.
     """
     try:
-        first_newline = entry.find("\n")
-        if first_newline == -1:
-            first_line = entry
-            rest = ""
-        else:
-            first_line = entry[:first_newline]
-            rest = entry[first_newline:]
-
+        lines = entry.splitlines()
+        if not lines:
+            return entry
+            
+        first_line = lines[0]
         if ": " not in first_line:
             return entry
 
-        prefix, url = first_line.split(": ", 1)
-        url = url.strip()
-        url_with_token = _append_token_to_url(url)
-        return f"{prefix}: {url_with_token}{rest}"
+        prefix, url_part = first_line.split(": ", 1)
+        url_with_token = _append_token_to_url(url_part.strip())
+        
+        lines[0] = f"{prefix}: {url_with_token}"
+        return "\n".join(lines)
     except Exception:
         return entry
 
@@ -671,16 +684,15 @@ def get_project_urls(project_name):
 
 
 def _sanitise_layer_url(url: str) -> str:
-    logger.debug(f"Sanitising URL: {url}")
-    if not isinstance(url, str) or not url.strip():
-        logger.error("URL provided for sanitisation is empty or not a string.")
-        raise ValueError("URL must be a non-empty string")
-
-    if not _looks_like_url(url):
-        raise ValueError(f"Suspicious URL (trailing punctuation or malformed): {url}")
-
-    u = url.strip().rstrip("/")
-    u = re.sub(r"/query$", "", u, flags=re.IGNORECASE)
+    """
+    Clean ArcGIS URLs. Updated to handle URLs that might already have 
+    query parameters or tokens attached before being passed here.
+    """
+    # Remove query string before regexing the path
+    base_part = url.split('?')[0].strip().rstrip("/")
+    
+    # Remove /query if present
+    u = re.sub(r"/query$", "", base_part, flags=re.IGNORECASE)
 
     m = re.search(
         r"(.*?/(?:FeatureServer|MapServer))(?:/(\d+))?$",
@@ -692,12 +704,7 @@ def _sanitise_layer_url(url: str) -> str:
         raise ValueError(f"Not a valid ArcGIS service URL: {url}")
 
     base, layer = m.groups()
-    if layer is None:
-        layer = "0"
-
-    result = f"{base}/{layer}"
-    logger.debug(f"Sanitised result: {result}")
-    return result
+    return f"{base}/{layer if layer is not None else '0'}"
 
 
 def _get_layer_max_record_count(layer_url: str, timeout: int = 20) -> int:
