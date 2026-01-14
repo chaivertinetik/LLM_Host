@@ -1140,7 +1140,8 @@ def get_forestry_agent(user_input: str, bbox_dict: dict, task_name: str, llm):
         ),
         StructuredTool.from_function(
             name="GeneralGeospatialExpert",
-            func=lambda query: geospatial_helper(str(query)),
+            # func=lambda query: geospatial_helper(str(query)),
+            func=lambda **kwargs: geospatial_helper(str(kwargs.get("tool_input", ""))),
             description="Use for questions about pests, diseases, or forestry advice.",
             args_schema=ToolInput
         )
