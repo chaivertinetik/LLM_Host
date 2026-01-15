@@ -34,10 +34,11 @@ uvicorn
 pydantic
 black
 autopep8
-langchain
+langgraph
 langchainhub
 langchain-core
 langchain-google-genai
+google-generativeai
 langchain-community
 earthengine-api
 sentence-transformers
@@ -46,7 +47,7 @@ statsmodels
 httpx[http2]
 google-cloud-aiplatform
 google-cloud-tasks>=2.16.0
-google-generativeai
+
 
 
 

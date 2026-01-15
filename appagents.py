@@ -16,12 +16,12 @@ import langchain
 import langchainhub as hub
 from google.oauth2 import service_account
 from sentence_transformers import util
-from langchain_core.tools import Tool
-# from langchain_core.tools import StructuredTool
-from langchain.agents import AgentExecutor, create_react_agent
+from langchain_core.tools import tool
+
+from langgraph.prebuilt import create_react_agent
 from langchain_core.language_models import LLM
 from langchain_google_genai import ChatGoogleGenerativeAI
-# from langchain.tools import StructuredTool
+
 from typing import List, Optional, Any, Tuple
 from pydantic import PrivateAttr, BaseModel, Field 
 from vertexai.generative_models import GenerativeModel
@@ -849,12 +849,6 @@ def long_running_task(user_task: str, task_name: str, data_locations: list):
 #                     Simulated tools
 # ============================================================
 
-
-# def get_geospatial_context_tool(coords: str) -> str:
-#    lat, lon = map(float, coords.split(","))
-#    context = get_geospatial_context(lat, lon)
-#    return json.dumps(context)
-
 def get_geospatial_context_tool(bbox, project_name: str) -> dict:
     # bbox is now an ee.Geometry object, not a dict
     if bbox is None:
@@ -1002,53 +996,6 @@ def interpret_esa_code(code):
     mapping = {10: "Trees", 20: "Shrubland", 30: "Grassland", 40: "Cropland", 50: "Built-up", 60: "Bare/Sparse", 70: "Snow/Ice", 80: "Water", 90: "Wetland", 95: "Mangroves", 100: "Moss/Lichen"}
     return mapping.get(code, "Unknown")
 
-
-# ============================================================
-#        Initialize agent with tools and LangChain LLM
-# ============================================================
-
-# def sanitize_input(q):
-#     """Ensures the agent input is a string, even if the LLM sends a list."""
-#     if isinstance(q, list):
-#         return str(q[0]) if q else ""
-#     return str(q)
-
-# def get_forestry_agent(bbox:dict, task_name: str, llm):
-#     tools = [
-#     Tool(
-#         name="ZoningLookup",
-#         func=lambda q: get_zoning_info(bbox=bbox, project_name=task_name),
-#         description="Use this ONLY for zoning-related land cover and forest loss info as a proxy to guide tree planting recommendations. Not for general advice.",
-#     ),
-#     Tool(
-#         name="ClimateLookUp",
-#         func=lambda q: get_climate_info(bbox=bbox, project_name=task_name),
-#         description="Returns precipitation, temperature, vegetation health (NDVI), flood risk, and sea level rise estimates for forestry planning.",
-#     ),
-#     Tool(
-#         name="CheckTreeHealth",
-#         func=lambda q: check_tree_health(bbox=bbox, project_name=task_name),
-#         description="Assess how healthy the trees are using the canopy cover and soil.",
-#     ),
-#     Tool(
-#         name="SoilSuitabilityCheck",
-#         func=lambda q: check_soil_suitability(bbox=bbox, project_name=task_name),
-#         description="Analyzes soil moisture, elevation, and land cover to evaluate suitability for native tree species planting.",
-#     ),
-#     Tool(
-#         name="TreeBenefitAssessment",
-#         func=lambda q: assess_tree_benefit(bbox=bbox, project_name=task_name),
-#         description="Estimates carbon capture potential and cooling benefits based on NDVI, precipitation, and land cover data.",
-#     ),
-#     Tool(
-#                 name="GeneralGeospatialExpert",
-#                 func=lambda q: geospatial_helper(sanitize_input(q)), 
-#                 description="Use this for general geospatial or forestry questions, like tree removal, pests, diseases, or best practices. Use this when the user asks 'how' or 'why' rather than 'what is the data'.",
-#             )
-#     ]
-
-#     return create_react_agent(llm,tools)
-
 def cosine_similarity(a, b):
    return np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b))
 
@@ -1075,26 +1022,6 @@ def retrieve_rag_chunks(collection_name, query, top_k=5):
    top_contents = [chunk["content"] for _, chunk in scored_chunks[:top_k]]
    return top_contents
 
-
-def prompt_template(query: str, context: str, format_instructions: str) -> str:
-   prompt = (
-       "Use the following forestry data extracted from documents:\n"
-       f"{context}\n\n"
-       "Answer the query with geospatial reasoning:\n"
-       f"{query}\n\n"
-       f"{format_instructions}\n"
-       "Return only valid JSON."
-   )
-   return prompt
-
-
-def sanitize_input(q):
-    """Shields the tool from list/object inputs by forcing a string return."""
-    if isinstance(q, list):
-        return str(q[0]) if q else ""
-    return str(q)
-
-
 def get_forestry_agent(user_input: str, bbox_dict: dict, task_name: str, llm):
     # Create the GEE Geometry once
     bbox_geom = ee.Geometry.Rectangle(
@@ -1103,67 +1030,65 @@ def get_forestry_agent(user_input: str, bbox_dict: dict, task_name: str, llm):
         geodesic=False, evenOdd=True 
     )
 
+    @tool
+    def zoning_lookup(query: str):
+        """Use for zoning, land cover, and forest loss info."""        
+        return get_zoning_info(bbox=bbox_geom, project_name=task_name)
+       
+
+    @tool
+    def climate_lookup(query:str):
+        """Returns precipitation, temperature, and flood risk."""
+        return get_climate_info(bbox=bbox_geom, project_name=task_name)
+        
+        
     
-    tools = [
-        Tool(
-            name="ZoningLookup",
-            func=lambda x: get_zoning_info(bbox=bbox_geom, project_name=task_name),
-            description="Use for zoning, land cover, and forest loss info."
-            
-        ),
-        Tool(
-            name="ClimateLookUp",
-            func=lambda x: get_climate_info(bbox=bbox_geom, project_name=task_name),
-            description="Returns precipitation, temperature, and flood risk."
-            
-        ),
-        Tool(
-            name="CheckTreeHealth",
-            func=lambda x: check_tree_health(bbox=bbox_geom, project_name=task_name),
-            description="Assess tree health using canopy cover."
-            
-        ),
-        Tool(
-            name="SoilSuitabilityCheck",
-            func=lambda x: check_soil_suitability(bbox=bbox_geom, project_name=task_name),
-            description="Analyzes soil and land cover suitability."
-            
-        ),
-        Tool(
-            name="TreeBenefitAssessment",
-            func=lambda x: assess_tree_benefit(bbox=bbox_geom, project_name=task_name),
-            description="Estimates carbon and cooling benefits."
-            
-        ),
-        Tool(
-            name="GeneralGeospatialExpert",
-            # func=lambda query: geospatial_helper(str(query)),
-            func=lambda x: geospatial_helper(str(x)),
-            description="Use for questions about pests, diseases, or forestry advice."
-            
-        )
-    ]
-    prompt = hub.pull("hwchase17/react")
-    agent = create_react_agent(llm, tools, prompt)
+    @tool
+    def treehealth_lookup(query: str):
+        """Assess tree health using canopy cover."""
+        return check_tree_health(bbox=bbox_geom, project_name=task_name)
+       
+        
     
-    agent_executor = AgentExecutor(
-        agent=agent, 
-        tools=tools, 
-        verbose=True, 
-        handle_parsing_errors=True # THIS KILLS THE .LOWER() ERROR
-    )
+    @tool
+    def soil_lookup(query:str):
+        """Analyzes soil and land cover suitability."""
+        return check_soil_suitability(bbox=bbox_geom, project_name=task_name)
+        
+        
     
-    result = agent_executor.invoke({"input": user_input})
-    return result.get("output", "I'm sorry, I couldn't process that.")
+    @tool
+    def treebenefit_lookup(query:str):
+        """Estimates carbon and cooling benefits."""
+        return assess_tree_benefit(bbox=bbox_geom, project_name=task_name)
+        
+        
+    
+    @tool
+    def geospatial_expert(query: str):
+        """Use for questions about pests, diseases, or forestry advice."""
+        # func=lambda query: geospatial_helper(str(query)),
+        return geospatial_helper(str(query))
+        
+        
+    
+    
+    tools = [zoning_lookup, climate_lookup, treehealth_lookup, soil_lookup, treebenefit_lookup, geospatial_expert]
+    agent = create_react_agent(llm, tools)
+
+    try:
+        inputs = {"messages": [("user", user_input)]}
+        result = agent.invoke(inputs)
+        
+        # The result is a dict with a 'messages' list. The last one is the AI answer.
+        final_message = result["messages"][-1]
+        return final_message.content
+
+    except Exception as e:
+        print(f"LangGraph Execution Error: {e}")
+        return f"I encountered an error: {str(e)}"
 
 
-
-
-#this should happen internally now! 
-# agent = create_react_agent(
-#    model=llm.bind_tools(tools),
-#    tools=tools,
-# )
 
 
 
