@@ -61,6 +61,11 @@ additional_data_locations:
       aoifilter: true
       priority: 10
 
+    - label: "National Tree Map Tree Crowns - National Tree Crowns for Cardiff Council presenting trees from the National Tree Map dataset."
+      url: "https://services-eu1.arcgis.com/8uHkpVrXUjYCyrO4/arcgis/rest/services/TreeCrowns_TrialNTM/FeatureServer/0"
+      aoifilter: true
+      priority: 10
+
     - label: "Roads - National road and street network to be used as the source of road datasets."
       url: "https://services.arcgis.com/qHLhLQrcvEnxjtPr/arcgis/rest/services/OS_OpenRoads/FeatureServer/1"
       aoifilter: true
