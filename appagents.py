@@ -1067,7 +1067,7 @@ def get_forestry_agent(user_input: str, bbox_dict: dict, task_name: str, llm):
     @tool
     def geospatial_expert(query: str):
         """Use for questions about pests, diseases, or forestry advice."""
-        # func=lambda query: geospatial_helper(str(query)),
+        
         return geospatial_helper(str(query))
         
         
