@@ -13,7 +13,7 @@ import textwrap
 import ee
 import numpy as np
 import langchain
-from langchain import hub
+import langchainhub as hub
 from google.oauth2 import service_account
 from sentence_transformers import util
 from langchain_core.tools import Tool

@@ -35,6 +35,7 @@ pydantic
 black
 autopep8
 langchain
+langchainhub
 langchain-core
 langchain-google-genai
 langchain-community
@@ -46,6 +47,7 @@ httpx[http2]
 google-cloud-aiplatform
 google-cloud-tasks>=2.16.0
 google-generativeai
+
 
 
 
