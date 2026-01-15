@@ -12,14 +12,12 @@ import ast
 import textwrap
 import ee
 import numpy as np
-import langchainhub as hub
 from google.oauth2 import service_account
 from sentence_transformers import util
 from langchain_core.tools import tool
-from langchain.agents import create_agent, AgentExecutor
+from langgraph.prebuilt import create_react_agent
 from langchain_core.language_models import LLM
 from langchain_google_genai import ChatGoogleGenerativeAI
-
 from typing import List, Optional, Any, Tuple
 from pydantic import PrivateAttr, BaseModel, Field 
 from vertexai.generative_models import GenerativeModel
@@ -1030,13 +1028,17 @@ def get_forestry_agent(user_input: str, bbox_dict: dict, task_name: str, llm):
 
     @tool
     def zoning_lookup(query: str):
-        """Use for zoning, land cover, and forest loss info."""        
+        """Use for zoning, land cover, and forest loss info."""
+        if isinstance(project_name, list):
+            project_name = project_name[0] if project_name else "default"        
         return get_zoning_info(bbox=bbox_geom, project_name=task_name)
        
 
     @tool
     def climate_lookup(query:str):
         """Returns precipitation, temperature, and flood risk."""
+        if isinstance(project_name, list):
+            project_name = project_name[0] if project_name else "default"
         return get_climate_info(bbox=bbox_geom, project_name=task_name)
         
         
@@ -1044,6 +1046,8 @@ def get_forestry_agent(user_input: str, bbox_dict: dict, task_name: str, llm):
     @tool
     def treehealth_lookup(query: str):
         """Assess tree health using canopy cover."""
+        if isinstance(project_name, list):
+            project_name = project_name[0] if project_name else "default"
         return check_tree_health(bbox=bbox_geom, project_name=task_name)
        
         
@@ -1051,6 +1055,8 @@ def get_forestry_agent(user_input: str, bbox_dict: dict, task_name: str, llm):
     @tool
     def soil_lookup(query:str):
         """Analyzes soil and land cover suitability."""
+        if isinstance(project_name, list):
+            project_name = project_name[0] if project_name else "default"
         return check_soil_suitability(bbox=bbox_geom, project_name=task_name)
         
         
@@ -1058,6 +1064,8 @@ def get_forestry_agent(user_input: str, bbox_dict: dict, task_name: str, llm):
     @tool
     def treebenefit_lookup(query:str):
         """Estimates carbon and cooling benefits."""
+        if isinstance(project_name, list):
+            project_name = project_name[0] if project_name else "default"
         return assess_tree_benefit(bbox=bbox_geom, project_name=task_name)
         
         
@@ -1065,7 +1073,6 @@ def get_forestry_agent(user_input: str, bbox_dict: dict, task_name: str, llm):
     @tool
     def geospatial_expert(query: str):
         """Use for questions about pests, diseases, or forestry advice."""
-        
         return geospatial_helper(str(query))
         
         
@@ -1073,19 +1080,17 @@ def get_forestry_agent(user_input: str, bbox_dict: dict, task_name: str, llm):
     
     tools = [zoning_lookup, climate_lookup, treehealth_lookup, soil_lookup, treebenefit_lookup, geospatial_expert]
     
-    agent = create_agent(llm, tools)
-    agent_executor = AgentExecutor(
-        agent=agent, 
-        tools=tools, 
-        verbose=True,
-        # This is CRITICAL for the Gemini list bug:
-        handle_parsing_errors=True 
-    )
-
+    agent_executor = create_react_agent(llm, tools)
     try:
-        # Pass the input in the standard messages format
-        result = agent_executor.invoke({"input": user_input})
-        return result.get("output", "Done.")
+        # LangGraph agents use a different invocation pattern
+        result = agent_executor.invoke({"messages": [("user", user_input)]})
+        
+        # Extract the final message
+        if result and "messages" in result:
+            final_message = result["messages"][-1]
+            return final_message.content if hasattr(final_message, 'content') else str(final_message)
+        
+        return "Done."
     except Exception as e:
         print(f"Final Agent Error: {e}")
         return str(e)
