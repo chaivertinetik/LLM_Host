@@ -1163,9 +1163,17 @@ def get_forestry_agent(user_input: str, bbox_dict: dict, task_name: str, llm):
             # Check if the tool actually exists before calling it
             if tool_name in tool_map:
                 selected_tool = tool_map[tool_name]
+                args = tool_call["args"]
                 
+                # If the LLM sent a list (the cause of the .lower() error)
+                if isinstance(args, list):
+                    args = args[0] if len(args) > 0 else {}
+                    
                 # Execute and get result
-                tool_output = selected_tool.invoke(tool_call["args"])
+                try:
+                    tool_output = selected_tool.invoke(args)
+                except Exception as e:
+                    tool_output = f"Tool execution error: {str(e)}"
                 
                 # Add result to history
                 messages.append(ToolMessage(

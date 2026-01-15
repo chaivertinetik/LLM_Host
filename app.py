@@ -282,7 +282,7 @@ async def process_request(request_data: RequestData):
         except Exception as e: 
             print(f"Agent Reasoning Error: {e}")
             # Fallback to the old simple helper if the agent fails
-            content = geospatial_helper(user_task)
+            content = geospatial_helper(str(user_task))
     
 
     # GIS operation required -> queue (optional) with inline fallback
