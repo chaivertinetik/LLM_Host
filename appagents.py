@@ -12,7 +12,6 @@ import ast
 import textwrap
 import ee
 import numpy as np
-import langchain
 import langchainhub as hub
 from google.oauth2 import service_account
 from sentence_transformers import util
