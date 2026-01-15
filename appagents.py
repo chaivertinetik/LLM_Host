@@ -16,8 +16,7 @@ import langchainhub as hub
 from google.oauth2 import service_account
 from sentence_transformers import util
 from langchain_core.tools import tool
-
-from langgraph.prebuilt import create_react_agent
+from langchain.agents import create_agent, AgentExecutor
 from langchain_core.language_models import LLM
 from langchain_google_genai import ChatGoogleGenerativeAI
 
@@ -1073,19 +1072,23 @@ def get_forestry_agent(user_input: str, bbox_dict: dict, task_name: str, llm):
     
     
     tools = [zoning_lookup, climate_lookup, treehealth_lookup, soil_lookup, treebenefit_lookup, geospatial_expert]
-    agent = create_react_agent(llm, tools)
+    
+    agent = create_agent(llm, tools)
+    agent_executor = AgentExecutor(
+        agent=agent, 
+        tools=tools, 
+        verbose=True,
+        # This is CRITICAL for the Gemini list bug:
+        handle_parsing_errors=True 
+    )
 
     try:
-        inputs = {"messages": [("user", user_input)]}
-        result = agent.invoke(inputs)
-        
-        # The result is a dict with a 'messages' list. The last one is the AI answer.
-        final_message = result["messages"][-1]
-        return final_message.content
-
+        # Pass the input in the standard messages format
+        result = agent_executor.invoke({"input": user_input})
+        return result.get("output", "Done.")
     except Exception as e:
-        print(f"LangGraph Execution Error: {e}")
-        return f"I encountered an error: {str(e)}"
+        print(f"Final Agent Error: {e}")
+        return str(e)
 
 
 

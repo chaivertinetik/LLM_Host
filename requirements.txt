@@ -34,6 +34,7 @@ uvicorn
 pydantic
 black
 autopep8
+langchain>=1.0.0
 langgraph
 langchainhub
 langchain-core
