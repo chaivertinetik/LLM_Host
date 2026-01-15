@@ -13,15 +13,14 @@ import textwrap
 import ee
 import numpy as np
 import langchain
+from langchain import hub
 from google.oauth2 import service_account
 from sentence_transformers import util
 from langchain_core.tools import Tool
-from langchain_core.tools import StructuredTool
-from langgraph.prebuilt import create_react_agent
+# from langchain_core.tools import StructuredTool
+from langchain.agents import AgentExecutor, create_react_agent
 from langchain_core.language_models import LLM
-from langchain_core.messages import AIMessage
 from langchain_google_genai import ChatGoogleGenerativeAI
-from langchain_core.messages import HumanMessage, ToolMessage
 # from langchain.tools import StructuredTool
 from typing import List, Optional, Any, Tuple
 from pydantic import PrivateAttr, BaseModel, Field 
@@ -1095,8 +1094,6 @@ def sanitize_input(q):
         return str(q[0]) if q else ""
     return str(q)
 
-class ToolInput(BaseModel):
-    tool_input: str = Field(description="The query or input string")
 
 def get_forestry_agent(user_input: str, bbox_dict: dict, task_name: str, llm):
     # Create the GEE Geometry once
@@ -1106,92 +1103,58 @@ def get_forestry_agent(user_input: str, bbox_dict: dict, task_name: str, llm):
         geodesic=False, evenOdd=True 
     )
 
-    # 2. Define tools using StructuredTool to force string validation
+    
     tools = [
-        StructuredTool.from_function(
+        Tool(
             name="ZoningLookup",
-            func=lambda **kwargs: get_zoning_info(bbox=bbox_geom, project_name=task_name),
-            description="Use for zoning, land cover, and forest loss info.",
-            args_schema=ToolInput
+            func=lambda x: get_zoning_info(bbox=bbox_geom, project_name=task_name),
+            description="Use for zoning, land cover, and forest loss info."
+            
         ),
-        StructuredTool.from_function(
+        Tool(
             name="ClimateLookUp",
-            func=lambda **kwargs: get_climate_info(bbox=bbox_geom, project_name=task_name),
-            description="Returns precipitation, temperature, and flood risk.",
-            args_schema=ToolInput
+            func=lambda x: get_climate_info(bbox=bbox_geom, project_name=task_name),
+            description="Returns precipitation, temperature, and flood risk."
+            
         ),
-        StructuredTool.from_function(
+        Tool(
             name="CheckTreeHealth",
-            func=lambda **kwargs: check_tree_health(bbox=bbox_geom, project_name=task_name),
-            description="Assess tree health using canopy cover.",
-            args_schema=ToolInput
+            func=lambda x: check_tree_health(bbox=bbox_geom, project_name=task_name),
+            description="Assess tree health using canopy cover."
+            
         ),
-        StructuredTool.from_function(
+        Tool(
             name="SoilSuitabilityCheck",
-            func=lambda **kwargs: check_soil_suitability(bbox=bbox_geom, project_name=task_name),
-            description="Analyzes soil and land cover suitability.",
-            args_schema=ToolInput
+            func=lambda x: check_soil_suitability(bbox=bbox_geom, project_name=task_name),
+            description="Analyzes soil and land cover suitability."
+            
         ),
-        StructuredTool.from_function(
+        Tool(
             name="TreeBenefitAssessment",
-            func=lambda **kwargs: assess_tree_benefit(bbox=bbox_geom, project_name=task_name),
-            description="Estimates carbon and cooling benefits.",
-            args_schema=ToolInput
+            func=lambda x: assess_tree_benefit(bbox=bbox_geom, project_name=task_name),
+            description="Estimates carbon and cooling benefits."
+            
         ),
-        StructuredTool.from_function(
+        Tool(
             name="GeneralGeospatialExpert",
             # func=lambda query: geospatial_helper(str(query)),
-            func=lambda **kwargs: geospatial_helper(str(kwargs.get("tool_input", ""))),
-            description="Use for questions about pests, diseases, or forestry advice.",
-            args_schema=ToolInput
+            func=lambda x: geospatial_helper(str(x)),
+            description="Use for questions about pests, diseases, or forestry advice."
+            
         )
     ]
-
+    prompt = hub.pull("hwchase17/react")
+    agent = create_react_agent(llm, tools, prompt)
     
-    llm_with_tools = llm.bind_tools(tools)
-    messages = [HumanMessage(content=user_input)]
-    ai_msg = llm_with_tools.invoke(messages)
-    messages.append(ai_msg)
-
-    if ai_msg.tool_calls:
-        # Create a dynamic lookup for all tools in your list
-        tool_map = {tool.name: tool for tool in tools}
-        
-        for tool_call in ai_msg.tool_calls:
-            tool_name = tool_call["name"]
-            
-            # Check if the tool actually exists before calling it
-            if tool_name in tool_map:
-                selected_tool = tool_map[tool_name]
-                args = tool_call["args"]
-                
-                # If the LLM sent a list (the cause of the .lower() error)
-                if isinstance(args, list):
-                    args = args[0] if len(args) > 0 else {}
-                    
-                # Execute and get result
-                try:
-                    tool_output = selected_tool.invoke(args)
-                except Exception as e:
-                    tool_output = f"Tool execution error: {str(e)}"
-                
-                # Add result to history
-                messages.append(ToolMessage(
-                    content=str(tool_output), 
-                    tool_call_id=tool_call["id"]
-                ))
-            else:
-                # If the LLM hallucinated a tool name, tell it!
-                messages.append(ToolMessage(
-                    content=f"Error: Tool '{tool_name}' not found.", 
-                    tool_call_id=tool_call["id"]
-                ))
-        
-        # Final call: LLM generates response based on tool data
-        final_response = llm_with_tools.invoke(messages)
-        return final_response.content
+    agent_executor = AgentExecutor(
+        agent=agent, 
+        tools=tools, 
+        verbose=True, 
+        handle_parsing_errors=True # THIS KILLS THE .LOWER() ERROR
+    )
     
-    return ai_msg.content
+    result = agent_executor.invoke({"input": user_input})
+    return result.get("output", "I'm sorry, I couldn't process that.")
 
 
 
