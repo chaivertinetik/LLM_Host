@@ -1039,11 +1039,21 @@ def retrieve_rag_chunks(collection_name, query, top_k=5):
 
 def get_forestry_agent(user_input: str, bbox_dict: dict, task_name: str, llm):
     # Create the GEE Geometry once
+    print(f"[BBOX_DICT] {bbox_dict}")
+    coords = [
+        float(bbox_dict['xmin']), 
+        float(bbox_dict['ymin']), 
+        float(bbox_dict['xmax']), 
+        float(bbox_dict['ymax'])
+    ]
+    print(f"[COORDS] {coords}")
+
     bbox_geom = ee.Geometry.Rectangle(
         coords=[bbox_dict['xmin'], bbox_dict['ymin'], bbox_dict['xmax'], bbox_dict['ymax']],
         proj=f'EPSG:{bbox_dict.get("wkid", 4326)}', 
         geodesic=False, evenOdd=True 
     )
+    print(f"[BBOX_GEOM] Type: {type(bbox_geom)}")
 
     if isinstance(task_name, list):
         task_name = task_name[0] if task_name else "default"
@@ -1052,21 +1062,29 @@ def get_forestry_agent(user_input: str, bbox_dict: dict, task_name: str, llm):
 
     # Create wrapper functions that capture bbox_geom and task_name
     def zoning_wrapper(query: str = ""):
+        print(f"[ZONING_WRAPPER] Called with query: {query}")
+
         return get_zoning_info(bbox=bbox_geom, project_name=task_name)
     
     def climate_wrapper(query: str = ""):
+        print(f"[CLIMATE_WRAPPER] Called with query: {query}")
         return get_climate_info(bbox=bbox_geom, project_name=task_name)
     
     def treehealth_wrapper(query: str = ""):
+        print(f"[TREEHEALTH_WRAPPER] Called with query: {query}")
         return check_tree_health(bbox=bbox_geom, project_name=task_name)
     
     def soil_wrapper(query: str = ""):
+        print(f"[SOIL_WRAPPER] Called with query: {query}")
         return check_soil_suitability(bbox=bbox_geom, project_name=task_name)
     
     def treebenefit_wrapper(query: str = ""):
+        print(f"[TREEBENEFIT_WRAPPER] Called with query: {query}")
+
         return assess_tree_benefit(bbox=bbox_geom, project_name=task_name)
     
     def geospatial_wrapper(query: str):
+        print(f"[GEOSPATIAL_WRAPPER] Called with query: {query}")
         return geospatial_helper(str(query))
     
     tools = [
@@ -1111,7 +1129,7 @@ def get_forestry_agent(user_input: str, bbox_dict: dict, task_name: str, llm):
     print("Agent executor created with tools.")
     
     try:
-        
+        print(f"[AGENT INVOKE] Calling agent with {user_input}")
         response = agent_executor.invoke({
             "messages": [{"role": "user", "content": user_input}]
         })
