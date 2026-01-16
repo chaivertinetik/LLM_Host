@@ -1039,35 +1039,54 @@ def get_forestry_agent(user_input: str, bbox_dict: dict, task_name: str, llm):
     task_name = str(task_name)
     print("task_name:", task_name)
 
+    # Create wrapper functions that capture bbox_geom and task_name
+    def zoning_wrapper(query: str = ""):
+        return get_zoning_info(bbox=bbox_geom, project_name=task_name)
+    
+    def climate_wrapper(query: str = ""):
+        return get_climate_info(bbox=bbox_geom, project_name=task_name)
+    
+    def treehealth_wrapper(query: str = ""):
+        return check_tree_health(bbox=bbox_geom, project_name=task_name)
+    
+    def soil_wrapper(query: str = ""):
+        return check_soil_suitability(bbox=bbox_geom, project_name=task_name)
+    
+    def treebenefit_wrapper(query: str = ""):
+        return assess_tree_benefit(bbox=bbox_geom, project_name=task_name)
+    
+    def geospatial_wrapper(query: str):
+        return geospatial_helper(str(query))
+    
     tools = [
         Tool(
             name="ZoningLookup", 
-            func=partial(get_zoning_info, bbox=bbox_geom, project_name=task_name),
+            func=zoning_wrapper,
             description="Provides zoning-related land cover and forest loss info as proxy to guide tree planting recommendations."
         ),
         Tool(
             name="ClimateLookUp", 
-            func=partial(get_climate_info, bbox=bbox_geom, project_name=task_name),
+            func=climate_wrapper,
             description="Returns precipitation, temperature, vegetation health (NDVI), flood risk, and sea level rise estimates for forestry planning."
         ),
         Tool(
             name="CheckTreeHealth", 
-            func=partial(check_tree_health, bbox=bbox_geom, project_name=task_name),
+            func=treehealth_wrapper, 
             description="Assess how healthy the trees are using the canopy cover and soil."
         ),
         Tool(
             name="SoilSuitabilityCheck",
-            func=partial(check_soil_suitability, bbox=bbox_geom, project_name=task_name),
+            func=soil_wrapper, 
             description="Analyzes soil moisture, elevation, and land cover to evaluate suitability for native tree species planting."
         ), 
         Tool(
             name="TreeBenefitAssessment", 
-            func=partial(assess_tree_benefit, bbox=bbox_geom, project_name=task_name),
+            func=treebenefit_wrapper, 
             description="Estimates carbon capture potential and cooling benefits based on NDVI, precipitation, and land cover data."
         ),
         Tool(
             name="GeospatialExpert",
-            func=geospatial_helper,
+            func=geospatial_wrapper,
             description="Use for questions about pests, diseases, or forestry advice."
         )
     ]
