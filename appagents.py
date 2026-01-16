@@ -12,9 +12,10 @@ import ast
 import textwrap
 import ee
 import numpy as np
+
 from google.oauth2 import service_account
 from sentence_transformers import util
-from langchain_core.tools import tool
+from langchain_core.tools import Tool
 from langgraph.prebuilt import create_react_agent
 from langchain_core.language_models import LLM
 from langchain_google_genai import ChatGoogleGenerativeAI
@@ -27,7 +28,7 @@ from appbackend import get_project_coords
 from LLM_Heroku_Kernel import Solution
 from google import genai
 from google.genai import types
-from functools import wraps
+from functools import wraps, partial
 
 import hashlib
 import io
@@ -284,6 +285,7 @@ def cache_load_helper(prompt: str):
 
 
 def geospatial_helper(prompt: str):
+   print("DEBUG: geospatial_helper running")
    geospatial_prompt = (
        f"The user is asking about geospatial or forestry information: {prompt}. "
        f"Answer their query in simple terms (two or three lines max) as a GIS expert in a simple friendly way. "
@@ -855,6 +857,7 @@ def get_geospatial_context_tool(bbox, project_name: str) -> dict:
     return context
 
 def get_zoning_info(bbox, project_name: str) -> str:
+   print(f"[DEBUG get_zoning_info] project_name type: {type(project_name)}, value: {project_name}")
    # Ensure context tool handles the new MODIS 061 version internally
    context = get_geospatial_context_tool(bbox, project_name)
    
@@ -870,6 +873,7 @@ def get_zoning_info(bbox, project_name: str) -> str:
    return zoning_msg
 
 def get_climate_info(bbox, project_name: str) -> str:
+   print(f"[DEBUG get_climate_info] project_name type: {type(project_name)}, value: {project_name}")
    context = get_geospatial_context_tool(bbox, project_name)
 
    precip = context.get("Precipitation (mm)", 0)
@@ -888,6 +892,7 @@ def get_climate_info(bbox, project_name: str) -> str:
    )
 
 def check_tree_health(bbox, project_name: str) -> dict:
+   print(f"[DEBUG check_tree_health] project_name type: {type(project_name)}, value: {project_name}")
    context = get_geospatial_context_tool(bbox, project_name)
    
    ndvi = context.get("NDVI (mean)", 0)
@@ -906,6 +911,7 @@ def check_tree_health(bbox, project_name: str) -> dict:
    }
 
 def check_soil_suitability(bbox, project_name: str) -> str:
+   print(f"[DEBUG check_soil_suitability] project_name type: {type(project_name)}, value: {project_name}")
    context = get_geospatial_context_tool(bbox, project_name)
 
    soil_moisture = context.get("Soil Moisture (m3/m3)", 0)
@@ -926,6 +932,7 @@ def check_soil_suitability(bbox, project_name: str) -> str:
 
 
 def assess_tree_benefit(bbox, project_name: str) -> dict:
+   print(f"[DEBUG check_soil_suitability] project_name type: {type(project_name)}, value: {project_name}")
    # 'bbox' is now the ee.Geometry object passed from the shield
    geo = get_geospatial_context_tool(bbox, project_name)
    
@@ -948,6 +955,7 @@ def assess_tree_benefit(bbox, project_name: str) -> dict:
    }
 
 def get_geospatial_context(geometry, location_label: str):
+    print("[DEBUG get_geospatial_context: running] ")
     # geometry is already an ee.Geometry.Rectangle passed from the shield
     center_point = geometry.centroid(maxError=1)
 
@@ -1029,55 +1037,48 @@ def get_forestry_agent(user_input: str, bbox_dict: dict, task_name: str, llm):
     if isinstance(task_name, list):
         task_name = task_name[0] if task_name else "default"
     task_name = str(task_name)
-    
-    @tool
-    def zoning_lookup(query: str):
-        """Use for zoning, land cover, and forest loss info."""
-               
-        return get_zoning_info(bbox=bbox_geom, project_name=task_name)
-       
+    print("task_name:", task_name)
 
-    @tool
-    def climate_lookup(query:str):
-        """Returns precipitation, temperature, and flood risk."""
+    tools = [
+        Tool(
+            name="ZoningLookup", 
+            func=partial(get_zoning_info, bbox=bbox_geom, project_name=task_name),
+            description="Provides zoning-related land cover and forest loss info as proxy to guide tree planting recommendations."
+        ),
+        Tool(
+            name="ClimateLookUp", 
+            func=partial(get_climate_info, bbox=bbox_geom, project_name=task_name),
+            description="Returns precipitation, temperature, vegetation health (NDVI), flood risk, and sea level rise estimates for forestry planning."
+        ),
+        Tool(
+            name="CheckTreeHealth", 
+            func=partial(check_tree_health, bbox=bbox_geom, project_name=task_name),
+            description="Assess how healthy the trees are using the canopy cover and soil."
+        ),
+        Tool(
+            name="SoilSuitabilityCheck",
+            func=partial(check_soil_suitability, bbox=bbox_geom, project_name=task_name),
+            description="Analyzes soil moisture, elevation, and land cover to evaluate suitability for native tree species planting."
+        ), 
+        Tool(
+            name="TreeBenefitAssessment", 
+            func=partial(assess_tree_benefit, bbox=bbox_geom, project_name=task_name),
+            description="Estimates carbon capture potential and cooling benefits based on NDVI, precipitation, and land cover data."
+        ),
+        Tool(
+            name="GeospatialExpert",
+            func=geospatial_helper,
+            description="Use for questions about pests, diseases, or forestry advice."
+        )
+    ]
         
-        return get_climate_info(bbox=bbox_geom, project_name=task_name)
-        
-        
+    agent = create_react_agent(
+        model=llm.bind_tools(tools),
+        tools=tools
+    )    
     
-    @tool
-    def treehealth_lookup(query: str):
-        """Assess tree health using canopy cover."""
-        
-        return check_tree_health(bbox=bbox_geom, project_name=task_name)
-       
-        
-    
-    @tool
-    def soil_lookup(query:str):
-        """Analyzes soil and land cover suitability."""
-        
-        return check_soil_suitability(bbox=bbox_geom, project_name=task_name)
-        
-        
-    
-    @tool
-    def treebenefit_lookup(query:str):
-        """Estimates carbon and cooling benefits."""
-        
-        return assess_tree_benefit(bbox=bbox_geom, project_name=task_name)
-        
-        
-    
-    @tool
-    def geospatial_expert(query: str):
-        """Use for questions about pests, diseases, or forestry advice."""
-        return geospatial_helper(str(query))
-        
-        
     
     
-    tools = [zoning_lookup, climate_lookup, treehealth_lookup, soil_lookup, treebenefit_lookup, geospatial_expert]
     
     agent_executor = create_react_agent(llm, tools)
     try:
