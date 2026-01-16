@@ -1026,19 +1026,21 @@ def get_forestry_agent(user_input: str, bbox_dict: dict, task_name: str, llm):
         geodesic=False, evenOdd=True 
     )
 
+    if isinstance(task_name, list):
+        task_name = task_name[0] if task_name else "default"
+    task_name = str(task_name)
+    
     @tool
     def zoning_lookup(query: str):
         """Use for zoning, land cover, and forest loss info."""
-        if isinstance(project_name, list):
-            project_name = project_name[0] if project_name else "default"        
+               
         return get_zoning_info(bbox=bbox_geom, project_name=task_name)
        
 
     @tool
     def climate_lookup(query:str):
         """Returns precipitation, temperature, and flood risk."""
-        if isinstance(project_name, list):
-            project_name = project_name[0] if project_name else "default"
+        
         return get_climate_info(bbox=bbox_geom, project_name=task_name)
         
         
@@ -1046,8 +1048,7 @@ def get_forestry_agent(user_input: str, bbox_dict: dict, task_name: str, llm):
     @tool
     def treehealth_lookup(query: str):
         """Assess tree health using canopy cover."""
-        if isinstance(project_name, list):
-            project_name = project_name[0] if project_name else "default"
+        
         return check_tree_health(bbox=bbox_geom, project_name=task_name)
        
         
@@ -1055,8 +1056,7 @@ def get_forestry_agent(user_input: str, bbox_dict: dict, task_name: str, llm):
     @tool
     def soil_lookup(query:str):
         """Analyzes soil and land cover suitability."""
-        if isinstance(project_name, list):
-            project_name = project_name[0] if project_name else "default"
+        
         return check_soil_suitability(bbox=bbox_geom, project_name=task_name)
         
         
@@ -1064,8 +1064,7 @@ def get_forestry_agent(user_input: str, bbox_dict: dict, task_name: str, llm):
     @tool
     def treebenefit_lookup(query:str):
         """Estimates carbon and cooling benefits."""
-        if isinstance(project_name, list):
-            project_name = project_name[0] if project_name else "default"
+        
         return assess_tree_benefit(bbox=bbox_geom, project_name=task_name)
         
         
