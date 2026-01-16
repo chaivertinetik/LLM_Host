@@ -285,7 +285,12 @@ def cache_load_helper(prompt: str):
 
 
 def geospatial_helper(prompt: str):
-   print("DEBUG: geospatial_helper running")
+   print(f"DEBUG: geospatial_helper running with prompt type: {type(prompt)}, value: {prompt}")
+   
+   if isinstance(prompt, list):
+        prompt = " ".join(str(p) for p in prompt)
+   prompt = str(prompt)
+   
    geospatial_prompt = (
        f"The user is asking about geospatial or forestry information: {prompt}. "
        f"Answer their query in simple terms (two or three lines max) as a GIS expert in a simple friendly way. "
@@ -293,8 +298,14 @@ def geospatial_helper(prompt: str):
        f"Pull from trusted geospatial resources and respond within these constraints as a geospatial expert in a friendly way."
    )
    # response = smart_model.generate_content(geospatial_prompt).text.strip()
-   response = smart_model.generate_content(geospatial_prompt).text.strip()
-   return str(response)
+   try:
+        response = smart_model.generate_content(geospatial_prompt).text.strip()
+        return str(response)
+   except Exception as e: 
+        print(f"ERROR in geospatial_helper: {e}")
+        import traceback
+        traceback.print_exc()
+        return f"Error generating response: {str(e)}"
 
 
 def long_debug(prompt: str, error: str):
@@ -1091,27 +1102,33 @@ def get_forestry_agent(user_input: str, bbox_dict: dict, task_name: str, llm):
         )
     ]
         
-    agent = create_react_agent(
+    
+    
+    agent_executor = create_react_agent(
         model=llm.bind_tools(tools),
         tools=tools
-    )    
-    
-    
-    
-    
-    agent_executor = create_react_agent(llm, tools)
+    )
     try:
-        # LangGraph agents use a different invocation pattern
-        result = agent_executor.invoke({"messages": [("user", user_input)]})
         
-        # Extract the final message
-        if result and "messages" in result:
-            final_message = result["messages"][-1]
-            return final_message.content if hasattr(final_message, 'content') else str(final_message)
+        response = agent_executor.invoke({
+            "messages": [{"role": "user", "content": user_input}]
+        })
         
-        return "Done."
+        if isinstance(response, dict) and "messages" in response:
+            messages = response["messages"]
+            if messages and isinstance(messages[-1], dict) and "content" in messages[-1]:
+                content = messages[-1]["content"]
+            else:
+                content = str(response)
+        else:
+            content = str(response)
+            
+        return content
+        
     except Exception as e:
         print(f"Final Agent Error: {e}")
+        import traceback
+        traceback.print_exc()  # This will show you exactly where the error is
         return str(e)
 
 
