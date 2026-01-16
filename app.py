@@ -272,8 +272,12 @@ async def process_request(request_data: RequestData):
             history.append({'role': 'user', 'content': user_task})
             history.append({'role': 'assistant', 'content': content})
             save_history(session_id, history)
-
-            prompt_options = prompt_suggetions(task_name, content)
+            prompt_options= [] 
+            try: 
+                prompt_options = prompt_suggetions(task_name, content)
+            except Exception as e: 
+                print(f"Error getting prompt suggestions: {e}")
+                prompt_options = []
             return {
                 "status": "completed",
                 "response": content,

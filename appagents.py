@@ -589,8 +589,20 @@ def prompt_suggetions(task_name: str, user_prompt: str) -> list[str]:
 
        for i in range(len(history) - 1):
            if history[i].get("role") == "user" and history[i + 1].get("role") == "assistant":
-               if "successfully" in history[i + 1].get("content", "").lower():
-                   old_prompts.append(history[i].get("content"))
+               assistant_content = history[i + 1].get("content", "")
+
+               if isinstance(assistant_content, list):
+                    assistant_content = " ".join(str(item) for item in assistant_content)
+               assistant_content = str(assistant_content)
+
+               if "successfully" in assistant_content.lower():
+                    user_content = history[i].get("content", "")
+                    
+                    # Also handle user content defensively
+                    if isinstance(user_content, list):
+                        user_content = " ".join(str(item) for item in user_content)
+                    
+                    old_prompts.append(str(user_content))
 
 
    combined_prompts = list(dict.fromkeys(prompt_list + old_prompts))
