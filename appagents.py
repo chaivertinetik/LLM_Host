@@ -1108,6 +1108,8 @@ def get_forestry_agent(user_input: str, bbox_dict: dict, task_name: str, llm):
         model=llm.bind_tools(tools),
         tools=tools
     )
+    print("Agent executor created with tools.")
+    
     try:
         
         response = agent_executor.invoke({
