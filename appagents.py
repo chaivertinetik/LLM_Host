@@ -1146,22 +1146,53 @@ def get_forestry_agent(user_input: str, bbox_dict: dict, task_name: str, llm):
             "messages": [{"role": "user", "content": user_input}]
         })
         
+        # 1. Get the last message from the list
         if isinstance(response, dict) and "messages" in response:
-            messages = response["messages"]
-            if messages and isinstance(messages[-1], dict) and "content" in messages[-1]:
-                content = messages[-1]["content"]
+            last_message = response["messages"][-1]
+            
+            # 2. Check if it's a LangChain Message object (like AIMessage)
+            # In 2026, .text is a standard property that flattens the list of blocks
+            if hasattr(last_message, "text"):
+                content = last_message.text
+            
+            # 3. Fallback: If it's a list of dicts (old style/raw)
+            elif isinstance(last_message.content, list):
+                content = "".join([block.get("text", "") for block in last_message.content if block.get("type") == "text"])
+            
+            # 4. Standard string content
             else:
-                content = str(response)
+                content = str(last_message.content)
         else:
             content = str(response)
             
-        return content
-        
+        return content.strip()
+
     except Exception as e:
         print(f"Final Agent Error: {e}")
-        import traceback
-        traceback.print_exc()  # This will show you exactly where the error is
         return str(e)
+    
+    # try:
+    #     print(f"[AGENT INVOKE] Calling agent with {user_input}")
+    #     response = agent_executor.invoke({
+    #         "messages": [{"role": "user", "content": user_input}]
+    #     })
+        
+    #     if isinstance(response, dict) and "messages" in response:
+    #         messages = response["messages"]
+    #         if messages and isinstance(messages[-1], dict) and "content" in messages[-1]:
+    #             content = messages[-1]["content"]
+    #         else:
+    #             content = str(response)
+    #     else:
+    #         content = str(response)
+            
+    #     return content
+        
+    # except Exception as e:
+    #     print(f"Final Agent Error: {e}")
+    #     import traceback
+    #     traceback.print_exc()  # This will show you exactly where the error is
+    #     return str(e)
 
 
 
