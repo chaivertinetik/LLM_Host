@@ -61,8 +61,8 @@ additional_data_locations:
       aoifilter: true
       priority: 10
 
-    - label: "National Tree Map Tree Crowns - National Tree Crowns for Cardiff Council presenting trees from the National Tree Map dataset."
-      url: "https://services-eu1.arcgis.com/8uHkpVrXUjYCyrO4/arcgis/rest/services/TreeCrowns_TrialNTM/FeatureServer/0"
+    - label: "Tree Crowns with Species and Health Information - Tree Crown data with Ash and other Species data along with their health levels and health information."
+      url: "https://services-eu1.arcgis.com/8uHkpVrXUjYCyrO4/arcgis/rest/services/TreeCrowns_CC_CardiffTrials_5cm_2026/FeatureServer/0"
       aoifilter: true
       priority: 10
 
