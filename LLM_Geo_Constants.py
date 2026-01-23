@@ -197,6 +197,7 @@ graph_requirement = [
                         'If the query is about showing all the trees in the site, dont filter for ash trees, for example: Show me all the trees, should look for all the available data points and not just ash trees.',
                         'If the query asks for something like show me the tallest ash tree, that means they want a visual result so the final output should be a geodataframe that will be sent to the map on ArcGIS, dont generate a textual summary in this case, but if the user asks for what the height of the tallest tree is then the result should be a textual summary containing that value (string).',
                         'If the user asks about the trees lost in a storm you need to compare the tree ids that survived before and after the storm from the two respective data sources.',
+                        'If the user asks about the risk look at the "risk_desc" column.',
                         #'To calculate volume of wood use "Height" * "Shape__Area"',
                         'When a user asks for features “near”, “nearby”, “by”, “around”, “close to”, “within walking distance of” a location (road, building, park, point, polygon, etc.), interpret this as a buffer query, not an intersection. Example: “Show me the trees near this road” → buffer the road by 20 m, return trees that intersect the buffer.',
                         'By default, use a 20‑metre buffer around the reference feature (or around the trees, whichever is more natural for the query) when answering “near / by” questions, unless the user explicitly specifies another distance (e.g. “within 50 m”, “within 40 metres”). Example: “Show me trees within 50 m of this building” → buffer the building by 50 m, return intersecting trees.',
@@ -264,6 +265,7 @@ operation_requirement = [
     "If the query asks for something like show me the tallest ash tree, that means they want a visual result so the final output should be a geodataframe that will be sent to the map on ArcGIS, dont generate a textual summary in this case, but if the user asks for what the height of the tallest tree is then the result should be a textual summary containing that value (string).",
     "A reliable approach to filter for ash trees is by: ash_trees_gdf = tree_points_gdf[tree_points_gdf['Species'].str.lower().str.contains('ash|fraxinus', na=False, regex=True)] and ensure regex=True",
     "You can find neighbourhood info ('Cardiff East', 'Cardiff North'..) under 'neighbourhood' and 'name1' has specific locations like 'Castle Golf Course', 'Whitchurch High School', for wards (like 'Riverside', 'Cathays') look under 'ward', for areas based on their role ('civic spaces', 'green corridors', 'natural and semi-natural greenspaces', 'water') look under 'function_'.",
+    "If the user asks about the risk look at the 'risk_desc' column.",
     "When accessing green spaces data and you want specific categories like 'Bowling Green', 'Religious Grounds' use the 'function_' column header and when accessing the building data and you need categories like 'Education', 'Emergency Service', and 'Religious Buildings' use the 'BUILDGTHEM' column header and for Streets/Roads use the 'name1' header for streets like Clumber Road East.",
     "You need to receive the data from the functions, DO NOT load in the function if other functions have loaded the data and returned it in advance.",
     # "Note module 'pandas' has no attribute or method of 'StringIO'",
@@ -375,6 +377,7 @@ assembly_requirement = ['You can think step by step. ',
                     f"Please generate Python code with consistent indentation using 4 spaces per indentation level. Ensure that all code blocks, including functions, loops, and conditionals, are properly indented to reflect their logical structure. Avoid using tabs or inconsistent spacing.",
                     f"ALWAYS verify that all parentheses and brackets are matched in generated Python code.",
                     f"ALWAYS make sure every code block (if, for, while, etc.) has correct opening and closing indentation, and no unmatched braces, brackets, or parentheses.",
+                    "If the user asks about the risk look at the 'risk_desc' column.",
                     f"The final result of the assembly program should return a geodataframe that matches the criteria given by the user or the output summary if the user wants a text response and not a visual output.",
                     f"If the query asks for something like show me the tallest ash tree, that means they want a visual result so the final output should be a geodataframe that will be sent to the map on ArcGIS, dont generate a textual summary in this case, but if the user asks for what the height of the tallest tree is then the result should be a textual summary containing that value (string).",
                     f"The geoJSON file has the following properties: 'Health' (either 'Healthy' or 'Unhealthy'), 'Tree_ID', 'Species' ('Ash', 'Field Maple', 'Oak', 'Fraxinus excelsior Altena', '), 'SURVEY_DATE' (format: Wed, 11 Sep 2024 00:00:00 GMT), 'Height', 'Shape__Area', 'Shape__Length'.",
@@ -581,6 +584,7 @@ sampling_data_requirement = [
  
                         #
                         ]
+
 
 
 
