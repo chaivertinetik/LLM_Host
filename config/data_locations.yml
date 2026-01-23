@@ -66,6 +66,11 @@ additional_data_locations:
       aoifilter: true
       priority: 10
 
+    - label: "TMA Risk Layer - Layer created by TMA showing various risk areas in Cardiff City."
+      url: "https://services-eu1.arcgis.com/8uHkpVrXUjYCyrO4/arcgis/rest/services/TMA_CC_Enviromap_Risk_Simplified/FeatureServer/0"
+      aoifilter: true  
+      priority: 5
+
     - label: "Roads - National road and street network to be used as the source of road datasets."
       url: "https://services.arcgis.com/qHLhLQrcvEnxjtPr/arcgis/rest/services/OS_OpenRoads/FeatureServer/1"
       aoifilter: true
