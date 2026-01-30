@@ -657,8 +657,18 @@ def long_running_task(user_task: str, task_name: str, data_locations: list):
             exec(gated2, globals())
             final_executed_code = gated2
         else:
-            exec(gated_code, globals())
-            final_executed_code = gated_code
+            try: 
+                exec(gated_code, globals())
+                final_executed_code = gated_code
+            except Exception as e: 
+                print(f"Runtime error detected: {e}")
+                success, fixed_code_or_error = try_llm_fix(gated_code, error_message=str(e))
+                if success: 
+                    ok3, gated3, gate_msg3 = safe_lint_fix_compile(fixed_code_or_error)
+                    print("GATE3:", gate_msg3)
+                    if ok3: 
+                        exec(gated3, globals())
+                        final_executed_code = gated3
 
         result = globals().get("result", None)
         print("result type:", type(result))
