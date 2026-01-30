@@ -307,7 +307,7 @@ operation_requirement = [
     # "When joining tables, convert the involved columns to string type without leading zeros. ",
     # "When doing spatial joins, remove the duplicates in the results. Or please think about whether it needs to be removed.",
     # "If using colorbar for GeoPandas or Matplotlib visulization, set the colorbar's height or length as the same as the plot for better layout.",
-  
+    "Be careful and mindful of these kinds of errors and don't generate code that produces this kind of error, Error during execution: Invalid datetime unit in metadata string '[ns, tz]'. As we don't actually need the timezones for your post-processing, can you ensure timezones aren't passed to avoid this error.",
     "Remember the variable, column, and file names used in ancestor functions when using them, such as joining tables or calculating.",
     # "When crawl the webpage context to ChatGPT, using Beautifulsoup to crawl the text only, not all the HTML file.",
     "If using GeoPandas for spatial analysis, when doing overlay analysis, carefully think about use Geopandas.GeoSeries.intersects() or geopandas.sjoin().",
@@ -584,6 +584,7 @@ sampling_data_requirement = [
  
                         #
                         ]
+
 
 
 
