@@ -198,7 +198,7 @@ graph_requirement = [
                         'If the query asks for something like show me the tallest ash tree, that means they want a visual result so the final output should be a geodataframe that will be sent to the map on ArcGIS, dont generate a textual summary in this case, but if the user asks for what the height of the tallest tree is then the result should be a textual summary containing that value (string).',
                         'If the user asks about the trees lost in a storm you need to compare the tree ids that survived before and after the storm from the two respective data sources.',
                         'If the user asks about the risk look at the "risk_desc" column.',
-                        'For some sites, like Cardiff the tree crown data is in two different layers eg :TreeCrowns_CC_CardiffTrials_5cm_2026 and ArbotrackPolygons_CC_07102025 data paths should both be considered when queries are about tree crowns.',
+                        'CRITICAL DATA RULE FOR CARDIFF: When the user queries about Cardiff tree crowns, you must load BOTH TreeCrowns_CC_CardiffTrials_5cm_2026 (for health/species attributes) and ArbotrackPolygons_CC_07102025 (for canopy extents). DO NOT use ArbotrackPoints_CC_07102025 for tree crown or canopy queries, as it lacks polygon geometry. Perform a Spatial Join (gpd.sjoin) to attach the health attributes from the trials layer to the polygon geometries from Arbotrack. If one layer returns no results, do not fail; use the other as a fallback. Only use ArbotrackPoints_CC_07102025 if the user explicitly mentions they want points.',
                         #'To calculate volume of wood use "Height" * "Shape__Area"',
                         'When a user asks for features “near”, “nearby”, “by”, “around”, “close to”, “within walking distance of” a location (road, building, park, point, polygon, etc.), interpret this as a buffer query, not an intersection. Example: “Show me the trees near this road” → buffer the road by 20 m, return trees that intersect the buffer.',
                         'By default, use a 20‑metre buffer around the reference feature (or around the trees, whichever is more natural for the query) when answering “near / by” questions, unless the user explicitly specifies another distance (e.g. “within 50 m”, “within 40 metres”). Example: “Show me trees within 50 m of this building” → buffer the building by 50 m, return intersecting trees.',
@@ -585,6 +585,7 @@ sampling_data_requirement = [
  
                         #
                         ]
+
 
 
 
