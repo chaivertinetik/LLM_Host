@@ -36,7 +36,7 @@ additional_data_locations:
       aoifilter: true
       priority: 10
 
-    - label: "Tree Polygons - Tree crown polygon dataset outlining canopy extents derived from field or aerial surveys."
+    - label: "Tree Polygons -Tree Crowns with Species and Health Information - Tree Crown data with Ash and other Species data along with their health levels and health information from counsel data."
       url: "https://services-eu1.arcgis.com/8uHkpVrXUjYCyrO4/arcgis/rest/services/ArbotrackPolygons_CC_07102025/FeatureServer/0"
       aoifilter: true
       priority: 10
@@ -61,7 +61,7 @@ additional_data_locations:
       aoifilter: true
       priority: 10
 
-    - label: "Tree Crowns with Species and Health Information - Tree Crown data with Ash and other Species data along with their health levels and health information."
+    - label: "Tree Crowns with Species and Health Information - Tree Crown data with Ash and other Species data along with their health levels and health information surveyed by Vertinetik."
       url: "https://services-eu1.arcgis.com/8uHkpVrXUjYCyrO4/arcgis/rest/services/TreeCrowns_CC_CardiffTrials_5cm_2026/FeatureServer/0"
       aoifilter: true
       priority: 10
