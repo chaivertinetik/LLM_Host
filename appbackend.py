@@ -198,12 +198,12 @@ def _append_token_to_url(url: str) -> str:
     """
     if not isinstance(url, str) or not url.strip():
         return url
-    
+
     # Use formal parsing to check for existing token
     parsed = urlparse(url)
     qs_pairs = parse_qsl(parsed.query, keep_blank_values=True)
     qs_dict = {k.lower(): v for k, v in qs_pairs}
-    
+
     if "token" in qs_dict:
         return url
 
@@ -217,7 +217,7 @@ def _append_token_to_url(url: str) -> str:
     # We append to the original list to preserve order and duplicate keys if any
     new_qs = qs_pairs + [("token", token)]
     new_query = urlencode(new_qs, doseq=True)
-    
+
     return urlunparse(parsed._replace(query=new_query))
 
 
@@ -294,7 +294,7 @@ def _with_write_token_params(params: dict | None = None) -> dict:
     if token and "token" not in p:
         p["token"] = token
     return p
-    
+
 def _with_read_token_data(data: dict | None = None) -> dict:
     d = dict(data or {})
     try:
@@ -449,11 +449,11 @@ def _strip_token_param(url: str) -> str:
         qs = parse_qsl(parsed.query, keep_blank_values=True)
         # Filter out the token regardless of case
         filtered_qs = [(k, v) for (k, v) in qs if k.lower() != "token"]
-        
+
         # If lengths match, no token was actually found in the key position
         if len(qs) == len(filtered_qs):
             return url
-            
+
         new_query = urlencode(filtered_qs, doseq=True)
         return urlunparse(parsed._replace(query=new_query))
     except Exception:
@@ -469,14 +469,14 @@ def _attach_token_in_entry(entry: str) -> str:
         lines = entry.splitlines()
         if not lines:
             return entry
-            
+
         first_line = lines[0]
         if ": " not in first_line:
             return entry
 
         prefix, url_part = first_line.split(": ", 1)
         url_with_token = _append_token_to_url(url_part.strip())
-        
+
         lines[0] = f"{prefix}: {url_with_token}"
         return "\n".join(lines)
     except Exception:
@@ -685,12 +685,12 @@ def get_project_urls(project_name):
 
 def _sanitise_layer_url(url: str) -> str:
     """
-    Clean ArcGIS URLs. Updated to handle URLs that might already have 
+    Clean ArcGIS URLs. Updated to handle URLs that might already have
     query parameters or tokens attached before being passed here.
     """
     # Remove query string before regexing the path
     base_part = url.split('?')[0].strip().rstrip("/")
-    
+
     # Remove /query if present
     u = re.sub(r"/query$", "", base_part, flags=re.IGNORECASE)
 
@@ -2377,6 +2377,7 @@ def _get_layer_last_edit_metadata(layer_url: str):
         return None, ts
 
     return None, None
+
 def make_project_data_locations(
     project_name: str, include_seasons: bool, attrs: dict
 ) -> list[str]:
@@ -2644,6 +2645,24 @@ def make_project_data_locations(
         except Exception as ex:
             logger.error(f"Failed to add raw data location for {label}: {ex}")
 
+    # ---------------- TREE "always keep" logic --------------------------------
+    def _is_tree_related(label: Optional[str], url: Optional[str]) -> bool:
+        """
+        Return True if this layer is clearly tree-related.
+        Tree-related layers are NEVER deduped (always kept).
+        """
+        lbl = (label or "").lower()
+        u = (url or "").lower()
+        tokens = [
+            "tree", "trees",
+            "crown", "crowns",
+            "canopy", "canopies",
+            "treetop", "tree_top", "tree tops", "tree_tops",
+            "crownsketch", "crown_sketch",
+            "arbotrack", "arbotrackpoints", "arbotrackpolygons",
+        ]
+        return any(t in lbl for t in tokens) or any(t in u for t in tokens)
+
     def _infer_category(label: str, url: Optional[str]) -> str:
         lbl = (label or "").lower()
         u = (url or "").lower()
@@ -2659,6 +2678,18 @@ def make_project_data_locations(
             ]
         )
 
+        # --- Tree-first detection (so it doesn't get mis-bucketed) ---
+        if _is_tree_related(label, url):
+            if any(k in lbl for k in ["tree points", "arbotrackpoints"]) or "points" in lbl:
+                base = "tree_points"
+            elif any(k in lbl for k in ["tree polygons", "arbotrackpolygons"]) or "polygon" in lbl:
+                base = "tree_polygons"
+            elif "crown" in lbl or "crowns" in lbl or "tree_crowns" in u or "treecrowns" in u:
+                base = "tree_crowns"
+            else:
+                base = "tree_related"
+            return f"{base}::{'national' if is_national else 'local'}"
+
         # --- Core base type detection ---
         if any(k in lbl for k in ["building", "buildings"]) or "openmap_local_buildings" in u:
             base = "buildings"
@@ -2666,10 +2697,6 @@ def make_project_data_locations(
             base = "roads"
         elif any(k in lbl for k in ["green space", "greenspace"]) or "open_greenspace" in u:
             base = "greenspace"
-        elif any(k in lbl for k in ["tree points", "arbotrackpoints"]):
-            base = "tree_points"
-        elif any(k in lbl for k in ["tree polygons", "arbotrackpolygons"]):
-            base = "tree_polygons"
         # IMPORTANT: non-operational must be checked BEFORE operational to avoid substring clash
         elif any(
             k in lbl for k in ["non operational property", "non-operational property"]
@@ -2682,7 +2709,11 @@ def make_project_data_locations(
 
         return f"{base}::{'national' if is_national else 'local'}"
 
-    def _category_already_present(category_key: str) -> bool:
+    def _category_already_present(category_key: str, label: Optional[str] = None, url: Optional[str] = None) -> bool:
+        # Always keep all tree-related entries (never dedup them)
+        if _is_tree_related(label, url) or category_key.startswith(("tree_", "tree")):
+            return False
+
         base = category_key.split("::", 1)[0]
 
         for line in data_locations:
@@ -2701,16 +2732,6 @@ def make_project_data_locations(
 
             if base == "greenspace" and any(
                 k in text for k in ["green space", "greenspace", "open space"]
-            ):
-                return True
-
-            if base == "tree_points" and any(
-                k in text for k in ["points geojson", "tree points"]
-            ):
-                return True
-
-            if base == "tree_polygons" and any(
-                k in text for k in ["polygons geojson", "tree polygons"]
             ):
                 return True
 
@@ -2818,7 +2839,9 @@ def make_project_data_locations(
 
         cat_key = _infer_category(label, layer_url)
         base_key = cat_key.split("::", 1)[0]
-        if _category_already_present(cat_key):
+
+        # IMPORTANT: pass label+url so tree-related layers are never deduped
+        if _category_already_present(cat_key, label=label, url=layer_url):
             logger.info(
                 f"Skipping '{label}' ({base_key}) because a {base_key} layer already exists (local preferred)."
             )
