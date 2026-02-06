@@ -1049,6 +1049,59 @@ def retrieve_rag_chunks(collection_name, query, top_k=5):
    top_contents = [chunk["content"] for _, chunk in scored_chunks[:top_k]]
    return top_contents
 
+def get_alpha_vector(geometry, year=2025):
+    """Fetches the mean 64D AlphaEarth vector for a given geometry."""
+    # Ensure geometry is an ee.Geometry
+    img = ee.ImageCollection("GOOGLE/SATELLITE_EMBEDDING/V1/ANNUAL") \
+            .filterDate(f'{year}-01-01', f'{year+1}-01-01').mosaic()
+    
+    # Reduce the region to get the average embedding for the area
+    stats = img.reduceRegion(
+        reducer=ee.Reducer.mean(),
+        geometry=geometry,
+        scale=10,
+        bestEffort=True
+    ).getInfo()
+    
+    # Extract bands A00-A63 into a numpy array
+    return np.array([stats.get(f'A{i:02d}', 0) for i in range(64)])
+
+def alpha_earth_reasoning(geometry, operation="classify"):
+    """
+    Performs vector arithmetic or similarity reasoning.
+    Operations: 'classify', 'trajectory' (change over time)
+    """
+    current_vec = get_alpha_vector(geometry, year=2025)
+    
+    # Reasoning Anchors (In a production app, store these in a DB)
+    # Examples based on your code:
+    anchors = {
+        "forest": np.array([...]), # Replace with your forest_anchor values
+        "urban": np.array([...])   # Replace with your urban_anchor values
+    }
+    
+    if operation == "classify":
+        f_sim = np.dot(current_vec, anchors["forest"])
+        u_sim = np.dot(current_vec, anchors["urban"])
+        
+        label = "Natural Vegetation" if f_sim > u_sim else "Human Development"
+        return {
+            "primary_classification": label,
+            "forest_similarity": round(float(f_sim), 4),
+            "urban_similarity": round(float(u_sim), 4)
+        }
+    
+    elif operation == "trajectory":
+        past_vec = get_alpha_vector(geometry, year=2018)
+        # Displacement vector (The 'Path of Change')
+        diff = current_vec - past_vec
+        magnitude = np.linalg.norm(diff)
+        
+        return {
+            "change_magnitude": round(float(magnitude), 4),
+            "stability_score": "High" if magnitude < 0.1 else "Low (Active Change)"
+        }
+
 def get_forestry_agent(user_input: str, bbox_dict: dict, task_name: str, llm):
     # Create the GEE Geometry once
     print(f"[BBOX_DICT] {bbox_dict}")
@@ -1098,6 +1151,10 @@ def get_forestry_agent(user_input: str, bbox_dict: dict, task_name: str, llm):
     def geospatial_wrapper(query: str):
         print(f"[GEOSPATIAL_WRAPPER] Called with query: {query}")
         return geospatial_helper(str(query))
+       
+    def earth_algebra_wrapper(operation: str = "classify"):
+        print(f"[EARTH_ALGEBRA] Performing {operation} reasoning...")
+        return alpha_earth_reasoning(bbox_geom, operation)
     
     tools = [
         Tool(
@@ -1129,6 +1186,15 @@ def get_forestry_agent(user_input: str, bbox_dict: dict, task_name: str, llm):
             name="GeospatialExpert",
             func=geospatial_wrapper,
             description="Use for questions about pests, diseases, or forestry advice."
+        ),
+        Tool(
+            name="EarthAlgebraReasoning",
+            func=earth_algebra_wrapper,
+            description=(
+                "Use this FIRST for high-level site classification or change detection. "
+                "Takes 'operation' as input: 'classify' (to identify land type) or "
+                "'trajectory' (to see if the area has changed since 2018)."
+            )
         )
     ]
         
