@@ -191,10 +191,20 @@ def load_history(session_id: str, max_turns=1):
     history = doc.to_dict().get("history", []) if doc.exists else []
     return history[-2 * max_turns :]
 
+# def save_history(session_id: str, history: list):
+#     doc = db.collection("chat_histories").document(session_id).get()
+#     existing_history = doc.to_dict().get("history", []) if doc.exists else []
+#     combined_history = existing_history + history
+#     db.collection("chat_histories").document(session_id).set({"history": combined_history})
+    
 def save_history(session_id: str, history: list):
     doc = db.collection("chat_histories").document(session_id).get()
     existing_history = doc.to_dict().get("history", []) if doc.exists else []
-    combined_history = existing_history + history
+    
+    # Combine and keep only the last 20 entries
+    
+    combined_history = (existing_history + history)[-20:] 
+    
     db.collection("chat_histories").document(session_id).set({"history": combined_history})
 
 def build_conversation_prompt(new_user_prompt: str, history: list | None = None, max_turns: int = 1) -> str:
