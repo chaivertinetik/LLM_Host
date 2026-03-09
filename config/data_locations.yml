@@ -13,6 +13,20 @@
 
 additional_data_locations:
   default:
+
+    # Example Cloud SQL / PostGIS-backed layer.
+    # The LLM service will expose this as an internal /cloudsql/geojson URL and
+    # automatically apply the active project ROI when aoifilter=true.
+    # - label: "Cloud SQL Trees - Example PostGIS-backed tree layer"
+    #   source: "cloudsql"
+    #   schema: "public"
+    #   table: "tree_crowns"
+    #   geom_column: "geom"
+    #   columns: ["tree_id", "species", "health", "height"]
+    #   where: "is_active = true"
+    #   spatial_op: "intersects"
+    #   aoifilter: true
+    #   priority: 20
     # --- National context layers ---
     - label: "Roads - National road and street network to be used as the source of road datasets."
       url: "https://services.arcgis.com/qHLhLQrcvEnxjtPr/arcgis/rest/services/OS_OpenRoads/FeatureServer/1"

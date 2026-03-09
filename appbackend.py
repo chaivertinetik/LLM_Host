@@ -20,6 +20,7 @@ import os
 import hashlib as _hashlib
 from functools import lru_cache
 from typing import Any, Dict, List, Optional, Union, Tuple
+from gcp_sql import build_geojson_url as build_cloudsql_geojson_url
 from pandas.api.types import is_datetime64_any_dtype, is_datetime64tz_dtype
 import time
 
@@ -61,6 +62,10 @@ _session.mount("https://", HTTPAdapter(max_retries=_retry))
 YAML_DEFAULT_PATH = os.environ.get(
     "EXTRA_DATA_LOCATIONS_YAML", "config/data_locations.yml"
 )
+APP_BASE_URL = os.environ.get(
+    "APP_BASE_URL",
+    os.environ.get("SERVICE_URL", "https://llmgeo-dev-1042524106019.us-central1.run.app"),
+).rstrip("/")
 # SEMAPHORE = asyncio.Semaphore(10)
 
 # --- simple print-based "logger" --------------------------------------------
@@ -2313,7 +2318,9 @@ def _iter_project_extra_entries(
         for item in lst:
             if not isinstance(item, dict):
                 continue
-            if not (item.get("url") or item.get("use_attr")):
+            has_arcgis_source = bool(item.get("url") or item.get("use_attr"))
+            has_cloudsql_source = str(item.get("source") or "").strip().lower() in {"cloudsql", "gcp_sql", "google_cloud_sql"} and bool(item.get("table"))
+            if not (has_arcgis_source or has_cloudsql_source):
                 continue
             if not item.get("label"):
                 continue
@@ -2787,7 +2794,10 @@ def make_project_data_locations(
 
         # Resolve the URL: either from attributes or fixed URL
         layer_url: Optional[str] = None
-        if item.get("use_attr"):
+        source_type = str(item.get("source") or "").strip().lower()
+        if source_type in {"cloudsql", "gcp_sql", "google_cloud_sql"}:
+            layer_url = f"cloudsql://{item.get('schema', 'public')}/{item.get('table')}"
+        elif item.get("use_attr"):
             try:
                 layer_url = get_attr(attrs, str(item["use_attr"]))
                 if not layer_url:
@@ -2818,12 +2828,46 @@ def make_project_data_locations(
             continue
 
         try:
-            if aoifilter:
+            source_type = str(item.get("source") or "").strip().lower()
+            if source_type in {"cloudsql", "gcp_sql", "google_cloud_sql"}:
+                _add_cloudsql(item, label, insert_at=insert_at)
+            elif aoifilter:
                 _add(layer_url, label, insert_at=insert_at)
             else:
                 _add_raw(layer_url, label, insert_at=insert_at)
         except Exception as ex:
             logger.error(f"Failed to apply YAML extra '{label}': {ex}")
+
+    def _add_cloudsql(item: dict, label: str, insert_at: Optional[int] = None):
+        try:
+            source = {
+                "schema": item.get("schema", "public"),
+                "table": item.get("table"),
+                "geom_column": item.get("geom_column", "geom"),
+                "columns": item.get("columns") or item.get("fields"),
+                "where": item.get("where", ""),
+                "srid": item.get("srid"),
+                "limit": item.get("limit", 5000),
+                "spatial_op": item.get("spatial_op", "intersects"),
+                "distance_m": item.get("distance_m"),
+                "order_by": item.get("order_by"),
+            }
+            url = build_cloudsql_geojson_url(
+                source,
+                project_name=project_name if bool(item.get("aoifilter", True)) else None,
+                app_base_url=APP_BASE_URL,
+            )
+            cols = source.get("columns") or []
+            cols_txt = f"  columns: {', '.join(cols)}" if cols else ""
+            entry_raw = f"{label}: {url}{cols_txt} [cloudsql]"
+            if insert_at is None or insert_at < 0:
+                data_locations.append(entry_raw)
+            else:
+                idx = min(insert_at, len(data_locations))
+                data_locations.insert(idx, entry_raw)
+            logger.debug(f"Added Cloud SQL data location: {entry_raw}")
+        except Exception as ex:
+            logger.error(f"Failed to add Cloud SQL data location for {label}: {ex}")
 
     # --- Write updated cache --------------------------------------------------
     try:

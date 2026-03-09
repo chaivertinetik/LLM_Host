@@ -9,8 +9,9 @@ import time
 import uuid
 from typing import Dict, Optional, Any
 from pydantic import BaseModel
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request, Query
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from credentials import db, parser, emd_model
 from appagents import (
     llm,
@@ -28,8 +29,9 @@ from appagents import (
     geospatial_helper,
     get_query_hash, check_firestore_for_cached_answer, store_answer_in_firestore, cache_load_helper, get_forestry_agent
 )
-from appbackend import trigger_cleanup, ClearRequest, get_project_urls, get_attr, make_project_data_locations, get_project_coords
+from appbackend import trigger_cleanup, ClearRequest, get_project_urls, get_attr, make_project_data_locations, get_project_coords, get_project_aoi_geometry
 from appbackend import filter as push_to_map
+from gcp_sql import fetch_geojson as fetch_cloudsql_geojson, describe_source as describe_cloudsql_source
 
 # Cloud Tasks (queueing) - optional
 try:
@@ -169,6 +171,53 @@ def _do_heavy_work(user_task: str, task_name: str) -> dict:
     if isinstance(result, dict):
         return result
     return {"message": str(result)}
+
+
+# --------------------- Cloud SQL GeoJSON endpoints ---------------------
+@app.get("/cloudsql/geojson")
+async def cloudsql_geojson(
+    schema: str = Query("public"),
+    table: str = Query(...),
+    geom_column: str = Query("geom"),
+    columns: Optional[str] = Query(None),
+    where: Optional[str] = Query(None),
+    project_name: Optional[str] = Query(None),
+    srid: Optional[int] = Query(None),
+    spatial_op: str = Query("intersects"),
+    distance_m: Optional[float] = Query(None),
+    limit: int = Query(5000, ge=1, le=50000),
+    order_by: Optional[str] = Query(None),
+):
+    source = {
+        "schema": schema,
+        "table": table,
+        "geom_column": geom_column,
+        "columns": [x.strip() for x in columns.split(",")] if columns else None,
+        "where": where or "",
+        "srid": srid,
+        "spatial_op": spatial_op,
+        "distance_m": distance_m,
+        "limit": limit,
+        "order_by": [x.strip() for x in order_by.split(",")] if order_by else None,
+    }
+    aoi = get_project_aoi_geometry(project_name) if project_name else None
+    try:
+        fc = fetch_cloudsql_geojson(source, aoi_geojson=aoi)
+        return JSONResponse(content=fc)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Cloud SQL GeoJSON query failed: {e}")
+
+
+@app.get("/cloudsql/describe")
+async def cloudsql_describe(
+    schema: str = Query("public"),
+    table: str = Query(...),
+    geom_column: str = Query("geom"),
+):
+    try:
+        return describe_cloudsql_source(schema=schema, table=table, geom_column=geom_column)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Cloud SQL describe failed: {e}")
 
 
 # --------------------- Clear endpoint ---------------------
