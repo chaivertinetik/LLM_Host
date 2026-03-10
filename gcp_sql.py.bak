@@ -1,13 +1,9 @@
 import json
 import os
 import re
-import math
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from functools import lru_cache
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Optional
 from urllib.parse import urlencode
-
-from shapely.geometry import box, mapping, shape
 
 try:
     from google.cloud.sql.connector import Connector
@@ -199,46 +195,7 @@ def _build_spatial_filter(geom_sql: str, spatial_op: str, table_srid: int, dista
     raise ValueError(f"Unsupported spatial_op: {spatial_op}")
 
 
-def _feature_signature(feature: Dict[str, Any]) -> str:
-    return json.dumps(feature, sort_keys=True, default=str)
-
-
-def _chunk_count_from_area(bounds: Tuple[float, float, float, float], target_chunk_area: float) -> int:
-    minx, miny, maxx, maxy = bounds
-    width = max(maxx - minx, 0.0)
-    height = max(maxy - miny, 0.0)
-    area = width * height
-    if area <= 0:
-        return 1
-    return max(1, int(math.ceil(area / max(target_chunk_area, 1e-9))))
-
-
-def _iter_aoi_chunks(aoi_geojson: Dict[str, Any], *, max_chunks: int, target_chunk_area_deg2: float):
-    geom = shape(aoi_geojson)
-    if geom.is_empty:
-        return []
-
-    minx, miny, maxx, maxy = geom.bounds
-    if minx == maxx or miny == maxy:
-        return [mapping(geom)]
-
-    approx_chunks = _chunk_count_from_area((minx, miny, maxx, maxy), target_chunk_area_deg2)
-    chunk_count = max(1, min(max_chunks, approx_chunks))
-    grid_n = max(1, int(math.ceil(math.sqrt(chunk_count))))
-
-    dx = (maxx - minx) / grid_n
-    dy = (maxy - miny) / grid_n
-    chunks = []
-    for row in range(grid_n):
-        for col in range(grid_n):
-            cell = box(minx + col * dx, miny + row * dy, minx + (col + 1) * dx, miny + (row + 1) * dy)
-            clipped = geom.intersection(cell)
-            if not clipped.is_empty:
-                chunks.append(mapping(clipped))
-    return chunks or [mapping(geom)]
-
-
-def _fetch_geojson_single(source: Dict[str, Any], aoi_geojson: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+def fetch_geojson(source: Dict[str, Any], aoi_geojson: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     spec = resolve_source_spec(source)
     schema = spec["schema"]
     table = spec["table"]
@@ -305,72 +262,6 @@ def _fetch_geojson_single(source: Dict[str, Any], aoi_geojson: Optional[Dict[str
     }
 
 
-def fetch_geojson(source: Dict[str, Any], aoi_geojson: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-    spec = resolve_source_spec(source)
-
-    chunking_enabled = str(source.get("chunking", os.getenv("CLOUDSQL_ROI_CHUNKING", "1"))).strip().lower() in {"1", "true", "yes"}
-    max_chunks = max(1, min(int(source.get("max_chunks") or os.getenv("CLOUDSQL_MAX_CHUNKS", "16")), 64))
-    max_workers = max(1, min(int(source.get("max_workers") or os.getenv("CLOUDSQL_MAX_WORKERS", str(min(8, max(2, (os.cpu_count() or 2)))))), 16))
-    target_chunk_area_deg2 = float(source.get("target_chunk_area_deg2") or os.getenv("CLOUDSQL_TARGET_CHUNK_AREA_DEG2", "0.01"))
-
-    if not aoi_geojson or not chunking_enabled:
-        return _fetch_geojson_single(spec, aoi_geojson=aoi_geojson)
-
-    chunks = _iter_aoi_chunks(
-        aoi_geojson,
-        max_chunks=max_chunks,
-        target_chunk_area_deg2=target_chunk_area_deg2,
-    )
-
-    if len(chunks) <= 1:
-        result = _fetch_geojson_single(spec, aoi_geojson=aoi_geojson)
-        result.setdefault("metadata", {})["chunking"] = {
-            "enabled": False,
-            "chunks_requested": 1,
-            "chunks_used": 1,
-            "max_workers": 1,
-        }
-        return result
-
-    merged_features: List[Dict[str, Any]] = []
-    seen = set()
-
-    with ThreadPoolExecutor(max_workers=min(max_workers, len(chunks))) as executor:
-        futures = {executor.submit(_fetch_geojson_single, spec, chunk): idx for idx, chunk in enumerate(chunks)}
-        first_meta: Optional[Dict[str, Any]] = None
-        for future in as_completed(futures):
-            result = future.result()
-            if first_meta is None:
-                first_meta = dict(result.get("metadata") or {})
-            for feature in result.get("features", []):
-                sig = _feature_signature(feature)
-                if sig in seen:
-                    continue
-                seen.add(sig)
-                merged_features.append(feature)
-
-    metadata = first_meta or describe_source(spec["schema"], spec["table"], spec["geom_column"])
-    metadata.update({
-        "limit": spec["limit"],
-        "spatial_op": spec["spatial_op"],
-        "distance_m": spec["distance_m"],
-        "roi_applied": True,
-        "chunking": {
-            "enabled": True,
-            "chunks_requested": len(chunks),
-            "chunks_used": len(chunks),
-            "max_workers": min(max_workers, len(chunks)),
-            "target_chunk_area_deg2": target_chunk_area_deg2,
-            "deduplicated_features": len(merged_features),
-        },
-    })
-
-    return {
-        "type": "FeatureCollection",
-        "features": merged_features,
-        "metadata": metadata,
-    }
-
 def build_geojson_url(source: Dict[str, Any], project_name: Optional[str] = None, app_base_url: Optional[str] = None) -> str:
     spec = resolve_source_spec(source)
     base = (app_base_url or DEFAULT_APP_BASE_URL).rstrip("/")
@@ -393,7 +284,4 @@ def build_geojson_url(source: Dict[str, Any], project_name: Optional[str] = None
         params["distance_m"] = spec["distance_m"]
     if spec["order_by"]:
         params["order_by"] = ",".join(spec["order_by"])
-    params["chunking"] = os.getenv("CLOUDSQL_ROI_CHUNKING", "1")
-    params["max_workers"] = os.getenv("CLOUDSQL_MAX_WORKERS", str(min(8, max(2, (os.cpu_count() or 2)))))
-    params["max_chunks"] = os.getenv("CLOUDSQL_MAX_CHUNKS", "16")
     return f"{base}/cloudsql/geojson?{urlencode(params)}"
