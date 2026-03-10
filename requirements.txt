@@ -48,7 +48,7 @@ statsmodels
 httpx[http2]
 google-cloud-aiplatform
 google-cloud-tasks>=2.16.0
-google-cloud-sql-connector[pg8000]
+google-cloud-sql-connector
 pg8000
 
 arcgis
