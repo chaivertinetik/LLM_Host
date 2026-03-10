@@ -680,7 +680,7 @@ def try_llm_fix(code, error_message=None, max_attempts=2):
 # ============================================================
 
 
-def long_running_task(user_task: str, task_name: str, data_locations: list):
+def long_running_task(user_task: str, task_name: str, data_locations: list, push_map_result: bool = True, return_raw_result: bool = False):
    message = None
    try:
        save_dir = os.path.join(os.getcwd(), task_name)
@@ -752,6 +752,7 @@ def long_running_task(user_task: str, task_name: str, data_locations: list):
 
 
        print("Starting execution...")
+       globals().pop("result", None)
 
 
        # ============================================================
@@ -806,7 +807,11 @@ def long_running_task(user_task: str, task_name: str, data_locations: list):
            or (hasattr(result, "empty") and result.empty)
        )
        if is_empty_result:
-           return {"status": "completed", "message": "Your query returned no data. Please check your input."}
+           payload = {"status": "completed", "message": "Your query returned no data. Please check your input."}
+           if return_raw_result:
+               payload["raw_result"] = None
+               payload["explanation"] = explanation_text
+           return payload
 
 
        if wants_map_output(user_task):
