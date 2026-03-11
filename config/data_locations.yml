@@ -19,15 +19,15 @@ additional_data_locations:
       aoifilter: true
       priority: 100
 
-    - label: "Buildings - National building footprints dataset representing structures and property outlines."
-      url: "https://services.arcgis.com/qHLhLQrcvEnxjtPr/arcgis/rest/services/OS_OpenMap_Local_Buildings/FeatureServer/0"
-      aoifilter: true
-      priority: 100
+   # - label: "Buildings - National building footprints dataset representing structures and property outlines."
+  #    url: "https://services.arcgis.com/qHLhLQrcvEnxjtPr/arcgis/rest/services/OS_OpenMap_Local_Buildings/FeatureServer/0"
+ #     aoifilter: true
+#      priority: 100
 
-    - label: "Green Spaces - National layer representing parks, recreational areas, and public open spaces."
-      url: "https://services.arcgis.com/qHLhLQrcvEnxjtPr/arcgis/rest/services/OS_Open_Greenspace/FeatureServer/1"
-      aoifilter: true
-      priority: 100
+   # - label: "Green Spaces - National layer representing parks, recreational areas, and public open spaces."
+  #    url: "https://services.arcgis.com/qHLhLQrcvEnxjtPr/arcgis/rest/services/OS_Open_Greenspace/FeatureServer/1"
+ #     aoifilter: true
+#      priority: 100
   
   # --- Project-specific layers ---
   CC_Cardiff_07102025:
