@@ -14,8 +14,8 @@
 additional_data_locations:
   default:
     # --- National context layers ---
-    - label: "Roads - National road and street network to be used as the source of road datasets."
-      url: "https://services.arcgis.com/qHLhLQrcvEnxjtPr/arcgis/rest/services/OS_OpenRoads/FeatureServer/1"
+    - label: "Roads - Cardiff National road and street network to be used as the source of road datasets."
+      url: "https://services-eu1.arcgis.com/8uHkpVrXUjYCyrO4/arcgis/rest/services/CC_Roads_Fill/FeatureServer/0"
       aoifilter: true
       priority: 100
 
