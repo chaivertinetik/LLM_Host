@@ -12,6 +12,13 @@ import ast
 import textwrap
 import ee
 import numpy as np
+import pandas as pd
+import geopandas as gpd
+import requests
+import io
+import hashlib
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from urllib.parse import urlparse, parse_qsl
 
 from google.oauth2 import service_account
 from sentence_transformers import util
@@ -19,12 +26,12 @@ from langchain_core.tools import Tool
 from langgraph.prebuilt import create_react_agent
 from langchain_core.language_models import LLM
 from langchain_google_genai import ChatGoogleGenerativeAI
-from typing import List, Optional, Any, Tuple
+from typing import List, Optional, Any, Tuple, Dict
 from pydantic import PrivateAttr, BaseModel, Field 
 from vertexai.generative_models import GenerativeModel
 from google.api_core.exceptions import ResourceExhausted
 from appbackend import filter as push_to_map
-from appbackend import get_project_coords
+from appbackend import get_project_coords, _sanitise_layer_url, get_aoi_in_layer_crs, query_feature_layer_count, _query_feature_layer_gdf, _get_layer_max_record_count, get_project_urls, get_attr, get_project_aoi_geometry
 from LLM_Heroku_Kernel import Solution
 from google import genai
 from google.genai import types
@@ -676,22 +683,815 @@ def try_llm_fix(code, error_message=None, max_attempts=2):
 
 
 # ============================================================
+#      Dataset preload helpers for direct GeoDataFrame execution
+# ============================================================
+
+_DATASET_URL_RE = re.compile(r"https?://\S+", re.IGNORECASE)
+
+
+_DATASET_HTTP_CACHE_DIR = os.environ.get("DATASET_HTTP_CACHE_DIR", "dataset_http_cache")
+_DATASET_HTTP_CACHE_TTL = int(os.environ.get("DATASET_HTTP_CACHE_TTL_SECONDS", str(12 * 3600)))
+
+
+def _dataset_cache_key(url: str) -> str:
+   return hashlib.sha256(str(url or '').encode('utf-8')).hexdigest()
+
+
+def _cache_is_fresh(path: str, ttl_seconds: int) -> bool:
+   try:
+       return os.path.exists(path) and (time.time() - os.path.getmtime(path) <= ttl_seconds)
+   except Exception:
+       return False
+
+
+def _parse_simple_count_intent(user_task: str) -> Optional[Dict[str, Any]]:
+   q = _normalize_text_token(user_task)
+   if not q:
+       return None
+   if not any(tok in q for tok in ['how many', 'count', 'number of', 'total number', 'total trees', 'how much total']):
+       return None
+   field_type = None
+   query_value = None
+   match_terms = None
+   tree_request = _extract_tree_filter_request(user_task)
+   if tree_request:
+       field_type = tree_request.get('field_type')
+       query_value = tree_request.get('query_value')
+       match_terms = tree_request.get('match_terms')
+   return {'kind': 'count', 'field_type': field_type, 'query_value': query_value, 'match_terms': match_terms}
+
+
+def _get_roi_aoi_for_project(task_name: str) -> Optional[Dict[str, Any]]:
+   try:
+       return get_project_aoi_geometry(task_name)
+   except Exception as exc:
+       print(f'Failed to resolve ROI AOI for {task_name}: {exc}')
+       return None
+
+
+def _find_tree_layer_url(task_name: str) -> Optional[str]:
+   try:
+       attrs = get_project_urls(task_name)
+       return get_attr(attrs, 'TREE_CROWNS')
+   except Exception as exc:
+       print(f'Failed to resolve TREE_CROWNS for {task_name}: {exc}')
+       return None
+
+
+def _direct_species_field_candidates():
+   return ['Species', 'SPECIES', 'species', 'Species_Name', 'TREE_SPECIES', 'Scientific_Name', 'common_name', 'Common_Name']
+
+
+def _direct_health_field_candidates():
+   return ['Health', 'HEALTH', 'health', 'Condition', 'STATUS', 'Health_Level']
+
+
+def _direct_simple_tree_fast_path(user_task: str, task_name: str, push_map_result: bool = True, return_raw_result: bool = False) -> Optional[Dict[str, Any]]:
+   count_intent = _parse_simple_count_intent(user_task)
+   filter_intent = _extract_tree_filter_request(user_task)
+   list_species = _normalize_text_token(user_task) in {'what species are present', 'list species', 'show species', 'which species are present'} or ('species' in _normalize_text_token(user_task) and 'present' in _normalize_text_token(user_task))
+   if not count_intent and not filter_intent and not list_species:
+       return None
+
+   layer_url = _find_tree_layer_url(task_name)
+   if not layer_url:
+       return None
+   aoi = _get_roi_aoi_for_project(task_name)
+
+   # discover fields cheaply
+   sample_gdf = None
+   try:
+       sample_gdf = _query_feature_layer_gdf(layer_url, where='1=1', out_fields='*', out_wkid=4326, result_offset=0, result_record_count=1, order_by_fields='OBJECTID ASC', aoi=aoi)
+   except Exception as exc:
+       print(f'Failed to sample tree layer for fast path: {exc}')
+   species_field = _find_first_present_column(sample_gdf, _direct_species_field_candidates()) if sample_gdf is not None else None
+   health_field = _find_first_present_column(sample_gdf, _direct_health_field_candidates()) if sample_gdf is not None else None
+
+   if list_species and species_field:
+       try:
+           gdf = _paged_query_feature_layer_gdf(layer_url, where='1=1', out_fields=species_field, aoi=aoi, page_size=250, max_pages=20)
+           vals = sorted({str(v).strip() for v in gdf[species_field].dropna().tolist() if str(v).strip()}) if (gdf is not None and not gdf.empty and species_field in gdf.columns) else []
+           if vals:
+               return {'status': 'completed', 'message': f"Species present in the current ROI: {', '.join(vals)}."}
+       except Exception as exc:
+           print(f'Fast species list failed: {exc}')
+
+   active_request = filter_intent or count_intent
+   if not active_request:
+       return None
+
+   field_name = None
+   if active_request.get('field_type') == 'species':
+       field_name = species_field
+   elif active_request.get('field_type') == 'health':
+       field_name = health_field
+
+   extra_where = '1=1'
+   if field_name and active_request.get('query_value'):
+       extra_where = _build_simple_attribute_where(field_name, active_request)
+
+   where = _compose_where('1=1', extra_where)
+
+   if count_intent is not None:
+       try:
+           total = int(query_feature_layer_count(layer_url, where=where, aoi=aoi))
+           noun = 'trees'
+           if active_request.get('query_value'):
+               noun = f"{active_request.get('query_value')} trees"
+           return {'status': 'completed', 'message': f"There are {total} {noun} in the current ROI."}
+       except Exception as exc:
+           print(f'Direct count fast path failed: {exc}')
+
+   if filter_intent is not None:
+       out_fields = ','.join(dict.fromkeys([c for c in ['OBJECTID', species_field, health_field, 'Tree_ID', 'Height', 'GlobalID'] if c])) or '*'
+       try:
+           matched = _paged_query_feature_layer_gdf(layer_url, where=where, out_fields=out_fields, aoi=aoi, page_size=250, max_pages=50)
+       except Exception as exc:
+           print(f'Direct filter fast path failed: {exc}')
+           return None
+       if matched is None or matched.empty:
+           return {'status': 'completed', 'message': 'No matching tree features were found in the current ROI.'}
+       if push_map_result:
+           try:
+               push_to_map(matched.to_json(), task_name)
+           except Exception as exc:
+               payload={'status':'completed','message':f"I found {len(matched)} matching tree features in the current ROI, but pushing them to the map failed: {exc}"}
+               if return_raw_result:
+                   payload['raw_result']=matched
+                   payload['explanation']=f"Direct ROI tree filter on {field_name or 'tree layer'} for {filter_intent.get('query_value')}."
+               return payload
+       msg = f"I found {len(matched)} matching tree features in the current ROI" + (' and pushed them to the output layer.' if push_map_result else '.')
+       payload={'status':'completed','message':msg}
+       if return_raw_result:
+           payload['raw_result']=matched
+           payload['explanation']=f"Direct ROI tree filter on {field_name or 'tree layer'} for {filter_intent.get('query_value')}."
+       return payload
+   return None
+
+
+def _slugify_dataset_name(name: str, fallback: str = "dataset") -> str:
+   clean = re.sub(r"[^A-Za-z0-9._-]+", "_", str(name or "").strip()).strip("_")
+   return clean[:120] or fallback
+
+
+def _first_line(text: str) -> str:
+   return str(text or "").splitlines()[0].strip()
+
+
+def _extract_dataset_url(entry: str) -> Optional[str]:
+   m = _DATASET_URL_RE.search(_first_line(entry))
+   return m.group(0) if m else None
+
+
+def _extract_dataset_label(entry: str, idx: int) -> str:
+   line = _first_line(entry)
+   if ":" in line:
+       return line.split(":", 1)[0].strip() or f"dataset_{idx}"
+   return f"dataset_{idx}"
+
+
+def _parse_inline_meta(entry: str) -> Dict[str, Any]:
+   meta: Dict[str, Any] = {}
+   for raw in str(entry or "").splitlines()[1:]:
+       line = raw.strip()
+       if not line or ":" not in line:
+           continue
+       k, v = line.split(":", 1)
+       meta[k.strip().lower()] = v.strip()
+   return meta
+
+
+def _read_feature_collection_to_gdf(fc: dict) -> gpd.GeoDataFrame:
+   features = list((fc or {}).get("features") or [])
+   if not features:
+       return gpd.GeoDataFrame(columns=["geometry"], geometry="geometry", crs="EPSG:4326")
+   return gpd.GeoDataFrame.from_features(features, crs="EPSG:4326")
+
+
+def _preload_single_dataset(entry: str, idx: int, datasets_dir: str) -> Optional[Dict[str, Any]]:
+   url = _extract_dataset_url(entry)
+   if not url:
+       return None
+
+   label = _extract_dataset_label(entry, idx)
+   dataset_key = _slugify_dataset_name(label.lower(), fallback=f"dataset_{idx}")
+   local_geojson = os.path.join(datasets_dir, f"{idx:03d}_{dataset_key}.geojson")
+   meta = _parse_inline_meta(entry)
+   os.makedirs(_DATASET_HTTP_CACHE_DIR, exist_ok=True)
+   cache_key = _dataset_cache_key(url)
+   cache_geojson = os.path.join(_DATASET_HTTP_CACHE_DIR, f"{cache_key}.geojson")
+   cache_manifest = os.path.join(_DATASET_HTTP_CACHE_DIR, f"{cache_key}.json")
+
+   if _cache_is_fresh(cache_geojson, _DATASET_HTTP_CACHE_TTL):
+       try:
+           gdf = gpd.read_file(cache_geojson)
+           if not gdf.empty and gdf.crs is None:
+               gdf = gdf.set_crs(4326, allow_override=True)
+           if cache_geojson != local_geojson:
+               import shutil
+               shutil.copyfile(cache_geojson, local_geojson)
+           return {
+               "dataset_key": dataset_key,
+               "label": label,
+               "source_url": url,
+               "local_geojson": local_geojson,
+               "feature_count": int(len(gdf)),
+               "columns": [str(c) for c in gdf.columns if c != "geometry"],
+               "geometry_types": sorted({str(x) for x in getattr(gdf.geometry, "geom_type", []) if x}) if not gdf.empty else [],
+               "crs": str(gdf.crs) if getattr(gdf, "crs", None) else "EPSG:4326",
+               "metadata": meta,
+               "cache_hit": True,
+           }
+       except Exception as exc:
+           print(f'Cached dataset reload failed for {label}: {exc}')
+
+   resp = requests.get(url, timeout=60)
+   resp.raise_for_status()
+   payload = resp.json()
+   gdf = _read_feature_collection_to_gdf(payload)
+   if not gdf.empty and gdf.crs is None:
+       gdf = gdf.set_crs(4326, allow_override=True)
+   gdf.to_file(local_geojson, driver="GeoJSON")
+   try:
+       import shutil
+       shutil.copyfile(local_geojson, cache_geojson)
+       with open(cache_manifest, 'w', encoding='utf-8') as f:
+           json.dump({'source_url': url, 'label': label, 'cached_at': time.time()}, f)
+   except Exception as exc:
+       print(f'Failed to persist dataset cache for {label}: {exc}')
+
+   return {
+       "dataset_key": dataset_key,
+       "label": label,
+       "source_url": url,
+       "local_geojson": local_geojson,
+       "feature_count": int(len(gdf)),
+       "columns": [str(c) for c in gdf.columns if c != "geometry"],
+       "geometry_types": sorted({str(x) for x in getattr(gdf.geometry, "geom_type", []) if x}) if not gdf.empty else [],
+       "crs": str(gdf.crs) if getattr(gdf, "crs", None) else "EPSG:4326",
+       "metadata": meta,
+       "cache_hit": False,
+   }
+
+
+
+
+
+def _candidate_column_names_from_meta(meta: Dict[str, Any]) -> list[str]:
+   cols_raw = (meta or {}).get('columns') or ''
+   if isinstance(cols_raw, str):
+       return [c.strip() for c in cols_raw.split(',') if c.strip()]
+   if isinstance(cols_raw, list):
+       return [str(c).strip() for c in cols_raw if str(c).strip()]
+   return []
+
+
+def _find_meta_field(meta: Dict[str, Any], candidates: list[str]) -> Optional[str]:
+   cols = _candidate_column_names_from_meta(meta)
+   lookup = {c.lower(): c for c in cols}
+   for cand in candidates:
+       hit = lookup.get(cand.lower())
+       if hit:
+           return hit
+   return None
+
+
+def _iter_data_location_entries(data_locations: list) -> list[Dict[str, Any]]:
+   entries = []
+   for idx, entry in enumerate(data_locations or [], start=1):
+       if not isinstance(entry, str):
+           continue
+       url = _extract_dataset_url(entry)
+       if not url:
+           continue
+       label = _extract_dataset_label(entry, idx)
+       meta = _parse_inline_meta(entry)
+       dataset_key = _slugify_dataset_name(label.lower(), fallback=f'dataset_{idx}')
+       entries.append({'index': idx, 'entry': entry, 'url': url, 'label': label, 'dataset_key': dataset_key, 'meta': meta})
+   return entries
+
+
+def _parse_proxy_url_to_query_parts(url: str, task_name: str) -> Tuple[str, str, Optional[Dict[str, Any]]]:
+   parsed = urlparse(url)
+   qs = dict(parse_qsl(parsed.query, keep_blank_values=True))
+   layer_url = qs.get('layer_url') or url
+   where = qs.get('where', '1=1')
+   aoi = None
+   geometry = qs.get('geometry')
+   if geometry:
+       try:
+           in_srid = int(qs['inSR']) if qs.get('inSR') else None
+       except Exception:
+           in_srid = None
+       try:
+           aoi = {'geometry': json.loads(geometry), 'geometryType': qs.get('geometryType', 'esriGeometryPolygon')}
+           if in_srid is not None:
+               aoi['inSR'] = in_srid
+       except Exception:
+           aoi = None
+   elif layer_url.startswith('http') and '/arcgis/geojson' not in layer_url:
+       try:
+           aoi = get_aoi_in_layer_crs(task_name, layer_url)
+       except Exception:
+           aoi = None
+   return layer_url, where, aoi
+
+
+def _escape_sql_literal(value: str) -> str:
+   return str(value).replace("'", "''")
+
+
+def _build_species_where(field_name: str, match_terms: list[str]) -> str:
+   parts = []
+   for term in match_terms:
+       term = str(term).strip()
+       if not term:
+           continue
+       esc = _escape_sql_literal(term)
+       parts.append(f"UPPER({field_name}) = UPPER('{esc}')")
+       parts.append(f"UPPER({field_name}) LIKE UPPER('%{esc}%')")
+   uniq=[]
+   seen=set()
+   for p in parts:
+       if p not in seen:
+           uniq.append(p); seen.add(p)
+   return '(' + ' OR '.join(uniq) + ')' if uniq else '1=0'
+
+
+def _build_simple_attribute_where(field_name: str, request: Dict[str, Any]) -> str:
+   if request.get('field_type') == 'species':
+       return _build_species_where(field_name, request.get('match_terms') or [request.get('query_value')])
+   value = _escape_sql_literal(request.get('query_value') or '')
+   terms = request.get('match_terms') or [request.get('query_value')]
+   parts = []
+   for term in terms:
+       esc = _escape_sql_literal(term)
+       parts.append(f"UPPER({field_name}) = UPPER('{esc}')")
+       parts.append(f"UPPER({field_name}) LIKE UPPER('%{esc}%')")
+   return '(' + ' OR '.join(dict.fromkeys(parts)) + ')' if parts else f"UPPER({field_name}) = UPPER('{value}')"
+
+
+def _compose_where(base_where: str, extra_where: str) -> str:
+   bw = (base_where or '1=1').strip() or '1=1'
+   ew = (extra_where or '1=1').strip() or '1=1'
+   if bw == '1=1':
+       return ew
+   if ew == '1=1':
+       return bw
+   return f'({bw}) AND ({ew})'
+
+
+def _paged_query_feature_layer_gdf(layer_url: str, where: str = '1=1', out_fields: str = '*', aoi: Optional[Dict[str, Any]] = None, page_size: Optional[int] = None, max_pages: Optional[int] = None) -> gpd.GeoDataFrame:
+   try:
+       mrc = int(_get_layer_max_record_count(layer_url) or 500)
+   except Exception:
+       mrc = 500
+   page_size = max(1, min(int(page_size or os.getenv('FASTPATH_PAGE_SIZE', '500')), mrc if mrc > 0 else 500, 1000))
+   max_pages = max(1, int(max_pages or os.getenv('FASTPATH_MAX_PAGES', '50')) )
+   parts = []
+   offset = 0
+   for _ in range(max_pages):
+       gdf = _query_feature_layer_gdf(layer_url, where=where, out_fields=out_fields, out_wkid=4326, result_offset=offset, result_record_count=page_size, order_by_fields='OBJECTID ASC', aoi=aoi)
+       if gdf is None or gdf.empty:
+           break
+       parts.append(gdf)
+       if len(gdf) < page_size:
+           break
+       offset += page_size
+   if not parts:
+       return gpd.GeoDataFrame(columns=['geometry'], geometry='geometry', crs='EPSG:4326')
+   out = gpd.GeoDataFrame(pd.concat(parts, ignore_index=True), geometry='geometry', crs=parts[0].crs or 'EPSG:4326')
+   for idcol in ['OBJECTID', 'ObjectId', 'objectid', 'GlobalID', 'globalid']:
+       if idcol in out.columns:
+           out = out.drop_duplicates(subset=[idcol])
+           break
+   return out.reset_index(drop=True)
+
+
+def _remote_tree_entries(data_locations: list) -> list[Dict[str, Any]]:
+   entries = []
+   for item in _iter_data_location_entries(data_locations):
+       hay = f"{item['label']} {item['dataset_key']}".lower()
+       if any(tok in hay for tok in ['tree', 'trees', 'crown', 'crowns']):
+           entries.append(item)
+   return entries
+
+
+def _remote_filter_output_fast_path(user_task: str, task_name: str, data_locations: list, push_map_result: bool = True, return_raw_result: bool = False) -> Optional[Dict[str, Any]]:
+   request = _extract_tree_filter_request(user_task)
+   if not request:
+       return None
+   candidates = _remote_tree_entries(data_locations)
+   if not candidates:
+       return None
+   species_fields = ['Species', 'SPECIES', 'species', 'Species_Name', 'TREE_SPECIES', 'Scientific_Name', 'common_name', 'Common_Name']
+   health_fields = ['Health', 'HEALTH', 'health', 'Condition', 'STATUS', 'Health_Level']
+   field_candidates = species_fields if request.get('field_type') == 'species' else health_fields
+
+   best = None
+   best_count = -1
+   for item in candidates:
+       meta = item['meta']
+       field_name = _find_meta_field(meta, field_candidates)
+       if not field_name:
+           continue
+       try:
+           layer_url, base_where, aoi = _parse_proxy_url_to_query_parts(item['url'], task_name)
+           extra_where = _build_simple_attribute_where(field_name, request)
+           where = _compose_where(base_where, extra_where)
+           count = int(query_feature_layer_count(layer_url, where=where, aoi=aoi))
+       except Exception as exc:
+           print(f'Remote fast filter count failed for {item["label"]}: {exc}')
+           continue
+       if count > best_count:
+           best = (item, field_name, where, aoi, count)
+           best_count = count
+
+   if not best or best_count <= 0:
+       return None
+
+   item, field_name, where, aoi, count = best
+   layer_url, _, _ = _parse_proxy_url_to_query_parts(item['url'], task_name)
+   out_fields = '*'
+   try:
+       matched = _paged_query_feature_layer_gdf(layer_url, where=where, out_fields=out_fields, aoi=aoi)
+   except Exception as exc:
+       return {'status': 'completed', 'message': f"I found {count} matching tree features in {item['label']}, but loading them failed: {exc}"}
+   if matched.empty:
+       return {'status': 'completed', 'message': f"I found {count} matching tree features in {item['label']}, but the feature fetch returned no rows."}
+   if push_map_result:
+       push_to_map(matched.to_json(), task_name)
+       message = f"I found {len(matched)} matching tree features in {item['label']} and pushed them to the output layer."
+   else:
+       message = f"I found {len(matched)} matching tree features in {item['label']}."
+   payload = {'status': 'completed', 'message': message}
+   if return_raw_result:
+       payload['raw_result'] = matched
+       payload['dataset_catalog'] = {item['dataset_key']: {'label': item['label'], 'metadata': item['meta'], 'feature_count': len(matched)}}
+       payload['explanation'] = f"Remote filtered {item['label']} on {field_name} for {request.get('query_value')}."
+   return payload
+
+
+def _extract_list_species_request(user_task: str) -> bool:
+   q = _normalize_text_token(user_task)
+   markers = ['list species', 'what species', 'which species', 'species present', 'unique species']
+   return 'species' in q and any(m in q for m in markers)
+
+
+def _remote_list_species_fast_path(user_task: str, task_name: str, data_locations: list) -> Optional[Dict[str, Any]]:
+   if not _extract_list_species_request(user_task):
+       return None
+   candidates = _remote_tree_entries(data_locations)
+   if not candidates:
+       return None
+   species_fields = ['Species', 'SPECIES', 'species', 'Species_Name', 'TREE_SPECIES', 'Scientific_Name', 'common_name', 'Common_Name']
+   best_vals = None
+   best_label = None
+   for item in candidates:
+       field_name = _find_meta_field(item['meta'], species_fields)
+       if not field_name:
+           continue
+       try:
+           layer_url, base_where, aoi = _parse_proxy_url_to_query_parts(item['url'], task_name)
+           gdf = _paged_query_feature_layer_gdf(layer_url, where=base_where, out_fields=field_name, aoi=aoi, page_size=500, max_pages=20)
+       except Exception as exc:
+           print(f'Remote list species failed for {item["label"]}: {exc}')
+           continue
+       if gdf is None or gdf.empty or field_name not in gdf.columns:
+           continue
+       vals = sorted({str(v).strip() for v in gdf[field_name].dropna().tolist() if str(v).strip()})
+       if vals and (best_vals is None or len(vals) > len(best_vals)):
+           best_vals = vals
+           best_label = item['label']
+   if not best_vals:
+       return None
+   return {'status': 'completed', 'message': f"Species present in {best_label}: {', '.join(best_vals)}."}
+
+def _normalize_text_token(value: Any) -> str:
+   if value is None:
+       return ''
+   return re.sub(r'[^a-z0-9]+', ' ', str(value).strip().lower()).strip()
+
+
+def _tree_dataset_candidates(dataset_catalog: Dict[str, Any]) -> list[tuple[str, Dict[str, Any]]]:
+   items = []
+   for key, meta in (dataset_catalog or {}).items():
+       hay = f"{key} {meta.get('label', '')}".lower()
+       if any(tok in hay for tok in ['tree', 'trees', 'crown', 'crowns']):
+           items.append((key, meta))
+   return items
+
+
+def _find_first_present_column(gdf: gpd.GeoDataFrame, candidates: list[str]) -> Optional[str]:
+   if gdf is None or gdf.empty:
+       return None
+   lookup = {str(c).strip().lower(): str(c) for c in gdf.columns}
+   for cand in candidates:
+       hit = lookup.get(cand.lower())
+       if hit:
+           return hit
+   return None
+
+
+def _extract_tree_filter_request(user_task: str) -> Optional[Dict[str, Any]]:
+   q = _normalize_text_token(user_task)
+   if not q or 'tree' not in q:
+       return None
+   if not wants_map_output_keyword(user_task):
+       return None
+
+   status_map = {
+       'healthy': {'field_type': 'health', 'match_terms': ['healthy']},
+       'unhealthy': {'field_type': 'health', 'match_terms': ['unhealthy']},
+       'diseased': {'field_type': 'health', 'match_terms': ['diseased', 'disease', 'unhealthy']},
+       'dead': {'field_type': 'health', 'match_terms': ['dead', 'declining', 'unhealthy']},
+       'missing': {'field_type': 'health', 'match_terms': ['missing', 'lost']},
+   }
+   for term, meta in status_map.items():
+       if re.search(rf'\b{re.escape(term)}\b', q):
+           return {'kind': 'attribute_filter', 'field_type': meta['field_type'], 'query_value': term, 'match_terms': meta['match_terms']}
+
+   species_phrase_patterns = [
+       r'\b(?:show|display|highlight|visualize|map)\s+([a-z0-9\- ]+?)\s+trees\b',
+       r'\b([a-z0-9\- ]+?)\s+trees\b',
+   ]
+   ignore_prefixes = {'all', 'the', 'these', 'those'}
+   for pat in species_phrase_patterns:
+       m = re.search(pat, q)
+       if not m:
+           continue
+       phrase = _normalize_text_token(m.group(1))
+       if not phrase:
+           continue
+       tokens = [t for t in phrase.split() if t not in ignore_prefixes]
+       if not tokens:
+           continue
+       if tokens[-1] in status_map:
+           meta = status_map[tokens[-1]]
+           return {'kind': 'attribute_filter', 'field_type': meta['field_type'], 'query_value': tokens[-1], 'match_terms': meta['match_terms']}
+       species_value = ' '.join(tokens)
+       if species_value:
+           extra_terms = [species_value]
+           if species_value == 'ash':
+               extra_terms.extend(['fraxinus', 'fraxinus excelsior'])
+           elif species_value == 'oak':
+               extra_terms.extend(['quercus'])
+           elif species_value == 'pine':
+               extra_terms.extend(['pinus'])
+           return {'kind': 'attribute_filter', 'field_type': 'species', 'query_value': species_value, 'match_terms': extra_terms}
+   return None
+
+
+def _mask_contains_any(series: pd.Series, terms: list[str]) -> pd.Series:
+   normalized = series.fillna('').astype(str).map(_normalize_text_token)
+   mask = pd.Series(False, index=series.index)
+   for term in terms:
+       needle = _normalize_text_token(term)
+       if not needle:
+           continue
+       mask = mask | normalized.str.contains(re.escape(needle), regex=True, na=False)
+   return mask
+
+
+def _apply_simple_tree_filter(user_task: str, dataset_context: Dict[str, Any], task_name: str, push_map_result: bool = True, return_raw_result: bool = False) -> Optional[Dict[str, Any]]:
+   request = _extract_tree_filter_request(user_task)
+   if not request:
+       return None
+
+   datasets = dataset_context.get('datasets') or {}
+   dataset_catalog = dataset_context.get('dataset_catalog') or {}
+   candidates = _tree_dataset_candidates(dataset_catalog)
+   if not candidates:
+       return None
+
+   species_fields = ['species', 'tree_species', 'species_name', 'common_name', 'commonname', 'scientific_name', 'taxon', 'latin_name', 'class_name']
+   health_fields = ['health', 'condition', 'status', 'health_level']
+
+   best = None
+   best_count = -1
+   for dataset_key, meta in candidates:
+       gdf = datasets.get(dataset_key)
+       if gdf is None or gdf.empty:
+           continue
+       candidate_fields = species_fields if request['field_type'] == 'species' else health_fields
+       field_name = _find_first_present_column(gdf, candidate_fields)
+       if not field_name:
+           continue
+       mask = _mask_contains_any(gdf[field_name], request['match_terms'])
+       matched = gdf[mask].copy()
+       if matched.empty:
+           continue
+       if len(matched) > best_count:
+           best = (dataset_key, meta, field_name, matched)
+           best_count = len(matched)
+
+   if not best:
+       return None
+
+   dataset_key, meta, field_name, matched = best
+   matched = matched.drop_duplicates().reset_index(drop=True)
+
+   if push_map_result:
+       try:
+           push_to_map(matched.to_json(), task_name)
+       except Exception as exc:
+           payload = {
+               'status': 'completed',
+               'message': f"I found {len(matched)} matching tree features in {meta.get('label', dataset_key)}, but pushing them to the map failed: {exc}",
+           }
+           if return_raw_result:
+               payload['raw_result'] = matched
+               payload['dataset_catalog'] = dataset_catalog
+               payload['explanation'] = f"Filtered {meta.get('label', dataset_key)} on {field_name} for {request['query_value']}."
+           return payload
+
+   message = f"I found {len(matched)} matching tree features in {meta.get('label', dataset_key)} and pushed them to the output layer."
+   if not push_map_result:
+       message = f"I found {len(matched)} matching tree features in {meta.get('label', dataset_key)}."
+
+   payload = {'status': 'completed', 'message': message}
+   if return_raw_result:
+       payload['raw_result'] = matched
+       payload['dataset_catalog'] = dataset_catalog
+       payload['explanation'] = f"Filtered {meta.get('label', dataset_key)} on {field_name} for {request['query_value']}."
+   return payload
+
+def _is_count_only_task(user_task: str) -> bool:
+   q = (user_task or '').strip().lower()
+   count_markers = ['how many', 'count ', 'number of', 'total number', 'how much total']
+   map_markers = ['show ', 'display ', 'map ', 'highlight ', 'where are', 'which are']
+   return any(m in q for m in count_markers) and not any(m in q for m in map_markers)
+
+
+def _dataset_matches_count_task(label: str, dataset_key: str, user_task: str) -> bool:
+   text = f"{label} {dataset_key}".lower()
+   q = (user_task or '').lower()
+   noun_sets = [
+       ('tree', ['tree', 'crown', 'tree crown', 'tree crowns']),
+       ('building', ['building', 'buildings']),
+       ('road', ['road', 'roads']),
+   ]
+   for token, synonyms in noun_sets:
+       if token in q:
+           return any(s in text for s in synonyms)
+   return 'tree' in text or 'crown' in text
+
+
+def _fast_count_from_data_locations(user_task: str, task_name: str, data_locations: list) -> Optional[str]:
+   if not _is_count_only_task(user_task):
+       return None
+   matches = []
+   for idx, entry in enumerate(data_locations, start=1):
+       url = _extract_dataset_url(entry)
+       if not url:
+           continue
+       label = _extract_dataset_label(entry, idx)
+       dataset_key = _slugify_dataset_name(label.lower(), fallback=f'dataset_{idx}')
+       if not _dataset_matches_count_task(label, dataset_key, user_task):
+           continue
+       matches.append((label, url))
+   if not matches:
+       return None
+   counts = []
+   for label, url in matches:
+       try:
+           parsed = urlparse(url)
+           qs = dict(parse_qsl(parsed.query, keep_blank_values=True))
+           layer_url = qs.get('layer_url') or url
+           where = qs.get('where', '1=1')
+           geometry = qs.get('geometry')
+           geometry_type = qs.get('geometryType', 'esriGeometryPolygon')
+           in_srid = int(qs['inSR']) if qs.get('inSR') else None
+           aoi = None
+           if geometry:
+               aoi = {'geometry': json.loads(geometry), 'geometryType': geometry_type, 'inSR': in_srid} if in_srid else {'geometry': json.loads(geometry), 'geometryType': geometry_type}
+           elif layer_url.startswith('http') and '/arcgis/geojson' not in layer_url:
+               try:
+                   aoi = get_aoi_in_layer_crs(task_name, layer_url)
+               except Exception:
+                   aoi = None
+           count = int(query_feature_layer_count(layer_url, where=where, aoi=aoi))
+           counts.append((label, count))
+       except Exception as exc:
+           print(f'Fast count failed for {label}: {exc}')
+   if not counts:
+       return None
+   label, total = max(counts, key=lambda x: x[1])
+   noun = 'features'
+   q = (user_task or '').lower()
+   if 'tree' in q:
+       noun = 'trees'
+   elif 'building' in q:
+       noun = 'buildings'
+   elif 'road' in q:
+       noun = 'roads'
+   return f"There are {total} {noun} in {label}."
+
+
+def build_preloaded_dataset_context(data_locations: list, save_dir: str, max_workers: Optional[int] = None) -> Dict[str, Any]:
+   datasets_dir = os.path.join(save_dir, "preloaded_datasets")
+   os.makedirs(datasets_dir, exist_ok=True)
+   worker_count = max(1, min(int(max_workers or os.getenv("DATA_PRELOAD_MAX_WORKERS", str(min(8, max(2, (os.cpu_count() or 2)))))), 16))
+
+   manifests: list[Dict[str, Any]] = []
+   with ThreadPoolExecutor(max_workers=worker_count) as ex:
+       futures = {ex.submit(_preload_single_dataset, entry, idx, datasets_dir): idx for idx, entry in enumerate(data_locations, start=1)}
+       for fut in as_completed(futures):
+           idx = futures[fut]
+           try:
+               manifest = fut.result()
+               if manifest:
+                   manifests.append(manifest)
+           except Exception as exc:
+               print(f"Dataset preload failed for entry {idx}: {exc}")
+
+   manifests.sort(key=lambda x: x.get("dataset_key", ""))
+   dataset_catalog = {m["dataset_key"]: m for m in manifests}
+   datasets = {}
+   for key, meta in dataset_catalog.items():
+       try:
+           datasets[key] = gpd.read_file(meta["local_geojson"])
+       except Exception as exc:
+           print(f"Failed to load preloaded GeoJSON for {key}: {exc}")
+
+   manifest_path = os.path.join(datasets_dir, "dataset_catalog.json")
+   with open(manifest_path, "w", encoding="utf-8") as f:
+       json.dump({"datasets": manifests}, f, indent=2)
+
+   prompt_lines = []
+   for idx, meta in enumerate(manifests, start=1):
+       cols = ", ".join(meta.get("columns") or [])
+       geom_types = ", ".join(meta.get("geometry_types") or [])
+       prompt_lines.append(
+           f"{idx}. {meta['label']} => datasets['{meta['dataset_key']}'] | local_geojson={meta['local_geojson']} | "
+           f"feature_count={meta.get('feature_count', 0)} | geometry_types={geom_types or 'unknown'} | columns={cols or 'none'}"
+       )
+
+   prompt_text = "\n".join(prompt_lines) if prompt_lines else "No datasets were preloaded locally."
+   return {
+       "datasets": datasets,
+       "dataset_catalog": dataset_catalog,
+       "dataset_manifest_path": manifest_path,
+       "prompt_text": prompt_text,
+   }
+
+
+# ============================================================
 #              The geospatial code llm pipeline
 # ============================================================
 
 
-def long_running_task(user_task: str, task_name: str, data_locations: list):
+def long_running_task(user_task: str, task_name: str, data_locations: list, push_map_result: bool = True, return_raw_result: bool = False):
    message = None
    try:
        save_dir = os.path.join(os.getcwd(), task_name)
        os.makedirs(save_dir, exist_ok=True)
 
+       direct_fast_payload = _direct_simple_tree_fast_path(user_task, task_name, push_map_result=push_map_result, return_raw_result=return_raw_result)
+       if direct_fast_payload:
+           return direct_fast_payload
+
+       fast_count_message = _fast_count_from_data_locations(user_task, task_name, data_locations)
+       if fast_count_message:
+           return {"status": "completed", "message": fast_count_message}
+
+       remote_fast_filter = _remote_filter_output_fast_path(
+           user_task,
+           task_name,
+           data_locations,
+           push_map_result=push_map_result,
+           return_raw_result=return_raw_result,
+       )
+       if remote_fast_filter:
+           return remote_fast_filter
+
+       remote_species_list = _remote_list_species_fast_path(user_task, task_name, data_locations)
+       if remote_species_list:
+           return remote_species_list
+
+       dataset_context = build_preloaded_dataset_context(data_locations, save_dir)
+
+       fast_filter_payload = _apply_simple_tree_filter(
+           user_task,
+           dataset_context,
+           task_name,
+           push_map_result=push_map_result,
+           return_raw_result=return_raw_result,
+       )
+       if fast_filter_payload:
+           return fast_filter_payload
+
+       enriched_data_locations = list(data_locations)
+       if dataset_context.get("prompt_text"):
+           enriched_data_locations.append("Preloaded local datasets for direct GeoDataFrame access:\n" + dataset_context["prompt_text"])
+           enriched_data_locations.append(f"Dataset catalog JSON path: {dataset_context['dataset_manifest_path']}")
 
        solution = Solution(
            task=user_task,
            task_name=task_name,
            save_dir=save_dir,
-           data_locations=data_locations,
+           data_locations=enriched_data_locations,
+           dataset_catalog=dataset_context.get("dataset_catalog") or {},
        )
 
 
@@ -715,7 +1515,17 @@ def long_running_task(user_task: str, task_name: str, data_locations: list):
            graph_code = graph_code2
 
 
-       exec(graph_code, globals())
+       exec_env = dict(globals())
+       exec_env.update({
+           "datasets": dataset_context.get("datasets", {}),
+           "dataset_catalog": dataset_context.get("dataset_catalog", {}),
+           "dataset_manifest_path": dataset_context.get("dataset_manifest_path"),
+           "pd": pd,
+           "gpd": gpd,
+           "np": np,
+           "requests": requests,
+       })
+       exec(graph_code, exec_env)
 
 
        # Load graph file
@@ -752,6 +1562,7 @@ def long_running_task(user_task: str, task_name: str, data_locations: list):
 
 
        print("Starting execution...")
+       exec_env.pop("result", None)
 
 
        # ============================================================
@@ -776,14 +1587,14 @@ def long_running_task(user_task: str, task_name: str, data_locations: list):
                return {"status": "completed", "message": f"Still failing compile gate: {gate_msg2}"}
 
 
-           exec(gated2, globals())
+           exec(gated2, exec_env)
            final_executed_code = gated2
        else:
-           exec(gated_code, globals())
+           exec(gated_code, exec_env)
            final_executed_code = gated_code
 
 
-       result = globals().get("result", None)
+       result = exec_env.get("result", None)
        print("result type:", type(result))
        print("Final result:", result)
 
@@ -806,7 +1617,12 @@ def long_running_task(user_task: str, task_name: str, data_locations: list):
            or (hasattr(result, "empty") and result.empty)
        )
        if is_empty_result:
-           return {"status": "completed", "message": "Your query returned no data. Please check your input."}
+           payload = {"status": "completed", "message": "Your query returned no data. Please check your input."}
+           if return_raw_result:
+               payload["raw_result"] = None
+               payload["explanation"] = explanation_text
+               payload["dataset_catalog"] = dataset_context.get("dataset_catalog", {})
+           return payload
 
 
        if wants_map_output(user_task):

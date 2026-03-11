@@ -62,6 +62,7 @@ class Solution():
                  #gemini-1.5-flash-002
                  model="gemini-2.0-flash-001",
                  data_locations=[],
+                 dataset_catalog=None,
                  stream=True,
                  verbose=True,
                  project_id="disco-parsec-444415-c4",
@@ -72,6 +73,7 @@ class Solution():
         self.graph_response = None
         self.role = role
         self.data_locations = data_locations
+        self.dataset_catalog = dataset_catalog or {}
         self.task_name = task_name
         self.save_dir = save_dir
         self.code_for_graph = ""
@@ -91,16 +93,29 @@ class Solution():
         self.code_for_assembly = ""
         self.graph_prompt = ""
         self.data_locations_str = '\n'.join([f"{idx + 1}. {line}" for idx, line in enumerate(self.data_locations)])
+        dataset_lines = []
+        for idx, (key, meta) in enumerate((self.dataset_catalog or {}).items(), start=1):
+            dataset_lines.append(f"{idx}. datasets['{key}'] => local_geojson={meta.get('local_geojson')} | feature_count={meta.get('feature_count', 0)} | columns={', '.join(meta.get('columns') or [])}")
+        self.dataset_catalog_str = '\n'.join(dataset_lines) if dataset_lines else 'No preloaded datasets available.'
         # Example Graph Requirement (you might need to update this with your constants module)
         graph_requirement = constants.graph_requirement.copy()
         graph_requirement.append(f"Save the network into GraphML format, save it at: {self.graph_file}")
         graph_requirement_str =  '\n'.join([f"{idx + 1}. {line}" for idx, line in enumerate(graph_requirement)])
-        
+        direct_dataset_rules = (
+            "Direct dataset execution rules:\n"
+            "1. Prefer already-loaded GeoDataFrames from datasets[...] whenever available.\n"
+            "2. Do not download data again if a dataset key or local_geojson path is already provided.\n"
+            "3. Use GeoPandas vectorized operations, spatial joins, overlays, dissolve, clip, and groupby instead of Python loops where possible.\n"
+            "4. Set result to a GeoDataFrame, pandas DataFrame, list, or scalar.\n"
+            "5. Avoid requests.get or gpd.read_file(url) unless no preloaded dataset is available.\n"
+        )
         graph_prompt = f'Your role: {self.role} \n\n' + \
                f'Your task: {constants.graph_task_prefix} \n {self.task} \n\n' + \
                f'Your reply needs to meet these requirements: \n {graph_requirement_str} \n\n' + \
                f'Your reply example: {constants.graph_reply_exmaple} \n\n' + \
-               f'Data locations (each data is a node): {self.data_locations_str} \n'
+               f'Data locations (each data is a node): {self.data_locations_str} \n\n' + \
+               f'Preloaded datasets available for direct GeoDataFrame use: {self.dataset_catalog_str} \n\n' + \
+               direct_dataset_rules
         self.graph_prompt = graph_prompt
 
         self.direct_request_LLM_response = ""
@@ -414,6 +429,8 @@ class Solution():
                            f'This function is one step to solve the question/task: {self.task} \n\n' + \
                            f"This function is a operation node in a solution graph for the question/task, the Python code to build the graph is: \n{self.code_for_graph} \n\n" + \
                            f'Data locations: {self.data_locations_str} \n\n' + \
+                           f'Preloaded datasets: {self.dataset_catalog_str} \n\n' + \
+                           f'Preloaded datasets: {self.dataset_catalog_str} \n\n' + \
                            f'Your reply example: {constants.operation_reply_exmaple} \n\n' + \
                            f'Your reply needs to meet these requirements: \n {operation_requirement_str} \n\n' + \
                            f"The ancestor function code is (need to follow the generated file names and attribute names): \n {ancestor_operation_codes} \n\n" + \
@@ -509,10 +526,11 @@ class Solution():
                           f"Your task is: use the given Python functions, return a complete Python program to solve the question: \n {self.task}" + \
                           f"Requirement: \n {assembly_requirement} \n\n" + \
                           f"Data location: \n {self.data_locations_str} \n" + \
+                          f"Preloaded datasets: \n {self.dataset_catalog_str} \n" + \
                           f"Code: \n {all_operation_code_str}"
         
         self.assembly_prompt = assembly_prompt
-        return self.assembly_prompt
+        return assembly_prompt
     
     
     def get_LLM_assembly_response(self, review=True):
@@ -561,6 +579,60 @@ class Solution():
         direct_request_prompt = f'Your role: {constants.direct_request_role} \n' + \
                                 f'Your task: {constants.direct_request_task_prefix} to address the question or task: {self.task} \n' + \
                            f'Location for data you may need: {self.data_locations_str} \n' + \
+                           f'Preloaded datasets for direct GeoDataFrame use: {self.dataset_catalog_str} \n' + \
+                           f'Your reply needs to meet these requirements: \n {direct_request_requirement_str} \n'
+
+        return direct_request_prompt
+    
+    
+    def get_LLM_assembly_response(self, review=True):
+        # self.prompt_for_assembly_program()
+        # assembly_LLM_response = helper.get_LLM_reply(prompt=self.assembly_prompt,
+        #                   system_role=constants.assembly_role,
+        #                   retry_cnt=10,
+        #                   sleep_sec=20
+        #                   # model=r"gpt-4",
+        #                  )
+        # self.assembly_LLM_response = assembly_LLM_response
+        # self.code_for_assembly = helper.extract_code(self.assembly_LLM_response)
+        
+        # try:
+        #     code_for_assembly = helper.extract_code(response=self.assembly_LLM_response, verbose=False)
+        # except Exception as e:
+        #         code_for_assembly = ""
+                
+        # self.code_for_assembly = code_for_assembly
+
+        # if review:
+        #     self.ask_LLM_to_review_assembly_code()
+        
+        return self.prompt_for_assembly_program()
+    
+    def save_solution(self):
+#         , graph=True
+        new_name = os.path.join(self.save_dir, f"{self.task_name}.pkl")
+        with open(new_name, "wb") as f:
+            pickle.dump(self, f)
+            
+    def load_solution(file_path):
+        with open(file_path, "rb") as f:
+            solution = pickle.load(f)
+        return solution
+    
+    def get_solution_at_one_time(self):
+        pass
+
+    @property
+    def direct_request_prompt(self):
+
+        direct_request_requirement_str = '\n'.join([f"{idx + 1}. {line}" for idx, line in enumerate(
+            constants.direct_request_requirement)])
+
+        direct_request_prompt = f'Your role: {constants.direct_request_role} \n' + \
+                                f'Your task: {constants.direct_request_task_prefix} to address the question or task: {self.task} \n' + \
+                           f'Location for data you may need: {self.data_locations_str} \n' + \
+                           f'Preloaded datasets for direct GeoDataFrame use: {self.dataset_catalog_str} \n' + \
+                           f'Preloaded datasets for direct GeoDataFrame use: {self.dataset_catalog_str} \n' + \
                            f'Your reply needs to meet these requirements: \n {direct_request_requirement_str} \n'
         return direct_request_prompt
 
@@ -670,6 +742,7 @@ class Solution():
                           f"Requirement: \n {debug_requirement_str} \n\n" + \
                           f"The given code is used for this task: {self.task} \n\n" + \
                           f"The data location associated with the given code: \n {self.data_locations_str} \n\n" + \
+                          f"The preloaded datasets associated with the given code: \n {self.dataset_catalog_str} \n\n" + \
                           f"The error information for the code is: \n{str(error_info_str)} \n\n" + \
                           f"The code is: \n{code}"
 

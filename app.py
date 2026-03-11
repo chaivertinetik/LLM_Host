@@ -7,11 +7,15 @@ import os
 import json
 import time
 import uuid
+import geopandas as gpd
 from typing import Dict, Optional, Any
+from shapely import wkb as shapely_wkb
 from pydantic import BaseModel
 from fastapi import FastAPI, HTTPException, Request, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+import urllib.parse
+import json as _json
 from credentials import db, parser, emd_model
 from appagents import (
     llm,
@@ -29,7 +33,7 @@ from appagents import (
     geospatial_helper,
     get_query_hash, check_firestore_for_cached_answer, store_answer_in_firestore, cache_load_helper, get_forestry_agent
 )
-from appbackend import trigger_cleanup, ClearRequest, get_project_urls, get_attr, make_project_data_locations, get_project_coords, get_project_aoi_geometry
+from appbackend import trigger_cleanup, ClearRequest, get_project_urls, get_attr, make_project_data_locations, get_project_coords, get_project_aoi_geometry, _query_feature_layer_json, _sanitise_layer_url
 from appbackend import filter as push_to_map
 from gcp_sql import fetch_geojson as fetch_cloudsql_geojson, describe_source as describe_cloudsql_source
 
@@ -48,6 +52,8 @@ except Exception as _e:
 
 
 # --------------------- Setup FASTAPI app ---------------------
+os.environ.setdefault("LLM_USE_PRELOADED_DATASETS", "1")
+os.environ.setdefault("DATA_PRELOAD_MAX_WORKERS", str(min(8, max(2, (os.cpu_count() or 2)))))
 app = FastAPI()
 
 app.add_middleware(
@@ -155,6 +161,129 @@ def enqueue_cloud_task(payload: dict, job_id: Optional[str] = None, delay_second
     return job_id
 
 
+# --------------------- Chunk-aware orchestration helpers ---------------------
+def _extract_chunk_index(entry: str):
+    head = str(entry).split(":", 1)[0]
+    m = re.search(r"chunk\s+(\d+)\s*/\s*(\d+)", head, flags=re.IGNORECASE)
+    if not m:
+        return None
+    return int(m.group(1)), int(m.group(2))
+
+
+def _group_data_locations_for_chunks(data_locations: list[str]) -> list[list[str]]:
+    base_entries: list[str] = []
+    grouped: Dict[int, list[str]] = {}
+    total_chunks = 0
+    for entry in data_locations:
+        parsed = _extract_chunk_index(entry)
+        if not parsed:
+            base_entries.append(entry)
+            continue
+        idx, total = parsed
+        total_chunks = max(total_chunks, total)
+        grouped.setdefault(idx, []).append(entry)
+
+    if total_chunks <= 1 or not grouped:
+        return [data_locations]
+
+    chunked = []
+    for idx in sorted(grouped):
+        chunked.append(base_entries + grouped[idx])
+    return chunked
+
+
+def _merge_chunk_results(results: list[Any]):
+    cleaned = [r for r in results if r is not None]
+    if not cleaned:
+        return None
+
+    if all(hasattr(r, "geometry") and hasattr(r, "to_json") for r in cleaned):
+        merged = gpd.GeoDataFrame(pd.concat(cleaned, ignore_index=True), crs=getattr(cleaned[0], "crs", None))
+        if "geometry" in merged.columns:
+            sig_parts = []
+            for col in merged.columns:
+                if col == "geometry":
+                    sig_parts.append(merged.geometry.apply(lambda g: shapely_wkb.dumps(g, hex=True) if g is not None else ""))
+                else:
+                    sig_parts.append(merged[col].astype(str).fillna(""))
+            if sig_parts:
+                merged["__chunk_sig__"] = pd.concat(sig_parts, axis=1).agg("|".join, axis=1)
+                merged = merged.drop_duplicates(subset=["__chunk_sig__"]).drop(columns=["__chunk_sig__"], errors="ignore")
+        return merged
+
+    if all(isinstance(r, list) for r in cleaned):
+        merged = []
+        seen = set()
+        for chunk in cleaned:
+            for item in chunk:
+                key = json.dumps(item, sort_keys=True, default=str) if isinstance(item, (dict, list, tuple)) else str(item)
+                if key in seen:
+                    continue
+                seen.add(key)
+                merged.append(item)
+        return merged
+
+    if len(cleaned) == 1:
+        return cleaned[0]
+
+    return cleaned
+
+
+def _run_chunk_aware_work(user_task: str, task_name: str, data_locations: list[str]) -> dict:
+    chunk_groups = _group_data_locations_for_chunks(data_locations)
+    if len(chunk_groups) <= 1:
+        return long_running_task(user_task, task_name, data_locations)
+
+    chunk_payloads = []
+    raw_results = []
+    explanations = []
+    errors = []
+
+    for idx, chunk_locations in enumerate(chunk_groups, start=1):
+        chunk_task_name = f"{task_name}__chunk_{idx}"
+        chunk_result = long_running_task(
+            user_task,
+            chunk_task_name,
+            chunk_locations,
+            push_map_result=False,
+            return_raw_result=True,
+        )
+        chunk_payloads.append(chunk_result)
+        if chunk_result.get("raw_result") is not None:
+            raw_results.append(chunk_result.get("raw_result"))
+        if chunk_result.get("explanation"):
+            explanations.append(chunk_result.get("explanation"))
+        msg = str(chunk_result.get("message", ""))
+        if chunk_result.get("status") != "completed" or "failed" in msg.lower():
+            errors.append(f"chunk {idx}: {msg}")
+
+    merged_result = _merge_chunk_results(raw_results)
+    explanation_text = explanations[0] if explanations else "The large ROI was processed in chunks and merged into one output."
+
+    if merged_result is None:
+        return {
+            "status": "completed",
+            "message": "Chunk-aware processing finished but returned no merged output." + (f" Partial issues: {'; '.join(errors)}" if errors else ""),
+        }
+
+    try:
+        if hasattr(merged_result, "to_json") and hasattr(merged_result, "geometry"):
+            push_to_map(merged_result.to_json(), task_name)
+        else:
+            push_to_map(merged_result, task_name)
+    except Exception as map_error:
+        return {
+            "status": "completed",
+            "message": f"Chunk-aware processing completed but map display failed: {map_error}. {explanation_text}",
+        }
+
+    suffix = f" Partial chunk issues: {'; '.join(errors)}" if errors else ""
+    return {
+        "status": "completed",
+        "message": f"The large ROI was processed in {len(chunk_groups)} chunks, merged, and pushed to the map. {explanation_text}{suffix}",
+    }
+
+
 # --------------------- Core worker logic (shared by /run_job and inline fallback) ---------------------
 def _do_heavy_work(user_task: str, task_name: str) -> dict:
     """
@@ -166,12 +295,81 @@ def _do_heavy_work(user_task: str, task_name: str) -> dict:
     else:
         data_locations = make_project_data_locations(task_name, include_seasons=False, attrs=attrs)
 
-    result = long_running_task(user_task, task_name, data_locations)
+    chunk_orchestration_enabled = os.getenv("LLM_CHUNK_ORCHESTRATION", "1").strip().lower() in ("1", "true", "yes")
+    if chunk_orchestration_enabled:
+        result = _run_chunk_aware_work(user_task, task_name, data_locations)
+    else:
+        result = long_running_task(user_task, task_name, data_locations)
 
     if isinstance(result, dict):
         return result
     return {"message": str(result)}
 
+
+# --------------------- ArcGIS GeoJSON proxy endpoint ---------------------
+@app.get("/arcgis/geojson")
+async def arcgis_geojson_proxy(
+    layer_url: str = Query(...),
+    where: str = Query("1=1"),
+    outFields: str = Query("*"),
+    geometry: Optional[str] = Query(None),
+    geometryType: str = Query("esriGeometryPolygon"),
+    spatialRel: str = Query("esriSpatialRelIntersects"),
+    inSR: Optional[int] = Query(None),
+    outSR: int = Query(4326),
+    resultOffset: int = Query(0, ge=0),
+    resultRecordCount: Optional[int] = Query(None, ge=1, le=5000),
+    orderByFields: Optional[str] = Query(None),
+):
+    try:
+        layer_url = _sanitise_layer_url(layer_url)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+    aoi = None
+    if geometry:
+        try:
+            aoi = _coerce_proxy_aoi(_json.loads(geometry), geometryType, inSR, outSR)
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=f"Invalid geometry JSON: {exc}")
+
+    fc = _query_feature_layer_json(
+        layer_url,
+        where=where,
+        out_fields=outFields,
+        out_wkid=outSR,
+        result_offset=resultOffset,
+        result_record_count=resultRecordCount,
+        order_by_fields=orderByFields,
+        aoi=aoi,
+    )
+    if fc is None:
+        raise HTTPException(status_code=502, detail="ArcGIS layer query failed")
+    return JSONResponse(content=fc)
+
+
+@app.get("/arcgis/count")
+async def arcgis_count_proxy(
+    layer_url: str = Query(...),
+    where: str = Query("1=1"),
+    geometry: Optional[str] = Query(None),
+    geometryType: str = Query("esriGeometryPolygon"),
+    inSR: Optional[int] = Query(None),
+):
+    try:
+        layer_url = _sanitise_layer_url(layer_url)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+    aoi = None
+    if geometry:
+        try:
+            aoi = _coerce_proxy_aoi(_json.loads(geometry), geometryType, inSR, 4326)
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=f"Invalid geometry JSON: {exc}")
+
+    count = query_feature_layer_count(layer_url, where=where, aoi=aoi)
+    return JSONResponse(content={"count": int(count)})
 
 # --------------------- Cloud SQL GeoJSON endpoints ---------------------
 @app.get("/cloudsql/geojson")
@@ -187,6 +385,9 @@ async def cloudsql_geojson(
     distance_m: Optional[float] = Query(None),
     limit: int = Query(5000, ge=1, le=50000),
     order_by: Optional[str] = Query(None),
+    chunking: bool = Query(True),
+    max_workers: Optional[int] = Query(None, ge=1, le=16),
+    max_chunks: Optional[int] = Query(None, ge=1, le=64),
 ):
     source = {
         "schema": schema,
@@ -199,6 +400,9 @@ async def cloudsql_geojson(
         "distance_m": distance_m,
         "limit": limit,
         "order_by": [x.strip() for x in order_by.split(",")] if order_by else None,
+        "chunking": chunking,
+        "max_workers": max_workers,
+        "max_chunks": max_chunks,
     }
     aoi = get_project_aoi_geometry(project_name) if project_name else None
     try:
