@@ -47,3 +47,11 @@ This repo now supports Google Cloud SQL PostgreSQL / PostGIS-backed data locatio
 ```
 
 When `aoifilter: true`, the generated data location is an internal ROI-aware GeoJSON URL rather than an ArcGIS URL, so the LLM can keep using the existing data-location workflow without needing ArcGIS tokens.
+
+
+## Runtime updates
+
+- GeoDataFrame-first execution path with preloaded local GeoJSON caches.
+- ArcGIS Online input/output prefers ArcGIS Python API (`GIS`, `FeatureLayer`).
+- Large ROI workflows support chunk-aware orchestration and batch map push.
+- Generated code is instructed to prefer `datasets[...]` and local GeoJSON paths instead of repeated HTTP fetches.
