@@ -36,42 +36,42 @@ additional_data_locations:
       aoifilter: true
       priority: 10
 
-    - label: "Tree Polygons -Tree Crowns with Species and Health Information - Tree Crown data with Ash and other Species data along with their health levels and health information from counsel data."
-      url: "https://services-eu1.arcgis.com/8uHkpVrXUjYCyrO4/arcgis/rest/services/ArbotrackPolygons_CC_07102025/FeatureServer/0"
-      aoifilter: true
-      priority: 10
+#    - label: "Tree Polygons -Tree Crowns with Species and Health Information - Tree Crown data with Ash and other Species data along with their health levels and health information from counsel data."
+#      url: "https://services-eu1.arcgis.com/8uHkpVrXUjYCyrO4/arcgis/rest/services/ArbotrackPolygons_CC_07102025/FeatureServer/0"
+#      aoifilter: true
+#      priority: 10
 
-    - label: "Open Space - Layer representing Cardiff’s parks, gardens, and accessible public green areas."
-      url: "https://services-eu1.arcgis.com/8uHkpVrXUjYCyrO4/arcgis/rest/services/OpenSpaces_CC_2025/FeatureServer/0"
-      aoifilter: true
-      priority: 10 
+  #  - label: "Open Space - Layer representing Cardiff’s parks, gardens, and accessible public green areas."
+  #    url: "https://services-eu1.arcgis.com/8uHkpVrXUjYCyrO4/arcgis/rest/services/OpenSpaces_CC_2025/FeatureServer/0"
+  #    aoifilter: true
+  #    priority: 10 
     
-    - label: "Building - Cardiff’s local building footprint dataset representing property outlines for analysis."
-      url: "https://services-eu1.arcgis.com/8uHkpVrXUjYCyrO4/arcgis/rest/services/Building_CC_01102025/FeatureServer/0"
-      aoifilter: true
-      priority: 10 
+ #   - label: "Building - Cardiff’s local building footprint dataset representing property outlines for analysis."
+ #     url: "https://services-eu1.arcgis.com/8uHkpVrXUjYCyrO4/arcgis/rest/services/Building_CC_01102025/FeatureServer/0"
+ #     aoifilter: true
+ #     priority: 10 
 
-    - label: "Non Operational Property - Cardiff Council properties not in operational use, included for ownership context."
-      url: "https://services-eu1.arcgis.com/8uHkpVrXUjYCyrO4/arcgis/rest/services/NonOperationalProperty_CC_2025/FeatureServer/0"
-      aoifilter: true
-      priority: 10
+   # - label: "Non Operational Property - Cardiff Council properties not in operational use, included for ownership context."
+    #  url: "https://services-eu1.arcgis.com/8uHkpVrXUjYCyrO4/arcgis/rest/services/NonOperationalProperty_CC_2025/FeatureServer/0"
+    #  aoifilter: true
+    #  priority: 10
 
-    - label: "Operational Property - Cardiff Council operational property boundaries used for management and analysis."
-      url: "https://services-eu1.arcgis.com/8uHkpVrXUjYCyrO4/arcgis/rest/services/OperationalProperty_CC_2025/FeatureServer"
-      aoifilter: true
-      priority: 10
+   # - label: "Operational Property - Cardiff Council operational property boundaries used for management and analysis."
+      #url: "https://services-eu1.arcgis.com/8uHkpVrXUjYCyrO4/arcgis/rest/services/OperationalProperty_CC_2025/FeatureServer"
+     # aoifilter: true
+    #  priority: 10
 
-    - label: "Tree Crowns with Species and Health Information - Tree Crown data with Ash and other Species data along with their health levels and health information surveyed by Vertinetik."
-      url: "https://services-eu1.arcgis.com/8uHkpVrXUjYCyrO4/arcgis/rest/services/TreeCrowns_CC_CardiffTrials_5cm_2026/FeatureServer/0"
-      aoifilter: true
-      priority: 10
+#    - label: "Tree Crowns with Species and Health Information - Tree Crown data with Ash and other Species data along with their health levels and health information surveyed by Vertinetik."
+#      url: "https://services-eu1.arcgis.com/8uHkpVrXUjYCyrO4/arcgis/rest/services/TreeCrowns_CC_CardiffTrials_5cm_2026/FeatureServer/0"
+#     aoifilter: true
+#      priority: 10
 
     - label: "TMA Risk Layer - Layer created by TMA showing various risk areas in Cardiff City."
       url: "https://services-eu1.arcgis.com/8uHkpVrXUjYCyrO4/arcgis/rest/services/TMA_CC_Enviromap_Risk_Simplified/FeatureServer/0"
       aoifilter: true  
       priority: 5
 
-    - label: "Roads - National road and street network to be used as the source of road datasets."
-      url: "https://services.arcgis.com/qHLhLQrcvEnxjtPr/arcgis/rest/services/OS_OpenRoads/FeatureServer/1"
-      aoifilter: true
-      priority: 5
+ #   - label: "Roads - National road and street network to be used as the source of road datasets."
+  #    url: "https://services.arcgis.com/qHLhLQrcvEnxjtPr/arcgis/rest/services/OS_OpenRoads/FeatureServer/1"
+  #    aoifilter: true
+   #   priority: 5
