@@ -880,7 +880,7 @@ def get_project_urls(project_name):
     fields = [
         "PROJECT_NAME", "ORTHOMOSAIC", "TREE_CROWNS", "TREE_TOPS", "PREDICTION",
         "CHAT_OUTPUT", "USER_CROWNS", "USER_TOPS", "SURVEY_DATE", "CrownSketch",
-        "CrownSketch_Predictions", "CHAT_INPUT", "CHAT_OUTPUT_POINT",
+        "CrownSketch_Predictions", "CHAT_INPUT", "LLM_input_polygon", "LLM_INPUT_POLYGON", "CHAT_OUTPUT_POINT",
         "CHAT_OUTPUT_POLYGON", "CHAT_OUTPUT_LINE",
     ]
     where = f"PROJECT_NAME = '{project_name}'"
@@ -1120,9 +1120,9 @@ def get_roi_gdf(project_name: str) -> gpd.GeoDataFrame:
     logger.info(f"Fetching ROI GeoDataFrame for project: {project_name}")
     try:
         attrs = get_project_urls(project_name)
-        chat_input_url = get_attr(attrs, "CHAT_INPUT")
+        chat_input_url = get_attr(attrs, "LLM_input_polygon") or get_attr(attrs, "CHAT_INPUT")
         if not chat_input_url:
-            logger.warning("CHAT_INPUT URL is missing. Returning empty GDF.")
+            logger.warning("LLM_input_polygon / CHAT_INPUT URL is missing. Returning empty GDF.")
             return gpd.GeoDataFrame(geometry=[], crs="EPSG:4326")
 
         logger.info(f"Using CHAT_INPUT URL: {chat_input_url}")
@@ -1644,12 +1644,21 @@ def _drop_timestamp_columns(gdf):
 
 def get_attr(attrs: dict, key: str):
     logger.debug(f"Getting attribute '{key}'. Available keys: {list(attrs.keys())}")
-    if key in attrs:
-        return attrs[key]
-    if (key + " ") in attrs:
-        return attrs[key + " "]
-    stripped = {k.strip(): v for k, v in attrs.items()}
-    return stripped.get(key)
+    alias_map = {
+        "CHAT_INPUT": ["CHAT_INPUT", "LLM_input_polygon", "LLM_INPUT_POLYGON"],
+        "LLM_input_polygon": ["LLM_input_polygon", "LLM_INPUT_POLYGON", "CHAT_INPUT"],
+        "LLM_INPUT_POLYGON": ["LLM_INPUT_POLYGON", "LLM_input_polygon", "CHAT_INPUT"],
+    }
+    lookup_keys = alias_map.get(key, [key])
+    stripped = {str(k).strip(): v for k, v in attrs.items()}
+    for lk in lookup_keys:
+        if lk in attrs:
+            return attrs[lk]
+        if (lk + " ") in attrs:
+            return attrs[lk + " "]
+        if lk in stripped:
+            return stripped[lk]
+    return None
 
 
 def to_gdf(maybe_gdf):
@@ -1962,18 +1971,18 @@ def fetch_crs(base_url, timeout=20, default_wkid=4326):
         return default_wkid
 
 
-# --- AOI selection: CHAT_INPUT first, fallback to ORTHOMOSAIC extent -----------
+# --- AOI selection: LLM_input_polygon first, fallback to CHAT_INPUT then ORTHOMOSAIC extent -----------
 def get_project_aoi_geometry(project_name: str):
     logger.info(f"Determining AOI geometry for project: {project_name}")
     attrs = get_project_urls(project_name)
 
-    chat_input_url = (attrs.get("CHAT_INPUT") or "").strip()
+    roi_input_url = (get_attr(attrs, "LLM_input_polygon") or get_attr(attrs, "CHAT_INPUT") or "").strip()
     ortho_url = (attrs.get("ORTHOMOSAIC") or "").strip()
 
-    if chat_input_url:
-        logger.info(f"Attempting to use CHAT_INPUT URL: {chat_input_url}")
+    if roi_input_url:
+        logger.info(f"Attempting to use ROI input polygon URL: {roi_input_url}")
         try:
-            layer_url = _sanitise_layer_url(chat_input_url)
+            layer_url = _sanitise_layer_url(roi_input_url)
             wkid = fetch_crs(layer_url) or 4326
             gdf = _gdf_from_layer_all(layer_url, out_wkid=wkid)
 
@@ -2003,7 +2012,7 @@ def get_project_aoi_geometry(project_name: str):
                         if u.geom_type in ("Polygon", "MultiPolygon"):
                             rings = _rings_from_shapely(u)
                             logger.info(
-                                f"AOI determined from CHAT_INPUT polygons (WKID: {wkid})."
+                                f"AOI determined from ROI input polygons (WKID: {wkid})."
                             )
                             return {
                                 "geometry": {
@@ -2019,15 +2028,15 @@ def get_project_aoi_geometry(project_name: str):
                             )
 
             logger.info(
-                "CHAT_INPUT had no valid polygons. Falling back to ORTHOMOSAIC extent."
+                "ROI input polygon layer had no valid polygons. Falling back to ORTHOMOSAIC extent."
             )
         except Exception as e:
-            logger.warning(f"CHAT_INPUT AOI fallback due to error: {e}")
+            logger.warning(f"ROI input polygon AOI fallback due to error: {e}")
 
     if not ortho_url:
-        logger.error("Both CHAT_INPUT and ORTHOMOSAIC are missing for this project.")
+        logger.error("Both ROI input polygon layer and ORTHOMOSAIC are missing for this project.")
         raise ValueError(
-            "Both CHAT_INPUT and ORTHOMOSAIC are missing for this project."
+            "Both ROI input polygon layer and ORTHOMOSAIC are missing for this project."
         )
 
     logger.info(f"Using ORTHOMOSAIC URL: {ortho_url}")
@@ -2770,7 +2779,7 @@ def make_project_data_locations(
 
     # --- AOI metadata tracking ------------------------------------------------
     aoi_source_url = (
-        (get_attr(attrs, "CHAT_INPUT") or get_attr(attrs, "ORTHOMOSAIC") or "")
+        (get_attr(attrs, "LLM_input_polygon") or get_attr(attrs, "CHAT_INPUT") or get_attr(attrs, "ORTHOMOSAIC") or "")
         .strip()
         or None
     )

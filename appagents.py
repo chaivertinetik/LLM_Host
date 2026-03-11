@@ -31,7 +31,7 @@ from pydantic import PrivateAttr, BaseModel, Field
 from vertexai.generative_models import GenerativeModel
 from google.api_core.exceptions import ResourceExhausted
 from appbackend import filter as push_to_map
-from appbackend import get_project_coords, _sanitise_layer_url, get_aoi_in_layer_crs, query_feature_layer_count, _query_feature_layer_gdf, _get_layer_max_record_count
+from appbackend import get_project_coords, _sanitise_layer_url, get_aoi_in_layer_crs, query_feature_layer_count, _query_feature_layer_gdf, _get_layer_max_record_count, get_project_urls, get_attr, get_project_aoi_geometry
 from LLM_Heroku_Kernel import Solution
 from google import genai
 from google.genai import types
@@ -689,6 +689,146 @@ def try_llm_fix(code, error_message=None, max_attempts=2):
 _DATASET_URL_RE = re.compile(r"https?://\S+", re.IGNORECASE)
 
 
+_DATASET_HTTP_CACHE_DIR = os.environ.get("DATASET_HTTP_CACHE_DIR", "dataset_http_cache")
+_DATASET_HTTP_CACHE_TTL = int(os.environ.get("DATASET_HTTP_CACHE_TTL_SECONDS", str(12 * 3600)))
+
+
+def _dataset_cache_key(url: str) -> str:
+   return hashlib.sha256(str(url or '').encode('utf-8')).hexdigest()
+
+
+def _cache_is_fresh(path: str, ttl_seconds: int) -> bool:
+   try:
+       return os.path.exists(path) and (time.time() - os.path.getmtime(path) <= ttl_seconds)
+   except Exception:
+       return False
+
+
+def _parse_simple_count_intent(user_task: str) -> Optional[Dict[str, Any]]:
+   q = _normalize_text_token(user_task)
+   if not q:
+       return None
+   if not any(tok in q for tok in ['how many', 'count', 'number of', 'total number', 'total trees', 'how much total']):
+       return None
+   field_type = None
+   query_value = None
+   match_terms = None
+   tree_request = _extract_tree_filter_request(user_task)
+   if tree_request:
+       field_type = tree_request.get('field_type')
+       query_value = tree_request.get('query_value')
+       match_terms = tree_request.get('match_terms')
+   return {'kind': 'count', 'field_type': field_type, 'query_value': query_value, 'match_terms': match_terms}
+
+
+def _get_roi_aoi_for_project(task_name: str) -> Optional[Dict[str, Any]]:
+   try:
+       return get_project_aoi_geometry(task_name)
+   except Exception as exc:
+       print(f'Failed to resolve ROI AOI for {task_name}: {exc}')
+       return None
+
+
+def _find_tree_layer_url(task_name: str) -> Optional[str]:
+   try:
+       attrs = get_project_urls(task_name)
+       return get_attr(attrs, 'TREE_CROWNS')
+   except Exception as exc:
+       print(f'Failed to resolve TREE_CROWNS for {task_name}: {exc}')
+       return None
+
+
+def _direct_species_field_candidates():
+   return ['Species', 'SPECIES', 'species', 'Species_Name', 'TREE_SPECIES', 'Scientific_Name', 'common_name', 'Common_Name']
+
+
+def _direct_health_field_candidates():
+   return ['Health', 'HEALTH', 'health', 'Condition', 'STATUS', 'Health_Level']
+
+
+def _direct_simple_tree_fast_path(user_task: str, task_name: str, push_map_result: bool = True, return_raw_result: bool = False) -> Optional[Dict[str, Any]]:
+   count_intent = _parse_simple_count_intent(user_task)
+   filter_intent = _extract_tree_filter_request(user_task)
+   list_species = _normalize_text_token(user_task) in {'what species are present', 'list species', 'show species', 'which species are present'} or ('species' in _normalize_text_token(user_task) and 'present' in _normalize_text_token(user_task))
+   if not count_intent and not filter_intent and not list_species:
+       return None
+
+   layer_url = _find_tree_layer_url(task_name)
+   if not layer_url:
+       return None
+   aoi = _get_roi_aoi_for_project(task_name)
+
+   # discover fields cheaply
+   sample_gdf = None
+   try:
+       sample_gdf = _query_feature_layer_gdf(layer_url, where='1=1', out_fields='*', out_wkid=4326, result_offset=0, result_record_count=1, order_by_fields='OBJECTID ASC', aoi=aoi)
+   except Exception as exc:
+       print(f'Failed to sample tree layer for fast path: {exc}')
+   species_field = _find_first_present_column(sample_gdf, _direct_species_field_candidates()) if sample_gdf is not None else None
+   health_field = _find_first_present_column(sample_gdf, _direct_health_field_candidates()) if sample_gdf is not None else None
+
+   if list_species and species_field:
+       try:
+           gdf = _paged_query_feature_layer_gdf(layer_url, where='1=1', out_fields=species_field, aoi=aoi, page_size=250, max_pages=20)
+           vals = sorted({str(v).strip() for v in gdf[species_field].dropna().tolist() if str(v).strip()}) if (gdf is not None and not gdf.empty and species_field in gdf.columns) else []
+           if vals:
+               return {'status': 'completed', 'message': f"Species present in the current ROI: {', '.join(vals)}."}
+       except Exception as exc:
+           print(f'Fast species list failed: {exc}')
+
+   active_request = filter_intent or count_intent
+   if not active_request:
+       return None
+
+   field_name = None
+   if active_request.get('field_type') == 'species':
+       field_name = species_field
+   elif active_request.get('field_type') == 'health':
+       field_name = health_field
+
+   extra_where = '1=1'
+   if field_name and active_request.get('query_value'):
+       extra_where = _build_simple_attribute_where(field_name, active_request)
+
+   where = _compose_where('1=1', extra_where)
+
+   if count_intent is not None:
+       try:
+           total = int(query_feature_layer_count(layer_url, where=where, aoi=aoi))
+           noun = 'trees'
+           if active_request.get('query_value'):
+               noun = f"{active_request.get('query_value')} trees"
+           return {'status': 'completed', 'message': f"There are {total} {noun} in the current ROI."}
+       except Exception as exc:
+           print(f'Direct count fast path failed: {exc}')
+
+   if filter_intent is not None:
+       out_fields = ','.join(dict.fromkeys([c for c in ['OBJECTID', species_field, health_field, 'Tree_ID', 'Height', 'GlobalID'] if c])) or '*'
+       try:
+           matched = _paged_query_feature_layer_gdf(layer_url, where=where, out_fields=out_fields, aoi=aoi, page_size=250, max_pages=50)
+       except Exception as exc:
+           print(f'Direct filter fast path failed: {exc}')
+           return None
+       if matched is None or matched.empty:
+           return {'status': 'completed', 'message': 'No matching tree features were found in the current ROI.'}
+       if push_map_result:
+           try:
+               push_to_map(matched.to_json(), task_name)
+           except Exception as exc:
+               payload={'status':'completed','message':f"I found {len(matched)} matching tree features in the current ROI, but pushing them to the map failed: {exc}"}
+               if return_raw_result:
+                   payload['raw_result']=matched
+                   payload['explanation']=f"Direct ROI tree filter on {field_name or 'tree layer'} for {filter_intent.get('query_value')}."
+               return payload
+       msg = f"I found {len(matched)} matching tree features in the current ROI" + (' and pushed them to the output layer.' if push_map_result else '.')
+       payload={'status':'completed','message':msg}
+       if return_raw_result:
+           payload['raw_result']=matched
+           payload['explanation']=f"Direct ROI tree filter on {field_name or 'tree layer'} for {filter_intent.get('query_value')}."
+       return payload
+   return None
+
+
 def _slugify_dataset_name(name: str, fallback: str = "dataset") -> str:
    clean = re.sub(r"[^A-Za-z0-9._-]+", "_", str(name or "").strip()).strip("_")
    return clean[:120] or fallback
@@ -737,14 +877,48 @@ def _preload_single_dataset(entry: str, idx: int, datasets_dir: str) -> Optional
    dataset_key = _slugify_dataset_name(label.lower(), fallback=f"dataset_{idx}")
    local_geojson = os.path.join(datasets_dir, f"{idx:03d}_{dataset_key}.geojson")
    meta = _parse_inline_meta(entry)
+   os.makedirs(_DATASET_HTTP_CACHE_DIR, exist_ok=True)
+   cache_key = _dataset_cache_key(url)
+   cache_geojson = os.path.join(_DATASET_HTTP_CACHE_DIR, f"{cache_key}.geojson")
+   cache_manifest = os.path.join(_DATASET_HTTP_CACHE_DIR, f"{cache_key}.json")
 
-   resp = requests.get(url, timeout=180)
+   if _cache_is_fresh(cache_geojson, _DATASET_HTTP_CACHE_TTL):
+       try:
+           gdf = gpd.read_file(cache_geojson)
+           if not gdf.empty and gdf.crs is None:
+               gdf = gdf.set_crs(4326, allow_override=True)
+           if cache_geojson != local_geojson:
+               import shutil
+               shutil.copyfile(cache_geojson, local_geojson)
+           return {
+               "dataset_key": dataset_key,
+               "label": label,
+               "source_url": url,
+               "local_geojson": local_geojson,
+               "feature_count": int(len(gdf)),
+               "columns": [str(c) for c in gdf.columns if c != "geometry"],
+               "geometry_types": sorted({str(x) for x in getattr(gdf.geometry, "geom_type", []) if x}) if not gdf.empty else [],
+               "crs": str(gdf.crs) if getattr(gdf, "crs", None) else "EPSG:4326",
+               "metadata": meta,
+               "cache_hit": True,
+           }
+       except Exception as exc:
+           print(f'Cached dataset reload failed for {label}: {exc}')
+
+   resp = requests.get(url, timeout=60)
    resp.raise_for_status()
    payload = resp.json()
    gdf = _read_feature_collection_to_gdf(payload)
    if not gdf.empty and gdf.crs is None:
        gdf = gdf.set_crs(4326, allow_override=True)
    gdf.to_file(local_geojson, driver="GeoJSON")
+   try:
+       import shutil
+       shutil.copyfile(local_geojson, cache_geojson)
+       with open(cache_manifest, 'w', encoding='utf-8') as f:
+           json.dump({'source_url': url, 'label': label, 'cached_at': time.time()}, f)
+   except Exception as exc:
+       print(f'Failed to persist dataset cache for {label}: {exc}')
 
    return {
        "dataset_key": dataset_key,
@@ -756,6 +930,7 @@ def _preload_single_dataset(entry: str, idx: int, datasets_dir: str) -> Optional
        "geometry_types": sorted({str(x) for x in getattr(gdf.geometry, "geom_type", []) if x}) if not gdf.empty else [],
        "crs": str(gdf.crs) if getattr(gdf, "crs", None) else "EPSG:4326",
        "metadata": meta,
+       "cache_hit": False,
    }
 
 
@@ -1271,6 +1446,10 @@ def long_running_task(user_task: str, task_name: str, data_locations: list, push
    try:
        save_dir = os.path.join(os.getcwd(), task_name)
        os.makedirs(save_dir, exist_ok=True)
+
+       direct_fast_payload = _direct_simple_tree_fast_path(user_task, task_name, push_map_result=push_map_result, return_raw_result=return_raw_result)
+       if direct_fast_payload:
+           return direct_fast_payload
 
        fast_count_message = _fast_count_from_data_locations(user_task, task_name, data_locations)
        if fast_count_message:
