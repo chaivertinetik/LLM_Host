@@ -19,10 +19,25 @@ from shapely.ops import transform as _shp_transform
 import os
 import hashlib as _hashlib
 from functools import lru_cache
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any, Dict, List, Optional, Union, Tuple
 from gcp_sql import build_geojson_url as build_cloudsql_geojson_url
 from pandas.api.types import is_datetime64_any_dtype, is_datetime64tz_dtype
 import time
+import math
+
+try:
+    from arcgis.gis import GIS
+    from arcgis.features import FeatureLayer
+    from arcgis.geometry import Geometry as ArcGISGeometry
+    from arcgis.geometry.filters import intersects as arcgis_intersects
+    _ARCGIS_PY_API_OK = True
+except Exception:
+    GIS = None
+    FeatureLayer = None
+    ArcGISGeometry = None
+    arcgis_intersects = None
+    _ARCGIS_PY_API_OK = False
 
 # READS: long-lived API key (ArcGIS calls accept it via `token=<API_KEY>`), reset per yesr
 ARCGIS_READ_API_KEY = os.getenv("ARCGIS_READ_API_KEY", "").strip()
@@ -87,6 +102,255 @@ logger = PrintLogger()
 class ClearRequest(BaseModel):
     task_name: str
 
+
+# --------------------- ArcGIS Python API session helpers ---------------------
+_AGOL_GIS = None
+_AGOL_LAYER_CACHE: dict[str, Any] = {}
+
+def _arcgis_session_config() -> tuple[str, str, str]:
+    return (
+        os.getenv("AGOL_URL", "https://vertinetik.maps.arcgis.com").strip(),
+        os.getenv("AGOL_USERNAME", "").strip(),
+        os.getenv("AGOL_PASSWORD", "").strip(),
+    )
+
+def _arcgis_py_api_enabled() -> bool:
+    url, username, password = _arcgis_session_config()
+    return bool(_ARCGIS_PY_API_OK and url and username and password)
+
+def get_agol_gis() -> Optional[GIS]:
+    global _AGOL_GIS
+    if not _arcgis_py_api_enabled():
+        return None
+    if _AGOL_GIS is None:
+        url, username, password = _arcgis_session_config()
+        _AGOL_GIS = GIS(url, username, password)
+    return _AGOL_GIS
+
+def get_feature_layer(layer_url: str) -> Optional[FeatureLayer]:
+    try:
+        layer_url = _sanitise_layer_url(layer_url)
+    except Exception:
+        return None
+    if layer_url in _AGOL_LAYER_CACHE:
+        return _AGOL_LAYER_CACHE[layer_url]
+    gis = get_agol_gis()
+    if gis is None or FeatureLayer is None:
+        return None
+    try:
+        lyr = FeatureLayer(layer_url, gis=gis)
+        _AGOL_LAYER_CACHE[layer_url] = lyr
+        return lyr
+    except Exception as exc:
+        logger.warning(f"FeatureLayer init failed for {layer_url}: {exc}")
+        return None
+
+def _arcgis_geom_to_shapely(geom: dict | None):
+    if not geom:
+        return None
+    try:
+        if "x" in geom and "y" in geom:
+            return shape({"type": "Point", "coordinates": (geom["x"], geom["y"])})
+        if "points" in geom:
+            pts = geom.get("points") or []
+            if len(pts) == 1:
+                return shape({"type": "Point", "coordinates": pts[0]})
+            return shape({"type": "MultiPoint", "coordinates": pts})
+        if "paths" in geom:
+            paths = geom.get("paths") or []
+            if len(paths) == 1:
+                return shape({"type": "LineString", "coordinates": paths[0]})
+            return shape({"type": "MultiLineString", "coordinates": paths})
+        if "rings" in geom:
+            rings = geom.get("rings") or []
+            if not rings:
+                return None
+            return shape({"type": "Polygon", "coordinates": rings})
+    except Exception:
+        return None
+    return None
+
+def _feature_set_to_gdf(feature_set: Any, out_wkid: int = 4326) -> gpd.GeoDataFrame:
+    feats = list(getattr(feature_set, "features", []) or [])
+    rows = []
+    geoms = []
+    for feat in feats:
+        rows.append(dict(getattr(feat, "attributes", {}) or {}))
+        geoms.append(_arcgis_geom_to_shapely(getattr(feat, "geometry", None)))
+    if not rows:
+        return gpd.GeoDataFrame(geometry=[], crs=f"EPSG:{out_wkid}")
+    gdf = gpd.GeoDataFrame(pd.DataFrame(rows), geometry=geoms, crs=f"EPSG:{out_wkid}")
+    gdf = gdf.dropna(subset=["geometry"])
+    if out_wkid == 4326:
+        gdf = _ensure_wgs84(gdf)
+    return gdf
+
+def _query_feature_layer_gdf(
+    layer_url: str,
+    where: str = "1=1",
+    out_fields: str = "*",
+    out_wkid: int = 4326,
+    result_offset: int = 0,
+    result_record_count: int | None = None,
+    order_by_fields: str | None = None,
+    aoi: dict | None = None,
+) -> gpd.GeoDataFrame | None:
+    lyr = get_feature_layer(layer_url)
+    if lyr is None:
+        return None
+    kwargs = {
+        "where": where,
+        "out_fields": out_fields,
+        "return_geometry": True,
+        "f": "json",
+        "out_sr": out_wkid,
+        "result_offset": result_offset,
+    }
+    if result_record_count is not None:
+        kwargs["result_record_count"] = result_record_count
+    if order_by_fields:
+        kwargs["order_by_fields"] = order_by_fields
+    if aoi and aoi.get("geometry") and ArcGISGeometry is not None and arcgis_intersects is not None:
+        try:
+            wkid_raw = aoi.get("inSR")
+            if wkid_raw is None:
+                wkid_raw = (aoi.get("geometry", {}).get("spatialReference", {}) or {}).get("wkid", out_wkid)
+            wkid = int(wkid_raw or out_wkid)
+            geom = dict(aoi["geometry"])
+            geom["spatialReference"] = {"wkid": wkid}
+            kwargs["geometry_filter"] = arcgis_intersects(ArcGISGeometry(geom))
+        except Exception as exc:
+            logger.warning(f"Failed to build ArcGIS geometry filter for {layer_url}: {exc}")
+    try:
+        fs = lyr.query(**kwargs)
+        return _feature_set_to_gdf(fs, out_wkid=out_wkid)
+    except Exception as exc:
+        logger.warning(f"FeatureLayer.query failed for {layer_url}: {exc}")
+        return None
+
+def _query_feature_layer_json(
+    layer_url: str,
+    where: str = "1=1",
+    out_fields: str = "*",
+    out_wkid: int = 4326,
+    result_offset: int = 0,
+    result_record_count: int | None = None,
+    order_by_fields: str | None = None,
+    aoi: dict | None = None,
+) -> dict | None:
+    gdf = _query_feature_layer_gdf(
+        layer_url,
+        where=where,
+        out_fields=out_fields,
+        out_wkid=out_wkid,
+        result_offset=result_offset,
+        result_record_count=result_record_count,
+        order_by_fields=order_by_fields,
+        aoi=aoi,
+    )
+    if gdf is None:
+        return None
+    try:
+        return _json.loads(gdf.to_json())
+    except Exception:
+        return {"type": "FeatureCollection", "features": []}
+
+
+def _coerce_proxy_aoi(geometry: dict | None, geometry_type: str = "esriGeometryPolygon", in_srid: int | None = None, out_srid: int = 4326) -> dict | None:
+    if not geometry or not isinstance(geometry, dict):
+        return None
+    gtype = geometry_type or "esriGeometryPolygon"
+    srid = int(in_srid or (geometry.get("spatialReference", {}) or {}).get("wkid", out_srid) or out_srid)
+    if gtype == "esriGeometryEnvelope":
+        required = ["xmin", "ymin", "xmax", "ymax"]
+        if not all(k in geometry for k in required):
+            raise ValueError("Envelope geometry must include xmin, ymin, xmax, ymax")
+        geom = {
+            "xmin": float(geometry["xmin"]),
+            "ymin": float(geometry["ymin"]),
+            "xmax": float(geometry["xmax"]),
+            "ymax": float(geometry["ymax"]),
+            "spatialReference": {"wkid": srid},
+        }
+        return {"geometry": geom, "geometryType": "esriGeometryEnvelope", "inSR": srid}
+    if gtype == "esriGeometryPolygon":
+        rings = geometry.get("rings")
+        if not isinstance(rings, list):
+            raise ValueError("Polygon geometry must include rings")
+        return {"geometry": {"rings": rings, "spatialReference": {"wkid": srid}}, "geometryType": "esriGeometryPolygon", "inSR": srid}
+    if gtype == "esriGeometryPoint":
+        if "x" not in geometry or "y" not in geometry:
+            raise ValueError("Point geometry must include x and y")
+        return {"geometry": {"x": geometry["x"], "y": geometry["y"], "spatialReference": {"wkid": srid}}, "geometryType": "esriGeometryPoint", "inSR": srid}
+    if gtype == "esriGeometryPolyline":
+        paths = geometry.get("paths")
+        if not isinstance(paths, list):
+            raise ValueError("Polyline geometry must include paths")
+        return {"geometry": {"paths": paths, "spatialReference": {"wkid": srid}}, "geometryType": "esriGeometryPolyline", "inSR": srid}
+    return {"geometry": geometry, "geometryType": gtype, "inSR": srid}
+
+
+def query_feature_layer_count(
+    layer_url: str,
+    where: str = "1=1",
+    aoi: dict | None = None,
+    timeout: int = 30,
+) -> int:
+    if aoi is None:
+        try:
+            fl = get_feature_layer(layer_url)
+            if fl is not None:
+                res = fl.query(where=where, return_count_only=True)
+                return int(res or 0)
+        except Exception:
+            pass
+        try:
+            params = _with_read_token_params({"where": where, "returnCountOnly": "true", "f": "json"})
+            r = _session.post(f"{_sanitise_layer_url(layer_url)}/query", data=params, timeout=timeout)
+            r.raise_for_status()
+            return int((r.json() or {}).get("count", 0))
+        except Exception:
+            return 0
+    return int(_count_features_in_aoi(layer_url, aoi, where=where, timeout=timeout))
+
+def _feature_layer_properties(layer_url: str) -> dict | None:
+    lyr = get_feature_layer(layer_url)
+    if lyr is None:
+        return None
+    try:
+        props = getattr(lyr, "properties", None)
+        if props is None:
+            return None
+        if hasattr(props, "to_dict"):
+            return props.to_dict()
+        return dict(props)
+    except Exception:
+        return None
+
+def _feature_layer_delete_all(layer_url: str) -> bool | None:
+    lyr = get_feature_layer(layer_url)
+    if lyr is None:
+        return None
+    try:
+        fs = lyr.query(where="1=1", return_ids_only=True)
+        ids = list((fs or {}).get("objectIds", []) or []) if isinstance(fs, dict) else list(getattr(fs, "object_ids", []) or [])
+        if not ids:
+            return True
+        res = lyr.edit_features(deletes=",".join(str(x) for x in ids))
+        return bool(res)
+    except Exception as exc:
+        logger.warning(f"FeatureLayer delete failed for {layer_url}: {exc}")
+        return None
+
+def _feature_layer_add_batch(layer_url: str, features: list[dict]) -> dict | None:
+    lyr = get_feature_layer(layer_url)
+    if lyr is None:
+        return None
+    try:
+        return lyr.edit_features(adds=features)
+    except Exception as exc:
+        logger.warning(f"FeatureLayer add failed for {layer_url}: {exc}")
+        return None
 
 # --------------------- ARC GIS TOKEN + HELPERS ---------------------
 
@@ -198,12 +462,14 @@ def _with_read_token_params(params: dict | None = None) -> dict:
 
 def _append_token_to_url(url: str) -> str:
     """
-    Append the chosen READ credential (API key or token) to a URL (if token not already present).
-    Used ONLY for display / data_locations outputs, NOT for caching.
+    Append the chosen READ credential only for direct ArcGIS service URLs.
+    Internal proxy URLs and non-ArcGIS URLs are returned unchanged.
     """
     if not isinstance(url, str) or not url.strip():
         return url
     if re.search(r"[?&]token=", url):
+        return url
+    if "/FeatureServer/" not in url and "/MapServer/" not in url:
         return url
 
     try:
@@ -609,69 +875,46 @@ def shapely_to_arcgis_geometry(geom, wkid: int):
 
 def get_project_urls(project_name):
     logger.info(f"Fetching project URLs for '{project_name}'.")
-    query_url = "https://services-eu1.arcgis.com/8uHkpVrXUjYCyrO4/arcgis/rest/services/Project_index/FeatureServer/0/query"
+    layer_url = "https://services-eu1.arcgis.com/8uHkpVrXUjYCyrO4/arcgis/rest/services/Project_index/FeatureServer/0"
 
     fields = [
-        "PROJECT_NAME",
-        "ORTHOMOSAIC",
-        "TREE_CROWNS",
-        "TREE_TOPS",
-        "PREDICTION",
-        "CHAT_OUTPUT",
-        "USER_CROWNS",
-        "USER_TOPS",
-        "SURVEY_DATE",
-        "CrownSketch",
-        "CrownSketch_Predictions",
-        "CHAT_INPUT",
-        "CHAT_OUTPUT_POINT",
-        "CHAT_OUTPUT_POLYGON",
-        "CHAT_OUTPUT_LINE",
+        "PROJECT_NAME", "ORTHOMOSAIC", "TREE_CROWNS", "TREE_TOPS", "PREDICTION",
+        "CHAT_OUTPUT", "USER_CROWNS", "USER_TOPS", "SURVEY_DATE", "CrownSketch",
+        "CrownSketch_Predictions", "CHAT_INPUT", "CHAT_OUTPUT_POINT",
+        "CHAT_OUTPUT_POLYGON", "CHAT_OUTPUT_LINE",
     ]
+    where = f"PROJECT_NAME = '{project_name}'"
 
-    params = {
-        "where": f"PROJECT_NAME = '{project_name}'",
-        "outFields": ",".join(fields),
-        "f": "json",
-    }
+    try:
+        gdf = _query_feature_layer_gdf(layer_url, where=where, out_fields=",".join(fields), out_wkid=4326, result_record_count=1)
+        if gdf is not None and not gdf.empty:
+            row = gdf.iloc[0].drop(labels=["geometry"], errors="ignore")
+            attrs = {k: (None if pd.isna(v) else v) for k, v in row.to_dict().items()}
+            logger.info(f"Successfully fetched attributes for '{project_name}' via ArcGIS Python API.")
+            return attrs
+    except Exception as e:
+        logger.warning(f"ArcGIS Python API project lookup failed for '{project_name}': {e}")
+
+    query_url = f"{layer_url}/query"
+    params = {"where": where, "outFields": ",".join(fields), "f": "json"}
     params = _with_read_token_params(params)
     logger.debug(f"Querying project index with WHERE clause: {params['where']}")
-
     try:
         response = _session.get(query_url, params=params, timeout=20)
         response.raise_for_status()
         if "json" not in response.headers.get("Content-Type", ""):
-            logger.error(
-                f"Non-JSON response for project index: {response.headers.get('Content-Type')} … {response.text[:200]}"
-            )
             raise ValueError("Non-JSON response from project index.")
-
         data = response.json()
-
         if "error" in data:
-            logger.error(f"ArcGIS Error fetching project index: {data['error']}")
-            raise ValueError(
-                f"ArcGIS Error for project '{project_name}': {data['error']['message']}"
-            )
-
+            raise ValueError(f"ArcGIS Error for project '{project_name}': {data['error']['message']}")
         if not data.get("features"):
-            logger.warning(f"No project found with the name '{project_name}'.")
             raise ValueError(f"No project found with the name '{project_name}'.")
-
-        attributes = data["features"][0]["attributes"]
-        logger.info(f"Successfully fetched attributes for '{project_name}'.")
-        return attributes
+        return data["features"][0]["attributes"]
     except requests.RequestException as e:
-        logger.error(
-            f"Network/HTTP Error fetching project index for '{project_name}': {e}"
-        )
         raise ValueError(f"Network error fetching project index: {e}")
     except ValueError:
         raise
     except Exception as e:
-        logger.error(
-            f"Unexpected error in get_project_urls for '{project_name}': {e}"
-        )
         raise ValueError(f"Unexpected error fetching project data: {e}")
 
 
@@ -708,6 +951,14 @@ def _sanitise_layer_url(url: str) -> str:
 def _get_layer_max_record_count(layer_url: str, timeout: int = 20) -> int:
     logger.debug(f"Attempting to fetch maxRecordCount for {layer_url}")
     default_mrc = 1000
+    try:
+        meta = _feature_layer_properties(layer_url)
+        if isinstance(meta, dict):
+            mrc = meta.get("maxRecordCount")
+            if isinstance(mrc, int) and mrc > 0:
+                return mrc
+    except Exception:
+        pass
     try:
         params = _with_read_token_params({"f": "json"})
         r = _session.get(layer_url.rstrip("/"), params=params, timeout=timeout)
@@ -772,6 +1023,21 @@ def extract_geojson(
 
         features = []
         offset = 0
+
+        if "/FeatureServer/" in layer_url or "/MapServer/" in layer_url:
+            api_parts = []
+            while True:
+                api_gdf = _query_feature_layer_gdf(layer_url, where=where, out_fields=out_fields, out_wkid=4326, result_offset=offset, result_record_count=page_size)
+                if api_gdf is None:
+                    break
+                api_parts.append(api_gdf)
+                if len(api_gdf) < page_size:
+                    break
+                offset += page_size
+            if api_parts:
+                merged = gpd.GeoDataFrame(pd.concat(api_parts, ignore_index=True), geometry="geometry", crs=api_parts[0].crs)
+                return _ensure_wgs84(merged)
+            offset = 0
 
         while True:
             params = {
@@ -850,90 +1116,6 @@ def extract_geojson(
         return None
 
 
-def _chat_input_order_field(layer_url: str, timeout: int = 20) -> str:
-    """Pick the best available field for latest-feature ordering."""
-    cols = [str(c).strip() for c in (_get_layer_columns(layer_url, timeout=timeout) or []) if c]
-    lowered = {c.lower(): c for c in cols}
-    for cand in ["DATE_CHNG", "DATE_MADE", "EDIT_DATE", "LAST_EDITED_DATE", "CREATED_DATE", "OBJECTID", "ObjectId"]:
-        if cand.lower() in lowered:
-            return lowered[cand.lower()]
-    return "OBJECTID"
-
-
-def _delete_chat_input_previous_features(layer_url: str, keep_objectid, timeout: int = 30) -> int:
-    """Delete all CHAT_INPUT features except the latest/kept feature."""
-    try:
-        lu = _sanitise_layer_url(layer_url)
-        qparams = _with_write_token_params({
-            "where": "1=1",
-            "returnIdsOnly": "true",
-            "f": "json",
-        })
-        r = _session.get(f"{lu}/query", params=qparams, timeout=timeout)
-        r.raise_for_status()
-        if "json" not in (r.headers.get("Content-Type") or "").lower():
-            return 0
-        data = r.json() or {}
-        ids = [i for i in (data.get("objectIds") or []) if str(i) != str(keep_objectid)]
-        if not ids:
-            return 0
-        deleted = 0
-        for i in range(0, len(ids), 200):
-            batch = ids[i:i+200]
-            dparams = _with_write_token_params({
-                "objectIds": ",".join(map(str, batch)),
-                "f": "json",
-            })
-            dr = _session.post(f"{lu}/deleteFeatures", data=dparams, timeout=timeout)
-            dr.raise_for_status()
-            if "json" in (dr.headers.get("Content-Type") or "").lower():
-                dj = dr.json() or {}
-                results = dj.get("deleteResults") or []
-                deleted += sum(1 for x in results if isinstance(x, dict) and x.get("success"))
-        if deleted:
-            logger.info(f"Deleted {deleted} previous CHAT_INPUT features from {lu}; kept OBJECTID={keep_objectid}.")
-        return deleted
-    except Exception as e:
-        logger.warning(f"Failed to prune previous CHAT_INPUT features for {layer_url}: {e}")
-        return 0
-
-
-def _get_latest_chat_input_gdf(chat_input_url: str, prune_previous: bool = True, timeout: int = 30) -> gpd.GeoDataFrame:
-    """Fetch only the latest feature from CHAT_INPUT and optionally delete previous features."""
-    lu = _sanitise_layer_url(chat_input_url)
-    order_field = _chat_input_order_field(lu, timeout=timeout)
-    params = _with_read_token_params({
-        "where": "1=1",
-        "outFields": "*",
-        "returnGeometry": "true",
-        "f": "geojson",
-        "outSR": 4326,
-        "resultRecordCount": 1,
-        "orderByFields": f"{order_field} DESC",
-    })
-    logger.info(f"Fetching latest CHAT_INPUT feature using order field '{order_field}' from {lu}")
-    r = _session.get(f"{lu}/query", params=params, timeout=timeout)
-    r.raise_for_status()
-    if "json" not in (r.headers.get("Content-Type") or "").lower():
-        raise ValueError("Non-JSON response while fetching latest CHAT_INPUT feature")
-    payload = r.json() or {}
-    if isinstance(payload, dict) and payload.get("type") == "FeatureCollection":
-        feats = payload.get("features") or []
-        if not feats:
-            return gpd.GeoDataFrame(geometry=[], crs="EPSG:4326")
-        gdf = gpd.GeoDataFrame.from_features(feats, crs="EPSG:4326")
-        # prune older features based on the kept object's OBJECTID if available
-        keep_objectid = None
-        for oid_field in ["OBJECTID", "ObjectId", "objectid"]:
-            if oid_field in gdf.columns:
-                keep_objectid = gdf.iloc[0][oid_field]
-                break
-        if prune_previous and keep_objectid is not None:
-            _delete_chat_input_previous_features(lu, keep_objectid, timeout=timeout)
-        return _ensure_wgs84(gdf)
-    raise ValueError("Unexpected GeoJSON payload while fetching latest CHAT_INPUT feature")
-
-
 def get_roi_gdf(project_name: str) -> gpd.GeoDataFrame:
     logger.info(f"Fetching ROI GeoDataFrame for project: {project_name}")
     try:
@@ -944,14 +1126,14 @@ def get_roi_gdf(project_name: str) -> gpd.GeoDataFrame:
             return gpd.GeoDataFrame(geometry=[], crs="EPSG:4326")
 
         logger.info(f"Using CHAT_INPUT URL: {chat_input_url}")
-        gdf = _get_latest_chat_input_gdf(chat_input_url, prune_previous=True)
+        gdf = extract_geojson(chat_input_url)
 
-        if gdf is None or gdf.empty:
-            logger.warning("No latest CHAT_INPUT feature found. Returning empty GDF.")
+        if gdf is None:
+            logger.warning("extract_geojson returned None. Returning empty GDF.")
             return gpd.GeoDataFrame(geometry=[], crs="EPSG:4326")
 
         logger.info(
-            f"Successfully fetched latest ROI GDF with {len(gdf)} feature(s), CRS: {gdf.crs}"
+            f"Successfully fetched ROI GDF with {len(gdf)} features, CRS: {gdf.crs}"
         )
         return gdf
     except Exception as e:
@@ -1031,18 +1213,18 @@ def post_features_to_layer(gdf, target_url, project_name, batch_size=800):
 
     gdf = _ensure_crs(gdf, layer_wkid)
 
-    for start in range(0, len(gdf), batch_size):
-        end = start + batch_size
-        batch_gdf = gdf.iloc[start:end]
-        features = []
-        logger.info(f"Processing batch {start//batch_size + 1} ({start} to {end-1})")
+    max_workers = max(1, min(int(os.getenv("AGOL_PUSH_MAX_WORKERS", "4")), 8))
+    batches = [(start, gdf.iloc[start:start + batch_size].copy()) for start in range(0, len(gdf), batch_size)]
 
+    def _post_batch(start: int, batch_gdf):
+        features = []
         invalid_geom_count = 0
+        batch_num = start // batch_size + 1
+        logger.info(f"Processing batch {batch_num} ({start} to {start + len(batch_gdf) - 1})")
+
         for index, row in batch_gdf.iterrows():
             try:
-                arcgis_geom = shapely_to_arcgis_geometry(
-                    row.geometry, wkid=layer_wkid
-                )
+                arcgis_geom = shapely_to_arcgis_geometry(row.geometry, wkid=layer_wkid)
                 arcgis_geom_sanitized = sanitize_arcgis_geometry(arcgis_geom)
                 attributes = _sanitize_attributes(row, allowed_fields)
 
@@ -1052,69 +1234,69 @@ def post_features_to_layer(gdf, target_url, project_name, batch_size=800):
                         f"Row {index} has non-finite/invalid coords; sending geometry=None."
                     )
 
-                features.append(
-                    {
-                        "geometry": arcgis_geom_sanitized,
-                        "attributes": attributes,
-                    }
-                )
-
+                features.append({
+                    "geometry": arcgis_geom_sanitized,
+                    "attributes": attributes,
+                })
             except Exception as e:
                 logger.error(f"Skipping row {index} due to geometry error: {e}")
 
         if not features:
-            logger.warning(
-                f"Batch {start//batch_size + 1} yielded no valid features. Skipping POST."
-            )
-            continue
+            return {"batch": batch_num, "success": True, "skipped": True}
 
         if invalid_geom_count > 0:
             logger.warning(
-                f"Batch {start//batch_size + 1}: {invalid_geom_count} features sent with geometry=None due to invalid coordinates."
+                f"Batch {batch_num}: {invalid_geom_count} features sent with geometry=None due to invalid coordinates."
             )
 
-        payload = {
-            "features": _json.dumps(features, default=_json_default),
-            "f": "json",
-        }
-        payload = _with_write_token_data(payload)
-
-        try:
-            response = _session.post(add_url, data=payload, headers=headers, timeout=90)
+        response_json = _feature_layer_add_batch(layer_url, features)
+        if response_json is None:
+            payload = {
+                "features": _json.dumps(features, default=_json_default),
+                "f": "json",
+            }
+            payload = _with_write_token_data(payload)
+            response = requests.post(add_url, data=payload, headers=headers, timeout=90)
             response.raise_for_status()
             if "json" not in response.headers.get("Content-Type", ""):
-                logger.error(
-                    f"Non-JSON addFeatures response: {response.headers.get('Content-Type')} … {response.text[:200]}"
+                raise RuntimeError(
+                    f"Non-JSON addFeatures response: {response.headers.get('Content-Type')} {response.text[:200]}"
                 )
-                continue
             response_json = response.json()
 
-            if response_json.get("addResults") and all(
-                r.get("success") for r in response_json["addResults"]
-            ):
-                logger.info(f"Batch {start//batch_size + 1} features added successfully.")
-            elif "error" in response_json:
-                logger.error(
-                    f"ArcGIS Error adding batch {start//batch_size + 1} features: {response_json['error']}"
-                )
-            else:
-                logger.warning(
-                    f"Partial success or unexpected response for batch {start//batch_size + 1}: {response_json}"
-                )
+        if response_json.get("addResults") and all(r.get("success") for r in response_json["addResults"]):
+            logger.info(f"Batch {batch_num} features added successfully.")
+            return {"batch": batch_num, "success": True, "response": response_json}
+        if "error" in response_json:
+            raise RuntimeError(f"ArcGIS Error adding batch {batch_num}: {response_json['error']}")
+        logger.warning(f"Partial success or unexpected response for batch {batch_num}: {response_json}")
+        return {"batch": batch_num, "success": False, "response": response_json}
 
-        except requests.RequestException as e:
-            logger.error(
-                f"POST to {add_url} for batch {start//batch_size + 1} failed: {e}"
-            )
-        except Exception as e:
-            logger.error(
-                f"Unexpected error during POST for batch {start//batch_size + 1}: {e}"
-            )
+    if len(batches) == 1 or max_workers == 1:
+        for start, batch_gdf in batches:
+            try:
+                _post_batch(start, batch_gdf)
+            except Exception as e:
+                logger.error(f"POST to {add_url} failed for batch {start // batch_size + 1}: {e}")
+        return
 
+    with ThreadPoolExecutor(max_workers=min(max_workers, len(batches))) as executor:
+        futures = {executor.submit(_post_batch, start, batch_gdf): start for start, batch_gdf in batches}
+        for future in as_completed(futures):
+            start = futures[future]
+            try:
+                future.result()
+            except requests.RequestException as e:
+                logger.error(f"POST to {add_url} for batch {start // batch_size + 1} failed: {e}")
+            except Exception as e:
+                logger.error(f"Unexpected error during POST for batch {start // batch_size + 1}: {e}")
 
 def delete_all_features(target_url):
     logger.info(f"Attempting to delete all features from {target_url}")
     try:
+        api_deleted = _feature_layer_delete_all(target_url)
+        if api_deleted is True:
+            return
         if not _looks_like_url(target_url):
             logger.error(f"Suspicious URL for delete_all_features: {target_url}")
             return
@@ -1789,26 +1971,56 @@ def get_project_aoi_geometry(project_name: str):
     ortho_url = (attrs.get("ORTHOMOSAIC") or "").strip()
 
     if chat_input_url:
-        logger.info(f"Attempting to use latest CHAT_INPUT feature from URL: {chat_input_url}")
+        logger.info(f"Attempting to use CHAT_INPUT URL: {chat_input_url}")
         try:
             layer_url = _sanitise_layer_url(chat_input_url)
             wkid = fetch_crs(layer_url) or 4326
-            gdf = _get_latest_chat_input_gdf(layer_url, prune_previous=True)
-            if gdf is not None and not gdf.empty:
-                gdf = _ensure_crs(gdf, wkid)
-                geom = gdf.geometry.iloc[0] if len(gdf.geometry) else None
-                if geom is not None and not geom.is_empty and geom.geom_type in ("Polygon", "MultiPolygon"):
-                    rings = _rings_from_shapely(geom)
-                    logger.info(f"AOI determined from latest CHAT_INPUT feature (WKID: {wkid}).")
-                    return {
-                        "geometry": {
-                            "rings": rings,
-                            "spatialReference": {"wkid": wkid},
-                        },
-                        "geometryType": "esriGeometryPolygon",
-                        "inSR": wkid,
-                    }
-            logger.info("CHAT_INPUT had no valid latest polygon. Falling back to ORTHOMOSAIC extent.")
+            gdf = _gdf_from_layer_all(layer_url, out_wkid=wkid)
+
+            if not gdf.empty:
+                polys = [
+                    geom
+                    for geom in gdf.geometry
+                    if geom is not None
+                    and geom.geom_type in ("Polygon", "MultiPolygon")
+                ]
+                if polys:
+                    u = unary_union(polys)
+                    logger.debug(f"Union result type: {u.geom_type}")
+
+                    if isinstance(u, GeometryCollection):
+                        parts = [
+                            g
+                            for g in u.geoms
+                            if g.geom_type in ("Polygon", "MultiPolygon")
+                        ]
+                        u = unary_union(parts) if parts else None
+                        logger.debug(
+                            f"After GeometryCollection split, union result type: {u.geom_type if u else 'None'}"
+                        )
+
+                    if u and not u.is_empty:
+                        if u.geom_type in ("Polygon", "MultiPolygon"):
+                            rings = _rings_from_shapely(u)
+                            logger.info(
+                                f"AOI determined from CHAT_INPUT polygons (WKID: {wkid})."
+                            )
+                            return {
+                                "geometry": {
+                                    "rings": rings,
+                                    "spatialReference": {"wkid": wkid},
+                                },
+                                "geometryType": "esriGeometryPolygon",
+                                "inSR": wkid,
+                            }
+                        else:
+                            logger.warning(
+                                f"Union resulted in unexpected geometry type: {u.geom_type}. Falling back."
+                            )
+
+            logger.info(
+                "CHAT_INPUT had no valid polygons. Falling back to ORTHOMOSAIC extent."
+            )
         except Exception as e:
             logger.warning(f"CHAT_INPUT AOI fallback due to error: {e}")
 
@@ -1920,29 +2132,26 @@ def _build_spatial_query_url(
     layer_url: str, aoi: dict, where: str = "1=1", out_fields: str = "*"
 ) -> str:
     """
-    Build a query URL where the AOI geometry is FIRST transformed locally to the target layer's CRS.
-    We do NOT include token here; callers should add token at request time if needed.
+    Build an internal proxy URL so all AGOL reads go through the backend using GIS/FeatureLayer,
+    rather than exposing direct tokenised ArcGIS query URLs to the LLM pipeline.
     """
     lyr = _sanitise_layer_url(layer_url)
     target_wkid = fetch_crs(lyr) or 4326
     aoi_proj = _reproject_aoi_to_wkid(aoi, target_wkid)
-
-    geom_json = _json.dumps(
-        aoi_proj["geometry"], separators=(",", ":"), default=_json_default
-    )
-    geom = _q(geom_json)
+    geom_json = _json.dumps(aoi_proj["geometry"], separators=(",", ":"), default=_json_default)
     geometry_type = aoi_proj.get("geometryType", "esriGeometryPolygon")
-
-    base = (
-        f"{lyr}/query"
-        f"?where={_q(where)}"
-        f"&geometry={geom}"
-        f"&geometryType={_q(geometry_type)}"
-        f"&spatialRel=esriSpatialRelIntersects"
-        f"&outFields={_q(out_fields)}"
-        f"&f=geojson"
-    )
-    return base
+    params = [
+        ("layer_url", lyr),
+        ("where", where),
+        ("geometry", geom_json),
+        ("geometryType", geometry_type),
+        ("spatialRel", "esriSpatialRelIntersects"),
+        ("inSR", str(aoi_proj.get("inSR", target_wkid))),
+        ("outFields", out_fields),
+        ("outSR", str(4326)),
+        ("f", "geojson"),
+    ]
+    return f"{APP_BASE_URL}/arcgis/geojson?{urlencode(params)}"
 
 
 def get_aoi_in_layer_crs(project_name: str, layer_url: str) -> dict:
@@ -1972,25 +2181,33 @@ def _load_extra_locations_yaml(path: str) -> Dict[str, Any]:
 
 def _supports_pagination(layer_url: str) -> bool:
     try:
+        meta = _feature_layer_properties(layer_url)
+        if isinstance(meta, dict):
+            return bool(meta.get("advancedQueryCapabilities", {}).get("supportsPagination", False))
+    except Exception:
+        pass
+    try:
         lu = _sanitise_layer_url(layer_url)
-        meta = _session.get(
-            lu, params=_with_read_token_params({"f": "json"}), timeout=20
-        ).json()
-        return bool(
-            meta.get("advancedQueryCapabilities", {}).get(
-                "supportsPagination", False
-            )
-        )
+        meta = _session.get(lu, params=_with_read_token_params({"f": "json"}), timeout=20).json()
+        return bool(meta.get("advancedQueryCapabilities", {}).get("supportsPagination", False))
     except Exception:
         return False
 
 
 def _get_objectid_field(layer_url: str) -> str:
     try:
+        meta = _feature_layer_properties(layer_url)
+        if isinstance(meta, dict):
+            if meta.get("objectIdField"):
+                return meta["objectIdField"]
+            for f in meta.get("fields", []):
+                if f.get("type") == "esriFieldTypeOID":
+                    return f.get("name")
+    except Exception:
+        pass
+    try:
         lu = _sanitise_layer_url(layer_url)
-        meta = _session.get(
-            lu, params=_with_read_token_params({"f": "json"}), timeout=20
-        ).json()
+        meta = _session.get(lu, params=_with_read_token_params({"f": "json"}), timeout=20).json()
         if meta.get("objectIdField"):
             return meta["objectIdField"]
         for f in meta.get("fields", []):
@@ -2004,20 +2221,20 @@ def _get_objectid_field(layer_url: str) -> str:
 def _count_features_in_aoi(
     layer_url: str, aoi: dict, where: str = "1=1", timeout: int = 30
 ) -> int:
-    """Return AOI-filtered count using returnCountOnly=true (AOI already reprojected to layer CRS)."""
+    """Return AOI-filtered count using ArcGIS Python API first, with REST fallback."""
     lyr = _sanitise_layer_url(layer_url)
     aoi_proj = _reproject_aoi_to_wkid(aoi, fetch_crs(lyr) or 4326)
-    geometry = _json.dumps(
-        aoi_proj["geometry"], default=_json_default, separators=(",", ":")
-    )
-    params = {
-        "where": where,
-        "geometry": geometry,
-        "geometryType": aoi_proj.get("geometryType", "esriGeometryPolygon"),
-        "spatialRel": "esriSpatialRelIntersects",
-        "returnCountOnly": "true",
-        "f": "json",
-    }
+    fl = get_feature_layer(lyr)
+    if fl is not None and ArcGISGeometry is not None and arcgis_intersects is not None:
+        try:
+            geom = dict(aoi_proj["geometry"])
+            geom["spatialReference"] = {"wkid": int(aoi_proj.get("inSR", fetch_crs(lyr) or 4326))}
+            res = fl.query(where=where, return_count_only=True, geometry_filter=arcgis_intersects(ArcGISGeometry(geom)))
+            return int(res or 0)
+        except Exception as exc:
+            logger.warning(f"FeatureLayer count query failed for {lyr}: {exc}")
+    geometry = _json.dumps(aoi_proj["geometry"], default=_json_default, separators=(",", ":"))
+    params = {"where": where, "geometry": geometry, "geometryType": aoi_proj.get("geometryType", "esriGeometryPolygon"), "spatialRel": "esriSpatialRelIntersects", "returnCountOnly": "true", "f": "json"}
     params = _with_read_token_params(params)
     try:
         r = _session.post(f"{lyr}/query", data=params, timeout=timeout)
@@ -2103,6 +2320,95 @@ def _paginate_urls_for_aoi(
         )
         urls.append(base)
     return urls
+
+
+
+
+def _arcgis_chunking_enabled() -> bool:
+    return str(os.getenv("ARCGIS_ROI_CHUNKING", "1")).strip().lower() in {"1", "true", "yes"}
+
+
+def _arcgis_max_chunks() -> int:
+    try:
+        return max(1, min(int(os.getenv("ARCGIS_MAX_CHUNKS", "16")), 64))
+    except Exception:
+        return 16
+
+
+def _arcgis_target_chunk_area_deg2() -> float:
+    try:
+        return max(float(os.getenv("ARCGIS_TARGET_CHUNK_AREA_DEG2", "0.01")), 1e-9)
+    except Exception:
+        return 0.01
+
+
+def _chunk_count_from_area(bounds: Tuple[float, float, float, float], target_chunk_area: float) -> int:
+    minx, miny, maxx, maxy = bounds
+    area = max(maxx - minx, 0.0) * max(maxy - miny, 0.0)
+    return max(1, int(math.ceil(area / max(target_chunk_area, 1e-9))))
+
+
+def _iter_aoi_chunks(aoi: dict, *, max_chunks: int, target_chunk_area_deg2: float) -> list[dict]:
+    geom_dict = (aoi or {}).get("geometry") or {}
+    try:
+        geom = shape(geom_dict)
+    except Exception:
+        geom = None
+    if geom is None or geom.is_empty:
+        return [aoi]
+
+    minx, miny, maxx, maxy = geom.bounds
+    approx_chunks = _chunk_count_from_area((minx, miny, maxx, maxy), target_chunk_area_deg2)
+    chunk_count = max(1, min(max_chunks, approx_chunks))
+    grid_n = max(1, int(math.ceil(math.sqrt(chunk_count))))
+    dx = (maxx - minx) / grid_n if grid_n else 0
+    dy = (maxy - miny) / grid_n if grid_n else 0
+
+    chunks = []
+    for ix in range(grid_n):
+        for iy in range(grid_n):
+            cell = Polygon([
+                (minx + ix * dx, miny + iy * dy),
+                (minx + (ix + 1) * dx, miny + iy * dy),
+                (minx + (ix + 1) * dx, miny + (iy + 1) * dy),
+                (minx + ix * dx, miny + (iy + 1) * dy),
+            ])
+            clipped = geom.intersection(cell)
+            if not clipped.is_empty:
+                chunk = dict(aoi)
+                chunk["geometry"] = mapping(clipped)
+                chunks.append(chunk)
+    return chunks or [aoi]
+
+
+def _paginate_urls_for_aoi_chunked(
+    layer_url: str,
+    aoi: dict,
+    out_fields: str = "*",
+    where: str = "1=1",
+    *,
+    chunking: Optional[bool] = None,
+    max_chunks: Optional[int] = None,
+    target_chunk_area_deg2: Optional[float] = None,
+) -> list[dict]:
+    use_chunking = _arcgis_chunking_enabled() if chunking is None else bool(chunking)
+    max_chunks = _arcgis_max_chunks() if max_chunks is None else max(1, min(int(max_chunks), 64))
+    target_chunk_area_deg2 = _arcgis_target_chunk_area_deg2() if target_chunk_area_deg2 is None else max(float(target_chunk_area_deg2), 1e-9)
+
+    if not use_chunking or not aoi or not aoi.get("geometry"):
+        return [{"chunk_index": 1, "chunk_count": 1, "urls": _paginate_urls_for_aoi(layer_url, aoi, out_fields=out_fields, where=where)}]
+
+    chunks = _iter_aoi_chunks(aoi, max_chunks=max_chunks, target_chunk_area_deg2=target_chunk_area_deg2)
+    if len(chunks) <= 1:
+        return [{"chunk_index": 1, "chunk_count": 1, "urls": _paginate_urls_for_aoi(layer_url, aoi, out_fields=out_fields, where=where)}]
+
+    grouped: list[dict] = []
+    for idx, chunk in enumerate(chunks, start=1):
+        urls = _paginate_urls_for_aoi(layer_url, chunk, out_fields=out_fields, where=where)
+        if urls:
+            grouped.append({"chunk_index": idx, "chunk_count": len(chunks), "urls": urls})
+
+    return grouped or [{"chunk_index": 1, "chunk_count": 1, "urls": _paginate_urls_for_aoi(layer_url, aoi, out_fields=out_fields, where=where)}]
 
 
 def _supports_distinct(layer_url: str) -> bool:
@@ -2402,13 +2708,19 @@ def _get_layer_last_edit_metadata(layer_url: str):
     if base_url.lower().endswith("/query"):
         base_url = base_url[: base_url.lower().rfind("/query")]
 
-    params = _with_read_token_params({"f": "json"})
+    js = None
     try:
-        r = _session.get(base_url, params=params, timeout=30)
-        r.raise_for_status()
-        js = r.json()
+        js = _feature_layer_properties(base_url)
     except Exception:
-        return None, None
+        js = None
+    if not isinstance(js, dict):
+        params = _with_read_token_params({"f": "json"})
+        try:
+            r = _session.get(base_url, params=params, timeout=30)
+            r.raise_for_status()
+            js = r.json()
+        except Exception:
+            return None, None
 
     editing_info = js.get("editingInfo") or {}
     ts = editing_info.get("lastEditDate") or js.get("lastEditDate")
@@ -2622,9 +2934,12 @@ def make_project_data_locations(
             aoi_layer_crs = get_aoi_in_layer_crs(project_name, layer_url)
             label = _label_for_layer(label_prefix, layer_url)
 
-            # Build AOI-filtered, paginated URLs (NO TOKEN EMBEDDED)
-            page_urls = _paginate_urls_for_aoi(
-                layer_url, aoi_layer_crs, out_fields="*"
+            # Build AOI-filtered URLs. For ArcGIS sources this can now emit
+            # spatial ROI chunks, each of which may itself be paginated.
+            chunk_groups = _paginate_urls_for_aoi_chunked(
+                layer_url,
+                aoi_layer_crs,
+                out_fields="*",
             )
 
             # Column + schema info for first page only
@@ -2640,35 +2955,43 @@ def make_project_data_locations(
             _last_updated_str = layer_last_display
             layer_entries: list[str] = []
 
-            for idx, url in enumerate(page_urls, start=1):
-                suffix = (
-                    f" (page {idx}/{len(page_urls)})"
-                    if len(page_urls) > 1
-                    else ""
-                )
-                # Raw entry (tokenless) for cache
-                entry_raw = f"{label}{suffix}: {url}"
+            first_entry = True
+            total_chunks = max((g.get("chunk_count", 1) for g in chunk_groups), default=1)
+            for group in chunk_groups:
+                chunk_index = int(group.get("chunk_index", 1))
+                page_urls = group.get("urls") or []
+                for idx, url in enumerate(page_urls, start=1):
+                    suffix_parts = []
+                    if total_chunks > 1:
+                        suffix_parts.append(f"chunk {chunk_index}/{total_chunks}")
+                    if len(page_urls) > 1:
+                        suffix_parts.append(f"page {idx}/{len(page_urls)}")
+                    suffix = f" ({', '.join(suffix_parts)})" if suffix_parts else ""
 
-                # Attach cols + schema + last_updated on first page only
-                if idx == 1:
-                    if _cols_str:
-                        entry_raw += f"\n{_cols_str}"
-                    entry_raw += f"\n  schema: {_schema_str}"
-                    if _last_updated_str:
-                        entry_raw += f"\n  last_updated: {_last_updated_str}"
+                    # Raw entry (tokenless) for cache
+                    entry_raw = f"{label}{suffix}: {url}"
 
-                # Tokenised entry for returning to caller
-                entry_display = _attach_token_in_entry(entry_raw)
+                    # Attach cols + schema + last_updated on first page only
+                    if first_entry:
+                        if _cols_str:
+                            entry_raw += f"\n{_cols_str}"
+                        entry_raw += f"\n  schema: {_schema_str}"
+                        if _last_updated_str:
+                            entry_raw += f"\n  last_updated: {_last_updated_str}"
+                        first_entry = False
 
-                if insert_at is None or insert_at < 0:
-                    data_locations.append(entry_display)
-                else:
-                    pos = min(insert_at, len(data_locations))
-                    data_locations.insert(pos, entry_display)
-                    insert_at += 1
+                    # Tokenised entry for returning to caller
+                    entry_display = _attach_token_in_entry(entry_raw)
 
-                # Cache keeps tokenless entries
-                layer_entries.append(entry_raw)
+                    if insert_at is None or insert_at < 0:
+                        data_locations.append(entry_display)
+                    else:
+                        pos = min(insert_at, len(data_locations))
+                        data_locations.insert(pos, entry_display)
+                        insert_at += 1
+
+                    # Cache keeps tokenless entries
+                    layer_entries.append(entry_raw)
 
             new_layer_cache[layer_key] = {
                 "layer_url": layer_url,
