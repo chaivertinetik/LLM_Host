@@ -378,7 +378,7 @@ async def arcgis_geojson_proxy(
     aoi = None
     if geometry:
         try:
-            aoi = _coerce_proxy_aoi(_json.loads(geometry), geometryType, inSR, outSR)
+            aoi = _coerce_proxy_aoi(json.loads(geometry), geometryType, inSR, outSR)
         except Exception as exc:
             raise HTTPException(status_code=400, detail=f"Invalid geometry JSON: {exc}")
 
@@ -413,7 +413,7 @@ async def arcgis_count_proxy(
     aoi = None
     if geometry:
         try:
-            aoi = _coerce_proxy_aoi(_json.loads(geometry), geometryType, inSR, 4326)
+            aoi = _coerce_proxy_aoi(json.loads(geometry), geometryType, inSR, 4326)
         except Exception as exc:
             raise HTTPException(status_code=400, detail=f"Invalid geometry JSON: {exc}")
 
@@ -592,7 +592,7 @@ async def process_request(request_data: RequestData):
             return {
                 "status": "completed",
                 "response": content,
-                "prompt_options": prompt_options,
+                "prompt_options": prompt_suggetions(task_name, ""),
             }
 
     # GIS operation required -> queue (optional) with inline fallback
