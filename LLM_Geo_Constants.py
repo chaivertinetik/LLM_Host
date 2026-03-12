@@ -49,7 +49,8 @@ def safe_read_arcgis(url: str):
     def _looks_like_html(text):
         t = text.lstrip().lower()
         return t.startswith("<") or "<html" in t[:500]
-
+        
+    url = url.replace("esriGeometryIntersects", "esriSpatialRelIntersects")
     # Try fast path
     try:
         gdf = gpd.read_file(url)
@@ -433,6 +434,7 @@ assembly_requirement = ['You can think step by step. ',
                     "Note geopandas.sjoin() returns all joined pairs, i.e., the return could be one-to-many. E.g., the intersection result of a polygon with two points inside it contains two rows; in each row, the polygon attribute is the same. If you need of extract the polygons intersecting with the points, please remember to remove the duplicated rows in the results.",
                     "All data loads from URLs must be resilient: try gpd.read_file(url) first; if it fails or returns non-GeoJSON, call safe_read_arcgis(url).",
                     arcgis_fetch_policy,
+                    "When constructing ArcGIS REST API queries, the spatialRel should always be esriSpatialRelIntersects.",
                     "If the result is a geodataframe ensure that before returning it only the index (important to preserve as it is used by arcgis to filter which tree to show on the map) and geometry columns are remaining, because the other columns face problems during serialization.",
                     # "Before returning 'result', ensure no pandas.Timestamp/numpy.datetime64 columns remain; coerce all datetimes to ISO 8601 strings (UTC) with dtype=object.",
                     timestamp_output_rules,
@@ -625,6 +627,7 @@ sampling_data_requirement = [
  
                         #
                         ]
+
 
 
 
