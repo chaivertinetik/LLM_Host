@@ -1,42 +1,91 @@
 # --------------------- IMPORTS and helper modules ---------------------
+import datetime
+import json
+import os
+import re
+import time
+import urllib.parse
+import uuid
+from typing import Any, Dict, Optional
+
+import geopandas as gpd
 import numpy as np
 import pandas as pd
-import re
 import uvicorn
-import os
-import json
-import time
-import uuid
-import geopandas as gpd
-from typing import Dict, Optional, Any
-from shapely import wkb as shapely_wkb
-from pydantic import BaseModel
-from fastapi import FastAPI, HTTPException, Request, Query
+from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-import urllib.parse
-import json as _json
-from credentials import db, parser, emd_model
+from pydantic import BaseModel
+from shapely import wkb as shapely_wkb
+from shapely.geometry import box, shape, mapping
+
+from credentials import db, emd_model, parser
 from appagents import (
     llm,
-    load_history, save_history, build_conversation_prompt,
-    wants_map_output_keyword, wants_map_output_genai, wants_map_output,
+    load_history,
+    save_history,
+    build_conversation_prompt,
+    wants_map_output_keyword,
+    wants_map_output_genai,
+    wants_map_output,
     is_geospatial_task,
-    wants_additional_info_keyword, wants_additional_info_genai, wants_additional_info,
-    wants_gis_task_genai, want_gis_task,
+    wants_additional_info_keyword,
+    wants_additional_info_genai,
+    wants_additional_info,
+    wants_gis_task_genai,
+    want_gis_task,
     prompt_suggetions,
     try_llm_fix,
     long_running_task,
-    get_geospatial_context_tool, get_zoning_info, get_climate_info,
-    check_tree_health, assess_tree_benefit, check_soil_suitability,
-    get_geospatial_context, cosine_similarity, retrieve_rag_chunks,
+    get_geospatial_context_tool,
+    get_zoning_info,
+    get_climate_info,
+    check_tree_health,
+    assess_tree_benefit,
+    check_soil_suitability,
+    get_geospatial_context,
+    cosine_similarity,
+    retrieve_rag_chunks,
     geospatial_helper,
-    get_query_hash, check_firestore_for_cached_answer, store_answer_in_firestore, cache_load_helper, get_forestry_agent
+    get_query_hash,
+    check_firestore_for_cached_answer,
+    store_answer_in_firestore,
+    cache_load_helper,
+    get_forestry_agent,
 )
-from appbackend import trigger_cleanup, ClearRequest, get_project_urls, get_attr, make_project_data_locations, get_project_coords, get_project_aoi_geometry, _query_feature_layer_json, _sanitise_layer_url
-from appbackend import filter as push_to_map
-from gcp_sql import fetch_geojson as fetch_cloudsql_geojson, describe_source as describe_cloudsql_source
 
+from appbackend import (
+    trigger_cleanup,
+    ClearRequest,
+    get_project_urls,
+    get_attr,
+    make_project_data_locations,
+    get_project_coords,
+    get_project_aoi_geometry,
+    _query_feature_layer_json,
+    _sanitise_layer_url,
+    query_feature_layer_count,
+    _coerce_proxy_aoi,
+)
+from appbackend import filter as push_to_map
+
+from gcp_sql import (
+    fetch_geojson as fetch_cloudsql_geojson,
+    describe_source as describe_cloudsql_source,
+)
+
+# Cloud Tasks (queueing) - optional
+try:
+    from google.cloud import tasks_v2
+    from google.protobuf import timestamp_pb2
+
+    _TASKS_IMPORT_OK = True
+    _TASKS_IMPORT_ERR = ""
+except Exception as _e:
+    tasks_v2 = None
+    timestamp_pb2 = None
+    _TASKS_IMPORT_OK = False
+    _TASKS_IMPORT_ERR = str(_e)
 # Cloud Tasks (queueing) - optional
 try:
     from google.cloud import tasks_v2
