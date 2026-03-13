@@ -25,7 +25,7 @@ from gcp_sql import build_geojson_url as build_cloudsql_geojson_url
 from pandas.api.types import is_datetime64_any_dtype, is_datetime64tz_dtype
 import time
 import math
-from pathlib import Path
+
 try:
     from arcgis.gis import GIS
     from arcgis.features import FeatureLayer
@@ -106,54 +106,6 @@ class ClearRequest(BaseModel):
 # --------------------- ArcGIS Python API session helpers ---------------------
 _AGOL_GIS = None
 _AGOL_LAYER_CACHE: dict[str, Any] = {}
-_PROXY_CACHE_DIR = Path(os.getenv("ARCGIS_PROXY_CACHE_DIR", "proxy_cache"))
-_PROXY_CACHE_DIR.mkdir(parents=True, exist_ok=True)
-
-def _proxy_cache_key(*parts: Any) -> str:
-    payload = _json.dumps(parts, sort_keys=True, default=str, separators=(",",":"))
-    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
-
-def _proxy_cache_paths(key: str) -> tuple[Path, Path]:
-    return _PROXY_CACHE_DIR / f"{key}.json", _PROXY_CACHE_DIR / f"{key}.pkl"
-
-def _proxy_cache_get_json(key: str, ttl_seconds: int = 900):
-    jpath, _ = _proxy_cache_paths(key)
-    try:
-        if not jpath.exists():
-            return None
-        if ttl_seconds > 0 and (time.time() - jpath.stat().st_mtime) > ttl_seconds:
-            return None
-        return _json.loads(jpath.read_text())
-    except Exception:
-        return None
-
-def _proxy_cache_set_json(key: str, value: dict):
-    jpath, _ = _proxy_cache_paths(key)
-    try:
-        jpath.write_text(_json.dumps(value))
-    except Exception:
-        pass
-
-def _proxy_cache_get_gdf(key: str, ttl_seconds: int = 900):
-    _, ppath = _proxy_cache_paths(key)
-    try:
-        if not ppath.exists():
-            return None
-        if ttl_seconds > 0 and (time.time() - ppath.stat().st_mtime) > ttl_seconds:
-            return None
-        with ppath.open("rb") as f:
-            return pickle.load(f)
-    except Exception:
-        return None
-
-def _proxy_cache_set_gdf(key: str, gdf):
-    _, ppath = _proxy_cache_paths(key)
-    try:
-        with ppath.open("wb") as f:
-            pickle.dump(gdf, f, protocol=pickle.HIGHEST_PROTOCOL)
-    except Exception:
-        pass
-
 
 def _arcgis_session_config() -> tuple[str, str, str]:
     return (
@@ -233,27 +185,6 @@ def _feature_set_to_gdf(feature_set: Any, out_wkid: int = 4326) -> gpd.GeoDataFr
         gdf = _ensure_wgs84(gdf)
     return gdf
 
-def _arcgis_aoi_to_geometry_filter(aoi: dict | None, fallback_wkid: int = 4326):
-    if not (aoi and aoi.get("geometry") and ArcGISGeometry is not None and arcgis_intersects is not None):
-        return None
-    wkid_raw = aoi.get("inSR")
-    if wkid_raw is None:
-        wkid_raw = (aoi.get("geometry", {}).get("spatialReference", {}) or {}).get("wkid", fallback_wkid)
-    wkid = int(wkid_raw or fallback_wkid)
-    gtype = aoi.get("geometryType", "esriGeometryPolygon")
-    geom = dict(aoi["geometry"])
-    if gtype == "esriGeometryEnvelope":
-        xmin = float(geom["xmin"]); ymin = float(geom["ymin"])
-        xmax = float(geom["xmax"]); ymax = float(geom["ymax"])
-        geom = {
-            "rings": [[[xmin, ymin], [xmax, ymin], [xmax, ymax], [xmin, ymax], [xmin, ymin]]],
-            "spatialReference": {"wkid": wkid},
-        }
-    else:
-        geom["spatialReference"] = {"wkid": wkid}
-    return arcgis_intersects(ArcGISGeometry(geom))
-
-
 def _query_feature_layer_gdf(
     layer_url: str,
     where: str = "1=1",
@@ -263,14 +194,7 @@ def _query_feature_layer_gdf(
     result_record_count: int | None = None,
     order_by_fields: str | None = None,
     aoi: dict | None = None,
-    prefer_cache: bool = True,
 ) -> gpd.GeoDataFrame | None:
-    cache_ttl = int(os.getenv("ARCGIS_PROXY_CACHE_TTL_SECONDS", "900") or "900")
-    cache_key = _proxy_cache_key("gdf", layer_url, where, out_fields, out_wkid, result_offset, result_record_count, order_by_fields, aoi)
-    if prefer_cache:
-        cached = _proxy_cache_get_gdf(cache_key, ttl_seconds=cache_ttl)
-        if cached is not None:
-            return cached
     lyr = get_feature_layer(layer_url)
     if lyr is None:
         return None
@@ -281,25 +205,28 @@ def _query_feature_layer_gdf(
         "f": "json",
         "out_sr": out_wkid,
         "result_offset": result_offset,
-        "return_all_records": False,
     }
     if result_record_count is not None:
         kwargs["result_record_count"] = result_record_count
     if order_by_fields:
         kwargs["order_by_fields"] = order_by_fields
-    gf = _arcgis_aoi_to_geometry_filter(aoi, fallback_wkid=out_wkid)
-    if gf is not None:
-        kwargs["geometry_filter"] = gf
+    if aoi and aoi.get("geometry") and ArcGISGeometry is not None and arcgis_intersects is not None:
+        try:
+            wkid_raw = aoi.get("inSR")
+            if wkid_raw is None:
+                wkid_raw = (aoi.get("geometry", {}).get("spatialReference", {}) or {}).get("wkid", out_wkid)
+            wkid = int(wkid_raw or out_wkid)
+            geom = dict(aoi["geometry"])
+            geom["spatialReference"] = {"wkid": wkid}
+            kwargs["geometry_filter"] = arcgis_intersects(ArcGISGeometry(geom))
+        except Exception as exc:
+            logger.warning(f"Failed to build ArcGIS geometry filter for {layer_url}: {exc}")
     try:
         fs = lyr.query(**kwargs)
-        gdf = _feature_set_to_gdf(fs, out_wkid=out_wkid)
-        if prefer_cache and gdf is not None:
-            _proxy_cache_set_gdf(cache_key, gdf)
-        return gdf
+        return _feature_set_to_gdf(fs, out_wkid=out_wkid)
     except Exception as exc:
         logger.warning(f"FeatureLayer.query failed for {layer_url}: {exc}")
         return None
-
 
 def _query_feature_layer_json(
     layer_url: str,
@@ -311,11 +238,6 @@ def _query_feature_layer_json(
     order_by_fields: str | None = None,
     aoi: dict | None = None,
 ) -> dict | None:
-    cache_ttl = int(os.getenv("ARCGIS_PROXY_CACHE_TTL_SECONDS", "900") or "900")
-    cache_key = _proxy_cache_key("json", layer_url, where, out_fields, out_wkid, result_offset, result_record_count, order_by_fields, aoi)
-    cached = _proxy_cache_get_json(cache_key, ttl_seconds=cache_ttl)
-    if cached is not None:
-        return cached
     gdf = _query_feature_layer_gdf(
         layer_url,
         where=where,
@@ -325,16 +247,13 @@ def _query_feature_layer_json(
         result_record_count=result_record_count,
         order_by_fields=order_by_fields,
         aoi=aoi,
-        prefer_cache=True,
     )
     if gdf is None:
         return None
     try:
-        fc = _json.loads(gdf.to_json())
+        return _json.loads(gdf.to_json())
     except Exception:
-        fc = {"type": "FeatureCollection", "features": []}
-    _proxy_cache_set_json(cache_key, fc)
-    return fc
+        return {"type": "FeatureCollection", "features": []}
 
 
 def _coerce_proxy_aoi(geometry: dict | None, geometry_type: str = "esriGeometryPolygon", in_srid: int | None = None, out_srid: int = 4326) -> dict | None:
@@ -765,7 +684,7 @@ def _fingerprint_aoi(aoi: dict) -> str:
         payload = {"geometryType": gtype, "geometry": geom}
 
     s = _json.dumps(payload, separators=(",", ":"), sort_keys=True, default=_json_default)
-    return _hashlib.sha1(s.encode("utf-8")).hexdigest()
+    return hashlib.sha1(s.encode("utf-8")).hexdigest()
 
 
 def _looks_like_url(u: str) -> bool:
@@ -1197,58 +1116,6 @@ def extract_geojson(
         return None
 
 
-def _latest_order_fields_for_layer(layer_url: str) -> list[str]:
-    props = _feature_layer_properties(layer_url) or {}
-    names = {str(f.get("name", "")).upper(): f.get("name") for f in props.get("fields", []) if isinstance(f, dict)}
-    candidates = [
-        "DATE_CHNG", "DATE_MADE", "EDITDATE", "EDITED_DATE", "LAST_EDITED_DATE",
-        "LASTEDITDATE", "CREATED_DATE", "CREATIONDATE", "OBJECTID",
-    ]
-    result = []
-    for c in candidates:
-        if c in names:
-            result.append(f"{names[c]} DESC")
-    return result or [f"{_get_objectid_field(layer_url)} DESC"]
-
-
-def _query_latest_feature_gdf(layer_url: str, out_wkid: int | None = None) -> gpd.GeoDataFrame:
-    layer_url = _sanitise_layer_url(layer_url)
-    if out_wkid is None:
-        out_wkid = fetch_crs(layer_url) or 4326
-    order_by = ", ".join(_latest_order_fields_for_layer(layer_url))
-    gdf = _query_feature_layer_gdf(
-        layer_url,
-        where="1=1",
-        out_fields="*",
-        out_wkid=out_wkid,
-        result_offset=0,
-        result_record_count=1,
-        order_by_fields=order_by,
-        aoi=None,
-    )
-    return gdf if gdf is not None else gpd.GeoDataFrame(geometry=[], crs=f"EPSG:{out_wkid}")
-
-
-def _cleanup_keep_latest_feature(layer_url: str) -> None:
-    lyr = get_feature_layer(layer_url)
-    if lyr is None:
-        return
-    oid_field = _get_objectid_field(layer_url)
-    order_by = ", ".join(_latest_order_fields_for_layer(layer_url))
-    try:
-        fs = lyr.query(where="1=1", out_fields=oid_field, return_geometry=False, order_by_fields=order_by)
-        feats = list(getattr(fs, "features", []) or [])
-        ids = [int((getattr(f, "attributes", {}) or {}).get(oid_field)) for f in feats if (getattr(f, "attributes", {}) or {}).get(oid_field) is not None]
-        if len(ids) <= 1:
-            return
-        keep = ids[0]
-        deletes = [str(i) for i in ids[1:] if i != keep]
-        if deletes:
-            lyr.edit_features(deletes=",".join(deletes))
-    except Exception as exc:
-        logger.warning(f"Failed to cleanup older ROI features for {layer_url}: {exc}")
-
-
 def get_roi_gdf(project_name: str) -> gpd.GeoDataFrame:
     logger.info(f"Fetching ROI GeoDataFrame for project: {project_name}")
     try:
@@ -1257,17 +1124,18 @@ def get_roi_gdf(project_name: str) -> gpd.GeoDataFrame:
         if not chat_input_url:
             logger.warning("CHAT_INPUT URL is missing. Returning empty GDF.")
             return gpd.GeoDataFrame(geometry=[], crs="EPSG:4326")
+
         logger.info(f"Using CHAT_INPUT URL: {chat_input_url}")
-        try:
-            _cleanup_keep_latest_feature(chat_input_url)
-        except Exception:
-            pass
-        gdf = _query_latest_feature_gdf(chat_input_url, out_wkid=4326)
-        if gdf is None or gdf.empty:
-            logger.warning("No latest ROI feature found. Returning empty GDF.")
+        gdf = extract_geojson(chat_input_url)
+
+        if gdf is None:
+            logger.warning("extract_geojson returned None. Returning empty GDF.")
             return gpd.GeoDataFrame(geometry=[], crs="EPSG:4326")
-        logger.info(f"Successfully fetched latest ROI GDF with {len(gdf)} feature, CRS: {gdf.crs}")
-        return _ensure_wgs84(gdf)
+
+        logger.info(
+            f"Successfully fetched ROI GDF with {len(gdf)} features, CRS: {gdf.crs}"
+        )
+        return gdf
     except Exception as e:
         logger.error(f"get_roi_gdf error for {project_name}: {e}")
         return gpd.GeoDataFrame(geometry=[], crs="EPSG:4326")
@@ -1940,6 +1808,23 @@ def _gdf_from_layer_all(
     layer_url = _sanitise_layer_url(layer_url)
     mrc = _get_layer_max_record_count(layer_url, timeout=timeout)
     page_size = min(mrc if isinstance(mrc, int) and mrc > 0 else 1000, 500)
+    api_parts = []
+    offset = 0
+    while True:
+        api_gdf = _query_feature_layer_gdf(layer_url, where="1=1", out_fields="*", out_wkid=out_wkid, result_offset=offset, result_record_count=page_size)
+        if api_gdf is None:
+            api_parts = []
+            break
+        api_parts.append(api_gdf)
+        logger.debug(f"Fetched {len(api_gdf)} features in API batch. Total batches: {len(api_parts)}")
+        if len(api_gdf) < page_size:
+            if api_parts:
+                merged = gpd.GeoDataFrame(pd.concat(api_parts, ignore_index=True), geometry="geometry", crs=api_parts[0].crs)
+                logger.info(f"Successfully created GDF with {len(merged)} features via ArcGIS Python API, CRS EPSG:{out_wkid}.")
+                return merged
+            break
+        offset += page_size
+
     features = []
     offset = 0
 
@@ -2106,14 +1991,10 @@ def get_project_aoi_geometry(project_name: str):
         logger.info(f"Attempting to use CHAT_INPUT URL: {chat_input_url}")
         try:
             layer_url = _sanitise_layer_url(chat_input_url)
-            try:
-                _cleanup_keep_latest_feature(layer_url)
-            except Exception:
-                pass
             wkid = fetch_crs(layer_url) or 4326
-            gdf = _query_latest_feature_gdf(layer_url, out_wkid=wkid)
+            gdf = _gdf_from_layer_all(layer_url, out_wkid=wkid)
 
-            if gdf is not None and not gdf.empty:
+            if not gdf.empty:
                 polys = [
                     geom
                     for geom in gdf.geometry
@@ -2158,7 +2039,7 @@ def get_project_aoi_geometry(project_name: str):
                 "CHAT_INPUT had no valid polygons. Falling back to ORTHOMOSAIC extent."
             )
         except Exception as e:
-            logger.warning(f"CHAT_INPUT AOI fallback due to error: {e}")
+            logger.exception(f"CHAT_INPUT AOI fallback due to error: {e}")
 
     if not ortho_url:
         logger.error("Both CHAT_INPUT and ORTHOMOSAIC are missing for this project.")
@@ -2885,8 +2766,9 @@ def make_project_data_locations(
     logger.info(
         f"Building data locations for project '{project_name}' (include_seasons={include_seasons})."
     )
-    # Always refresh from the project index (keeps behaviour consistent with your original)
-    attrs = get_project_urls(project_name)
+    # Refresh from project index only if attrs were not provided
+    if not attrs:
+        attrs = get_project_urls(project_name)
 
     # Ensure cache dir exists
     os.makedirs(DATA_LOCATIONS_CACHE_DIR, exist_ok=True)
@@ -3284,6 +3166,38 @@ def make_project_data_locations(
             logger.error(f"Error including seasonal data locations: {e}")
 
     # --- 3) YAML-based extras -------------------------------------------------
+    def _add_cloudsql(item: dict, label: str, insert_at: Optional[int] = None):
+        try:
+            source = {
+                "schema": item.get("schema", "public"),
+                "table": item.get("table"),
+                "geom_column": item.get("geom_column", "geom"),
+                "columns": item.get("columns") or item.get("fields"),
+                "where": item.get("where", ""),
+                "srid": item.get("srid"),
+                "limit": item.get("limit", 5000),
+                "spatial_op": item.get("spatial_op", "intersects"),
+                "distance_m": item.get("distance_m"),
+                "order_by": item.get("order_by"),
+            }
+            url = build_cloudsql_geojson_url(
+                source,
+                project_name=project_name if bool(item.get("aoifilter", True)) else None,
+                app_base_url=APP_BASE_URL,
+            )
+            cols = source.get("columns") or []
+            cols_txt = f"  columns: {', '.join(cols)}" if cols else ""
+            entry_raw = f"{label}: {url}{cols_txt} [cloudsql]"
+            if insert_at is None or insert_at < 0:
+                data_locations.append(entry_raw)
+            else:
+                idx = min(insert_at, len(data_locations))
+                data_locations.insert(idx, entry_raw)
+            logger.debug(f"Added Cloud SQL data location: {entry_raw}")
+        except Exception as ex:
+            logger.error(f"Failed to add Cloud SQL data location for {label}: {ex}")
+
+
     extras = _iter_project_extra_entries(project_name, YAML_DEFAULT_PATH)
 
     def _infer_priority(item: dict) -> int:
@@ -3350,37 +3264,6 @@ def make_project_data_locations(
                 _add_raw(layer_url, label, insert_at=insert_at)
         except Exception as ex:
             logger.error(f"Failed to apply YAML extra '{label}': {ex}")
-
-    def _add_cloudsql(item: dict, label: str, insert_at: Optional[int] = None):
-        try:
-            source = {
-                "schema": item.get("schema", "public"),
-                "table": item.get("table"),
-                "geom_column": item.get("geom_column", "geom"),
-                "columns": item.get("columns") or item.get("fields"),
-                "where": item.get("where", ""),
-                "srid": item.get("srid"),
-                "limit": item.get("limit", 5000),
-                "spatial_op": item.get("spatial_op", "intersects"),
-                "distance_m": item.get("distance_m"),
-                "order_by": item.get("order_by"),
-            }
-            url = build_cloudsql_geojson_url(
-                source,
-                project_name=project_name if bool(item.get("aoifilter", True)) else None,
-                app_base_url=APP_BASE_URL,
-            )
-            cols = source.get("columns") or []
-            cols_txt = f"  columns: {', '.join(cols)}" if cols else ""
-            entry_raw = f"{label}: {url}{cols_txt} [cloudsql]"
-            if insert_at is None or insert_at < 0:
-                data_locations.append(entry_raw)
-            else:
-                idx = min(insert_at, len(data_locations))
-                data_locations.insert(idx, entry_raw)
-            logger.debug(f"Added Cloud SQL data location: {entry_raw}")
-        except Exception as ex:
-            logger.error(f"Failed to add Cloud SQL data location for {label}: {ex}")
 
     # --- Write updated cache --------------------------------------------------
     try:
