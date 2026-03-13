@@ -95,7 +95,7 @@ class Solution():
         self.data_locations_str = '\n'.join([f"{idx + 1}. {line}" for idx, line in enumerate(self.data_locations)])
         dataset_lines = []
         for idx, (key, meta) in enumerate((self.dataset_catalog or {}).items(), start=1):
-            dataset_lines.append(f"{idx}. datasets['{key}'] => local_geojson={meta.get('local_geojson')} | feature_count={meta.get('feature_count', 0)} | columns={', '.join(meta.get('columns') or [])}")
+            dataset_lines.append(f"{idx}. datasets['{key}'] => local_path={meta.get('local_path') or meta.get('local_parquet') or meta.get('local_geojson')} | format={meta.get('local_format') or ('parquet' if str(meta.get('local_path') or '').lower().endswith('.parquet') else 'geojson')} | feature_count={meta.get('feature_count', 0)} | columns={', '.join(meta.get('columns') or [])}")
         self.dataset_catalog_str = '\n'.join(dataset_lines) if dataset_lines else 'No preloaded datasets available.'
         # Example Graph Requirement (you might need to update this with your constants module)
         graph_requirement = constants.graph_requirement.copy()
