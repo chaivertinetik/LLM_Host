@@ -203,7 +203,7 @@ def save_history(session_id: str, history: list):
     
     # Combine and keep only the last 20 entries
     
-    combined_history = (existing_history + history)[-20:] 
+    combined_history = (existing_history + history)[-60:] 
     
     db.collection("chat_histories").document(session_id).set({"history": combined_history})
 
