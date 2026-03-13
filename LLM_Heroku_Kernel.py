@@ -95,7 +95,7 @@ class Solution():
         self.data_locations_str = '\n'.join([f"{idx + 1}. {line}" for idx, line in enumerate(self.data_locations)])
         dataset_lines = []
         for idx, (key, meta) in enumerate((self.dataset_catalog or {}).items(), start=1):
-            dataset_lines.append(f"{idx}. datasets['{key}'] => local_path={meta.get('local_path') or meta.get('local_parquet') or meta.get('local_geojson')} | format={meta.get('local_format') or ('parquet' if str(meta.get('local_path') or '').lower().endswith('.parquet') else 'geojson')} | feature_count={meta.get('feature_count', 0)} | columns={', '.join(meta.get('columns') or [])}")
+            dataset_lines.append(f"{idx}. datasets['{key}'] => local_path={meta.get('local_path') or meta.get('local_parquet') or meta.get('local_geojson')} | local_format={meta.get('local_format', 'geojson')} | feature_count={meta.get('feature_count', 0)} | columns={', '.join(meta.get('columns') or [])}")
         self.dataset_catalog_str = '\n'.join(dataset_lines) if dataset_lines else 'No preloaded datasets available.'
         # Example Graph Requirement (you might need to update this with your constants module)
         graph_requirement = constants.graph_requirement.copy()
@@ -104,10 +104,10 @@ class Solution():
         direct_dataset_rules = (
             "Direct dataset execution rules:\n"
             "1. Prefer already-loaded GeoDataFrames from datasets[...] whenever available.\n"
-            "2. Do not download data again if a dataset key or local_geojson path is already provided.\n"
+            "2. Do not download data again if a dataset key or local cached path is already provided.\n"
             "3. Use GeoPandas vectorized operations, spatial joins, overlays, dissolve, clip, and groupby instead of Python loops where possible.\n"
             "4. Set result to a GeoDataFrame, pandas DataFrame, list, or scalar.\n"
-            "5. Avoid requests.get or gpd.read_file(url) unless no preloaded dataset is available.\n"
+            "5. Never use remote http/https URLs, /arcgis/geojson, requests.get, safe_read_arcgis, or gpd.read_file(url) when a local cached dataset path is available.\n6. Prefer gpd.read_parquet(local_path) when local_format is parquet, otherwise use the provided local GeoJSON path.\n"
         )
         graph_prompt = f'Your role: {self.role} \n\n' + \
                f'Your task: {constants.graph_task_prefix} \n {self.task} \n\n' + \

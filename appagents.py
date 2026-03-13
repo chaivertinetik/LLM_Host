@@ -735,37 +735,48 @@ def _preload_single_dataset(entry: str, idx: int, datasets_dir: str) -> Optional
 
    label = _extract_dataset_label(entry, idx)
    dataset_key = _slugify_dataset_name(label.lower(), fallback=f"dataset_{idx}")
-   local_geojson = os.path.join(datasets_dir, f"{idx:03d}_{dataset_key}.geojson")
-   local_parquet = os.path.join(datasets_dir, f"{idx:03d}_{dataset_key}.parquet")
+   url_hash = hashlib.sha256(url.encode("utf-8")).hexdigest()[:16]
+   local_geojson = os.path.join(datasets_dir, f"{idx:03d}_{dataset_key}_{url_hash}.geojson")
+   local_parquet = os.path.join(datasets_dir, f"{idx:03d}_{dataset_key}_{url_hash}.parquet")
    meta = _parse_inline_meta(entry)
 
-   resp = requests.get(url, timeout=180)
-   resp.raise_for_status()
-   payload = resp.json()
-   gdf = _read_feature_collection_to_gdf(payload)
-   if not gdf.empty and gdf.crs is None:
-       gdf = gdf.set_crs(4326, allow_override=True)
+   gdf = None
+   if os.path.exists(local_parquet):
+       try:
+           gdf = gpd.read_parquet(local_parquet)
+       except Exception:
+           gdf = None
+   if gdf is None and os.path.exists(local_geojson):
+       try:
+           gdf = gpd.read_file(local_geojson)
+       except Exception:
+           gdf = None
 
-   preferred_local_path = local_geojson
-   preferred_local_format = "geojson"
-   try:
-       gdf.to_parquet(local_parquet)
-       preferred_local_path = local_parquet
-       preferred_local_format = "parquet"
-   except Exception:
-       pass
-   try:
-       gdf.to_file(local_geojson, driver="GeoJSON")
-   except Exception:
-       if preferred_local_path != local_parquet:
-           raise
+   if gdf is None:
+       resp = requests.get(url, timeout=180)
+       resp.raise_for_status()
+       payload = resp.json()
+       gdf = _read_feature_collection_to_gdf(payload)
+       if not gdf.empty and gdf.crs is None:
+           gdf = gdf.set_crs(4326, allow_override=True)
+       try:
+           gdf.to_parquet(local_parquet)
+       except Exception:
+           pass
+       try:
+           gdf.to_file(local_geojson, driver="GeoJSON")
+       except Exception:
+           pass
+
+   preferred_local_path = local_parquet if os.path.exists(local_parquet) else local_geojson
+   preferred_local_format = 'parquet' if os.path.exists(local_parquet) else 'geojson'
 
    return {
        "dataset_key": dataset_key,
        "label": label,
        "source_url": url,
-       "local_geojson": local_geojson if os.path.exists(local_geojson) else None,
-       "local_parquet": local_parquet if os.path.exists(local_parquet) else None,
+       "local_geojson": local_geojson,
+       "local_parquet": local_parquet,
        "local_path": preferred_local_path,
        "local_format": preferred_local_format,
        "feature_count": int(len(gdf)),
@@ -774,9 +785,6 @@ def _preload_single_dataset(entry: str, idx: int, datasets_dir: str) -> Optional
        "crs": str(gdf.crs) if getattr(gdf, "crs", None) else "EPSG:4326",
        "metadata": meta,
    }
-
-
-
 
 
 def _candidate_column_names_from_meta(meta: Dict[str, Any]) -> list[str]:
@@ -809,7 +817,14 @@ def _iter_data_location_entries(data_locations: list) -> list[Dict[str, Any]]:
        label = _extract_dataset_label(entry, idx)
        meta = _parse_inline_meta(entry)
        dataset_key = _slugify_dataset_name(label.lower(), fallback=f'dataset_{idx}')
-       entries.append({'index': idx, 'entry': entry, 'url': url, 'label': label, 'dataset_key': dataset_key, 'meta': meta})
+       entries.append(
+           f"Local cached dataset: {label}: {local_path}\n"
+           f"  dataset_key: {dataset_key}\n"
+           f"  local_format: {local_format}\n"
+           f"  feature_count: {meta.get('feature_count', 0)}\n"
+           f"  geometry_types: {geom_types or 'unknown'}\n"
+           f"  columns: {cols or 'none'}"
+       )
    return entries
 
 
@@ -1252,12 +1267,10 @@ def build_preloaded_dataset_context(data_locations: list, save_dir: str, max_wor
    datasets = {}
    for key, meta in dataset_catalog.items():
        try:
-           local_path = meta.get("local_path") or meta.get("local_parquet") or meta.get("local_geojson")
-           local_format = (meta.get("local_format") or "").lower()
-           if local_format == "parquet" or (isinstance(local_path, str) and local_path.lower().endswith(".parquet")):
-               datasets[key] = gpd.read_parquet(local_path)
+           if meta.get('local_parquet') and os.path.exists(meta['local_parquet']):
+               datasets[key] = gpd.read_parquet(meta['local_parquet'])
            else:
-               datasets[key] = gpd.read_file(local_path)
+               datasets[key] = gpd.read_file(meta['local_geojson'])
        except Exception as exc:
            print(f"Failed to load preloaded dataset for {key}: {exc}")
 
@@ -1269,11 +1282,10 @@ def build_preloaded_dataset_context(data_locations: list, save_dir: str, max_wor
    for idx, meta in enumerate(manifests, start=1):
        cols = ", ".join(meta.get("columns") or [])
        geom_types = ", ".join(meta.get("geometry_types") or [])
-       local_path = meta.get("local_path") or meta.get("local_parquet") or meta.get("local_geojson") or ""
-       local_format = meta.get("local_format") or ("parquet" if str(local_path).lower().endswith(".parquet") else "geojson")
+       local_path = meta.get('local_path') or meta.get('local_parquet') or meta.get('local_geojson')
        prompt_lines.append(
-           f"{idx}. {meta['label']} => datasets['{meta['dataset_key']}'] | local_path={local_path} | "
-           f"format={local_format} | feature_count={meta.get('feature_count', 0)} | geometry_types={geom_types or 'unknown'} | columns={cols or 'none'}"
+           f"{idx}. {meta['label']} => datasets['{meta['dataset_key']}'] | local_path={local_path} | local_format={meta.get('local_format', 'geojson')} | "
+           f"feature_count={meta.get('feature_count', 0)} | geometry_types={geom_types or 'unknown'} | columns={cols or 'none'}"
        )
 
    prompt_text = "\n".join(prompt_lines) if prompt_lines else "No datasets were preloaded locally."
@@ -1283,6 +1295,26 @@ def build_preloaded_dataset_context(data_locations: list, save_dir: str, max_wor
        "dataset_manifest_path": manifest_path,
        "prompt_text": prompt_text,
    }
+
+
+def _build_llm_local_data_locations(dataset_context: Dict[str, Any]) -> list[str]:
+   entries = []
+   catalog = dataset_context.get('dataset_catalog') or {}
+   for idx, (dataset_key, meta) in enumerate(catalog.items(), start=1):
+       local_path = meta.get('local_path') or meta.get('local_parquet') or meta.get('local_geojson') or ''
+       local_format = meta.get('local_format') or ('parquet' if meta.get('local_parquet') else 'geojson')
+       cols = ', '.join(meta.get('columns') or [])
+       geom_types = ', '.join(meta.get('geometry_types') or [])
+       label = meta.get('label', dataset_key)
+       entries.append(
+           f"Local cached dataset: {label}: {local_path}\n"
+           f"  dataset_key: {dataset_key}\n"
+           f"  local_format: {local_format}\n"
+           f"  feature_count: {meta.get('feature_count', 0)}\n"
+           f"  geometry_types: {geom_types or 'unknown'}\n"
+           f"  columns: {cols or 'none'}"
+       )
+   return entries
 
 
 # ============================================================
@@ -1920,7 +1952,6 @@ def get_forestry_agent(user_input: str, bbox_dict: dict, task_name: str, llm):
     #     import traceback
     #     traceback.print_exc()  # This will show you exactly where the error is
     #     return str(e)
-
 
 
 

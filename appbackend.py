@@ -684,7 +684,7 @@ def _fingerprint_aoi(aoi: dict) -> str:
         payload = {"geometryType": gtype, "geometry": geom}
 
     s = _json.dumps(payload, separators=(",", ":"), sort_keys=True, default=_json_default)
-    return hashlib.sha1(s.encode("utf-8")).hexdigest()
+    return _hashlib.sha1(s.encode("utf-8")).hexdigest()
 
 
 def _looks_like_url(u: str) -> bool:
@@ -1808,23 +1808,6 @@ def _gdf_from_layer_all(
     layer_url = _sanitise_layer_url(layer_url)
     mrc = _get_layer_max_record_count(layer_url, timeout=timeout)
     page_size = min(mrc if isinstance(mrc, int) and mrc > 0 else 1000, 500)
-    api_parts = []
-    offset = 0
-    while True:
-        api_gdf = _query_feature_layer_gdf(layer_url, where="1=1", out_fields="*", out_wkid=out_wkid, result_offset=offset, result_record_count=page_size)
-        if api_gdf is None:
-            api_parts = []
-            break
-        api_parts.append(api_gdf)
-        logger.debug(f"Fetched {len(api_gdf)} features in API batch. Total batches: {len(api_parts)}")
-        if len(api_gdf) < page_size:
-            if api_parts:
-                merged = gpd.GeoDataFrame(pd.concat(api_parts, ignore_index=True), geometry="geometry", crs=api_parts[0].crs)
-                logger.info(f"Successfully created GDF with {len(merged)} features via ArcGIS Python API, CRS EPSG:{out_wkid}.")
-                return merged
-            break
-        offset += page_size
-
     features = []
     offset = 0
 
@@ -2039,7 +2022,7 @@ def get_project_aoi_geometry(project_name: str):
                 "CHAT_INPUT had no valid polygons. Falling back to ORTHOMOSAIC extent."
             )
         except Exception as e:
-            logger.exception(f"CHAT_INPUT AOI fallback due to error: {e}")
+            logger.warning(f"CHAT_INPUT AOI fallback due to error: {e}")
 
     if not ortho_url:
         logger.error("Both CHAT_INPUT and ORTHOMOSAIC are missing for this project.")
@@ -2766,9 +2749,8 @@ def make_project_data_locations(
     logger.info(
         f"Building data locations for project '{project_name}' (include_seasons={include_seasons})."
     )
-    # Refresh from project index only if attrs were not provided
-    if not attrs:
-        attrs = get_project_urls(project_name)
+    # Always refresh from the project index (keeps behaviour consistent with your original)
+    attrs = get_project_urls(project_name)
 
     # Ensure cache dir exists
     os.makedirs(DATA_LOCATIONS_CACHE_DIR, exist_ok=True)
@@ -3166,38 +3148,6 @@ def make_project_data_locations(
             logger.error(f"Error including seasonal data locations: {e}")
 
     # --- 3) YAML-based extras -------------------------------------------------
-    def _add_cloudsql(item: dict, label: str, insert_at: Optional[int] = None):
-        try:
-            source = {
-                "schema": item.get("schema", "public"),
-                "table": item.get("table"),
-                "geom_column": item.get("geom_column", "geom"),
-                "columns": item.get("columns") or item.get("fields"),
-                "where": item.get("where", ""),
-                "srid": item.get("srid"),
-                "limit": item.get("limit", 5000),
-                "spatial_op": item.get("spatial_op", "intersects"),
-                "distance_m": item.get("distance_m"),
-                "order_by": item.get("order_by"),
-            }
-            url = build_cloudsql_geojson_url(
-                source,
-                project_name=project_name if bool(item.get("aoifilter", True)) else None,
-                app_base_url=APP_BASE_URL,
-            )
-            cols = source.get("columns") or []
-            cols_txt = f"  columns: {', '.join(cols)}" if cols else ""
-            entry_raw = f"{label}: {url}{cols_txt} [cloudsql]"
-            if insert_at is None or insert_at < 0:
-                data_locations.append(entry_raw)
-            else:
-                idx = min(insert_at, len(data_locations))
-                data_locations.insert(idx, entry_raw)
-            logger.debug(f"Added Cloud SQL data location: {entry_raw}")
-        except Exception as ex:
-            logger.error(f"Failed to add Cloud SQL data location for {label}: {ex}")
-
-
     extras = _iter_project_extra_entries(project_name, YAML_DEFAULT_PATH)
 
     def _infer_priority(item: dict) -> int:
@@ -3264,6 +3214,37 @@ def make_project_data_locations(
                 _add_raw(layer_url, label, insert_at=insert_at)
         except Exception as ex:
             logger.error(f"Failed to apply YAML extra '{label}': {ex}")
+
+    def _add_cloudsql(item: dict, label: str, insert_at: Optional[int] = None):
+        try:
+            source = {
+                "schema": item.get("schema", "public"),
+                "table": item.get("table"),
+                "geom_column": item.get("geom_column", "geom"),
+                "columns": item.get("columns") or item.get("fields"),
+                "where": item.get("where", ""),
+                "srid": item.get("srid"),
+                "limit": item.get("limit", 5000),
+                "spatial_op": item.get("spatial_op", "intersects"),
+                "distance_m": item.get("distance_m"),
+                "order_by": item.get("order_by"),
+            }
+            url = build_cloudsql_geojson_url(
+                source,
+                project_name=project_name if bool(item.get("aoifilter", True)) else None,
+                app_base_url=APP_BASE_URL,
+            )
+            cols = source.get("columns") or []
+            cols_txt = f"  columns: {', '.join(cols)}" if cols else ""
+            entry_raw = f"{label}: {url}{cols_txt} [cloudsql]"
+            if insert_at is None or insert_at < 0:
+                data_locations.append(entry_raw)
+            else:
+                idx = min(insert_at, len(data_locations))
+                data_locations.insert(idx, entry_raw)
+            logger.debug(f"Added Cloud SQL data location: {entry_raw}")
+        except Exception as ex:
+            logger.error(f"Failed to add Cloud SQL data location for {label}: {ex}")
 
     # --- Write updated cache --------------------------------------------------
     try:

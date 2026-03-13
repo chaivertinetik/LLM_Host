@@ -2,6 +2,9 @@
 import datetime
 import json
 import os
+import hashlib
+from pathlib import Path
+import os
 import re
 import time
 import urllib.parse
@@ -104,6 +107,34 @@ except Exception as _e:
 os.environ.setdefault("LLM_USE_PRELOADED_DATASETS", "1")
 os.environ.setdefault("DATA_PRELOAD_MAX_WORKERS", str(min(8, max(2, (os.cpu_count() or 2)))))
 app = FastAPI()
+
+_URL_PROXY_CACHE_DIR = Path(os.getenv("ARCGIS_PROXY_URL_CACHE_DIR", "proxy_url_cache"))
+_URL_PROXY_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+
+def _url_proxy_cache_key(*parts):
+    payload = json.dumps(parts, sort_keys=True, default=str, separators=(",", ":"))
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+def _url_proxy_cache_path(key: str) -> Path:
+    return _URL_PROXY_CACHE_DIR / f"{key}.json"
+
+def _url_proxy_cache_get(key: str, ttl_seconds: int = 900):
+    p = _url_proxy_cache_path(key)
+    try:
+        if not p.exists():
+            return None
+        if ttl_seconds > 0 and (time.time() - p.stat().st_mtime) > ttl_seconds:
+            return None
+        return json.loads(p.read_text())
+    except Exception:
+        return None
+
+def _url_proxy_cache_set(key: str, value):
+    p = _url_proxy_cache_path(key)
+    try:
+        p.write_text(json.dumps(value))
+    except Exception:
+        pass
 
 app.add_middleware(
     CORSMiddleware,
@@ -382,16 +413,22 @@ async def arcgis_geojson_proxy(
         except Exception as exc:
             raise HTTPException(status_code=400, detail=f"Invalid geometry JSON: {exc}")
 
-    fc = _query_feature_layer_json(
-        layer_url,
-        where=where,
-        out_fields=outFields,
-        out_wkid=outSR,
-        result_offset=resultOffset,
-        result_record_count=resultRecordCount,
-        order_by_fields=orderByFields,
-        aoi=aoi,
-    )
+    cache_ttl = int(os.getenv("ARCGIS_PROXY_CACHE_TTL_SECONDS", "900") or "900")
+    proxy_key = _url_proxy_cache_key(layer_url, where, outFields, geometry, geometryType, spatialRel, inSR, outSR, resultOffset, resultRecordCount, orderByFields)
+    fc = _url_proxy_cache_get(proxy_key, ttl_seconds=cache_ttl)
+    if fc is None:
+        fc = _query_feature_layer_json(
+            layer_url,
+            where=where,
+            out_fields=outFields,
+            out_wkid=outSR,
+            result_offset=resultOffset,
+            result_record_count=resultRecordCount,
+            order_by_fields=orderByFields,
+            aoi=aoi,
+        )
+        if fc is not None:
+            _url_proxy_cache_set(proxy_key, fc)
     if fc is None:
         raise HTTPException(status_code=502, detail="ArcGIS layer query failed")
     return JSONResponse(content=fc)
