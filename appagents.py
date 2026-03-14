@@ -1322,6 +1322,50 @@ def _build_llm_local_data_locations(dataset_context: Dict[str, Any]) -> list[str
 # ============================================================
 
 
+
+
+def _code_uses_remote_data_access(code: str) -> bool:
+   if not isinstance(code, str) or not code.strip():
+       return False
+   low = code.lower()
+   patterns = [
+       "/arcgis/geojson",
+       "safe_read_arcgis(",
+       "requests.get(",
+       "requests.post(",
+       "urllib.request",
+       "python-urllib",
+       "gpd.read_file(http",
+       "gpd.read_file('http",
+       'gpd.read_file("http',
+       "http://",
+       "https://",
+   ]
+   return any(p in low for p in patterns)
+
+
+def _enforce_local_only_code(code: str, dataset_context: Dict[str, Any]) -> tuple[bool, str, str]:
+   catalog = dataset_context.get('dataset_catalog') or {}
+   if not catalog:
+       return True, code, ''
+   if not _code_uses_remote_data_access(code):
+       return True, code, ''
+   local_hints = []
+   for key, meta in list(catalog.items())[:8]:
+       lp = meta.get('local_path') or meta.get('local_parquet') or meta.get('local_geojson') or ''
+       fmt = meta.get('local_format') or ('parquet' if meta.get('local_parquet') else 'geojson')
+       local_hints.append(f"datasets['{key}'] => {lp} ({fmt})")
+   err = (
+       "Remote URL-based loading is not allowed because datasets are already cached locally. "
+       "Rewrite the code to use datasets[...] or dataset_catalog local_path/local_parquet/local_geojson only. "
+       "Never call /arcgis/geojson, http/https URLs, requests.get/post, safe_read_arcgis, or gpd.read_file(url). "
+       "Available local datasets: " + "; ".join(local_hints)
+   )
+   success, fixed = try_llm_fix(code, error_message=err, max_attempts=1)
+   if not success:
+       return False, code, err
+   return True, fixed, ''
+
 def long_running_task(user_task: str, task_name: str, data_locations: list, push_map_result: bool = True, return_raw_result: bool = False):
    message = None
    try:
@@ -1446,6 +1490,11 @@ def long_running_task(user_task: str, task_name: str, data_locations: list, push
        #              SAFE GATE: lint + fix + compile
        # ============================================================
 
+       local_ok, maybe_local_code, local_err = _enforce_local_only_code(code_for_assembly, dataset_context)
+       if local_ok:
+           code_for_assembly = maybe_local_code
+       else:
+           print("LOCAL_ONLY_GUARD:", local_err)
 
        ok, gated_code, gate_msg = safe_lint_fix_compile(code_for_assembly)
        print("GATE:", gate_msg)
@@ -1457,6 +1506,10 @@ def long_running_task(user_task: str, task_name: str, data_locations: list, push
            if not success:
                return {"status": "completed", "message": fixed_code_or_error}
 
+
+           local_ok2, fixed_code_or_error, local_err2 = _enforce_local_only_code(fixed_code_or_error, dataset_context)
+           if not local_ok2:
+               return {"status": "completed", "message": local_err2}
 
            ok2, gated2, gate_msg2 = safe_lint_fix_compile(fixed_code_or_error)
            print("GATE2:", gate_msg2)
