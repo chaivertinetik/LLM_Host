@@ -35,7 +35,7 @@ INTERNAL_API_KEY = os.getenv("INTERNAL_API_KEY", "xyz")
 # Simple in-memory cache: { "token": str, "expires_at": unix_ts }
 _token_cache: dict = {}
 
-# NEW: public-access probe caches
+# Public access probe caches
 _PUBLIC_LAYER_ACCESS_CACHE: dict = {}
 _PUBLIC_URL_ACCESS_CACHE: dict = {}
 
@@ -193,7 +193,6 @@ def _arcgis_json_looks_public_success(js: Any) -> bool:
         return False
     if _is_arcgis_auth_error(js):
         return False
-    # Typical success payloads have one or more of these keys
     if any(
         k in js
         for k in (
@@ -211,6 +210,10 @@ def _arcgis_json_looks_public_success(js: Any) -> bool:
             "currentVersion",
             "name",
             "capabilities",
+            "addResults",
+            "updateResults",
+            "deleteResults",
+            "success",
         )
     ):
         return True
@@ -229,7 +232,7 @@ def _public_probe_cache_key(url_or_layer: str) -> str:
 
 def _is_public_arcgis_resource(url: str, timeout: int = 12) -> bool:
     """
-    Probe whether a specific ArcGIS resource can be read without token.
+    Probe whether a specific ArcGIS resource can be accessed without token.
     Result is cached by cleaned URL.
     """
     if not isinstance(url, str) or not url.strip():
@@ -305,7 +308,31 @@ def _is_public_arcgis_layer(layer_url: str, timeout: int = 12) -> bool:
         return False
 
 
-def _with_read_token_params(params: dict | None = None, layer_url: Optional[str] = None) -> dict:
+def _needs_token_for_request(layer_url: Optional[str] = None, url: Optional[str] = None) -> bool:
+    """
+    Returns True only if token is needed.
+    Checks public access first for exact URL, then layer metadata.
+    """
+    try:
+        if url and _is_public_arcgis_resource(url):
+            return False
+    except Exception:
+        pass
+
+    try:
+        if layer_url and _is_public_arcgis_layer(layer_url):
+            return False
+    except Exception:
+        pass
+
+    return True
+
+
+def _with_read_token_params(
+    params: dict | None = None,
+    layer_url: Optional[str] = None,
+    request_url: Optional[str] = None,
+) -> dict:
     """
     Add read token only when required.
     If the layer/service is publicly accessible, leave params unchanged.
@@ -315,11 +342,8 @@ def _with_read_token_params(params: dict | None = None, layer_url: Optional[str]
     if "token" in {str(k).lower() for k in p.keys()}:
         return p
 
-    try:
-        if layer_url and _is_public_arcgis_layer(layer_url):
-            return p
-    except Exception:
-        pass
+    if not _needs_token_for_request(layer_url=layer_url, url=request_url):
+        return p
 
     try:
         token = get_arcgis_read_token()
@@ -349,7 +373,6 @@ def _append_token_to_url(url: str) -> str:
         return url
 
     try:
-        # If the exact query URL is public, do not append token.
         if _is_public_arcgis_resource(url):
             return url
     except Exception:
@@ -369,12 +392,21 @@ def _append_token_to_url(url: str) -> str:
 def get_arcgis_write_token(force_refresh: bool = False) -> str:
     return get_arcgis_token(force_refresh=force_refresh)
 
-def _with_token_params(params: Optional[Dict] = None, layer_url: Optional[str] = None) -> Dict:
-    return _with_read_token_params(params, layer_url=layer_url)
+
+def _with_token_params(
+    params: Optional[Dict] = None,
+    layer_url: Optional[str] = None,
+    request_url: Optional[str] = None,
+) -> Dict:
+    return _with_read_token_params(params, layer_url=layer_url, request_url=request_url)
 
 
-def _with_token_data(data: dict | None = None, layer_url: Optional[str] = None) -> dict:
-    return _with_read_token_data(data, layer_url=layer_url)
+def _with_token_data(
+    data: dict | None = None,
+    layer_url: Optional[str] = None,
+    request_url: Optional[str] = None,
+) -> dict:
+    return _with_read_token_data(data, layer_url=layer_url, request_url=request_url)
 
 
 def get_arcgis_token(force_refresh: bool = False) -> str:
@@ -428,19 +460,39 @@ def get_arcgis_token(force_refresh: bool = False) -> str:
     return token
 
 
-
-def _with_write_token_params(params: dict | None = None) -> dict:
+def _with_write_token_params(
+    params: dict | None = None,
+    layer_url: Optional[str] = None,
+    request_url: Optional[str] = None,
+) -> dict:
+    """
+    Add write token only when required.
+    If the target write endpoint/layer is public for that operation, leave unchanged.
+    """
     p = dict(params or {})
+
+    if "token" in {str(k).lower() for k in p.keys()}:
+        return p
+
+    if not _needs_token_for_request(layer_url=layer_url, url=request_url):
+        return p
+
     try:
         token = get_arcgis_write_token()
     except Exception as exc:
         logger.error(f"Failed to get ArcGIS WRITE token: {exc}")
         return p
-    if token and "token" not in p:
+
+    if token:
         p["token"] = token
     return p
 
-def _with_read_token_data(data: dict | None = None, layer_url: Optional[str] = None) -> dict:
+
+def _with_read_token_data(
+    data: dict | None = None,
+    layer_url: Optional[str] = None,
+    request_url: Optional[str] = None,
+) -> dict:
     """
     Add read token to POST form data only when required.
     If the layer/service is public, leave data unchanged.
@@ -450,11 +502,8 @@ def _with_read_token_data(data: dict | None = None, layer_url: Optional[str] = N
     if "token" in {str(k).lower() for k in d.keys()}:
         return d
 
-    try:
-        if layer_url and _is_public_arcgis_layer(layer_url):
-            return d
-    except Exception:
-        pass
+    if not _needs_token_for_request(layer_url=layer_url, url=request_url):
+        return d
 
     try:
         token = get_arcgis_read_token()
@@ -466,9 +515,13 @@ def _with_read_token_data(data: dict | None = None, layer_url: Optional[str] = N
         d["token"] = token
     return d
 
-def _with_write_token_data(data: dict | None = None) -> dict:
-    return _with_write_token_params(data)
 
+def _with_write_token_data(
+    data: dict | None = None,
+    layer_url: Optional[str] = None,
+    request_url: Optional[str] = None,
+) -> dict:
+    return _with_write_token_params(data, layer_url=layer_url, request_url=request_url)
 
 
 def _json_default(obj):
@@ -545,7 +598,6 @@ def _sanitize_attributes(row, allowed_fields=None):
     return out
 
 
-
 def _stable_round(x, ndp=6):
     try:
         return round(float(x), ndp)
@@ -607,10 +659,8 @@ def _strip_token_param(url: str) -> str:
     try:
         parsed = urlparse(url)
         qs = parse_qsl(parsed.query, keep_blank_values=True)
-        # Filter out the token regardless of case
         filtered_qs = [(k, v) for (k, v) in qs if k.lower() != "token"]
 
-        # If lengths match, no token was actually found in the key position
         if len(qs) == len(filtered_qs):
             return url
 
@@ -684,7 +734,7 @@ async def trigger_cleanup(task_name: str):
                     "returnIdsOnly": "true",
                     "f": "json",
                 }
-                params = _with_write_token_params(params)
+                params = _with_write_token_params(params, layer_url=layer, request_url=query_url)
                 r = _session.get(query_url, params=params, timeout=20)
                 r.raise_for_status()
                 if "json" not in r.headers.get("Content-Type", ""):
@@ -712,7 +762,7 @@ async def trigger_cleanup(task_name: str):
                     "objectIds": ",".join(map(str, ids)),
                     "f": "json",
                 }
-                del_params = _with_write_token_params(del_params)
+                del_params = _with_write_token_params(del_params, layer_url=layer, request_url=delete_url)
                 dr = _session.post(delete_url, data=del_params, timeout=60)
                 dr.raise_for_status()
                 if "json" not in dr.headers.get("Content-Type", ""):
@@ -803,7 +853,7 @@ def get_project_urls(project_name):
         "outFields": ",".join(fields),
         "f": "json",
     }
-    params = _with_read_token_params(params, layer_url=query_url)
+    params = _with_read_token_params(params, layer_url=query_url, request_url=query_url)
     logger.debug(f"Querying project index with WHERE clause: {params['where']}")
 
     try:
@@ -849,10 +899,7 @@ def _sanitise_layer_url(url: str) -> str:
     Clean ArcGIS URLs. Updated to handle URLs that might already have
     query parameters or tokens attached before being passed here.
     """
-    # Remove query string before regexing the path
     base_part = url.split('?')[0].strip().rstrip("/")
-
-    # Remove /query if present
     u = re.sub(r"/query$", "", base_part, flags=re.IGNORECASE)
 
     m = re.search(
@@ -872,7 +919,7 @@ def _get_layer_max_record_count(layer_url: str, timeout: int = 20) -> int:
     logger.debug(f"Attempting to fetch maxRecordCount for {layer_url}")
     default_mrc = 1000
     try:
-        params = _with_read_token_params({"f": "json"}, layer_url=layer_url)
+        params = _with_read_token_params({"f": "json"}, layer_url=layer_url, request_url=layer_url.rstrip("/"))
         r = _session.get(layer_url.rstrip("/"), params=params, timeout=timeout)
         r.raise_for_status()
         if "json" not in r.headers.get("Content-Type", ""):
@@ -930,7 +977,7 @@ def extract_geojson(
         mrc = _get_layer_max_record_count(layer_url, timeout=timeout)
         page_size = min(
             mrc if isinstance(mrc, int) and mrc > 0 else 1000, 500
-        )  # cap at 500
+        )
         logger.info(f"Layer: {layer_url}, Page Size: {page_size}")
 
         features = []
@@ -945,7 +992,11 @@ def extract_geojson(
                 "resultOffset": offset,
                 "resultRecordCount": page_size,
             }
-            params = _with_read_token_params(params, layer_url=layer_url)
+            params = _with_read_token_params(
+                params,
+                layer_url=layer_url,
+                request_url=f"{layer_url}/query",
+            )
             logger.debug(f"Querying with offset={offset}, count={page_size}")
 
             resp = _session.get(f"{layer_url}/query", params=params, timeout=timeout)
@@ -1156,7 +1207,11 @@ def post_features_to_layer(gdf, target_url, project_name, batch_size=800):
             "features": _json.dumps(features, default=_json_default),
             "f": "json",
         }
-        payload = _with_write_token_data(payload)
+        payload = _with_write_token_data(
+            payload,
+            layer_url=layer_url,
+            request_url=add_url,
+        )
 
         try:
             response = _session.post(add_url, data=payload, headers=headers, timeout=90)
@@ -1208,7 +1263,7 @@ def delete_all_features(target_url):
             "returnIdsOnly": "true",
             "f": "json",
         }
-        params = _with_write_token_params(params)
+        params = _with_write_token_params(params, layer_url=layer, request_url=query_url)
         response = _session.get(query_url, params=params, timeout=20)
         response.raise_for_status()
         if "json" not in response.headers.get("Content-Type", ""):
@@ -1235,7 +1290,7 @@ def delete_all_features(target_url):
             "objectIds": ",".join(map(str, object_ids)),
             "f": "json",
         }
-        delete_params = _with_write_token_params(delete_params)
+        delete_params = _with_write_token_params(delete_params, layer_url=layer, request_url=delete_url)
         delete_response = _session.post(
             delete_url, data=delete_params, timeout=60
         )
@@ -1289,7 +1344,7 @@ def _get_layer_epsg(layer_url: str) -> int:
     """Fetch target layer EPSG from ArcGIS REST."""
     try:
         url = layer_url.rstrip("/")
-        params = _with_read_token_params({"f": "json"}, layer_url=layer_url)
+        params = _with_read_token_params({"f": "json"}, layer_url=layer_url, request_url=url)
         resp = _session.get(url, params=params, timeout=10)
         resp.raise_for_status()
         js = resp.json()
@@ -1717,7 +1772,11 @@ def _gdf_from_layer_all(
             "resultOffset": offset,
             "resultRecordCount": page_size,
         }
-        params = _with_token_params(params, layer_url=layer_url)
+        params = _with_token_params(
+            params,
+            layer_url=layer_url,
+            request_url=f"{layer_url}/query",
+        )
         logger.debug(f"Querying all features with offset={offset}, count={page_size}")
 
         try:
@@ -1801,7 +1860,11 @@ def fetch_crs(base_url, timeout=20, default_wkid=4326):
         f"Fetching CRS for base URL: {base_url}. Default WKID: {default_wkid}"
     )
     try:
-        params = _with_read_token_params({"f": "json"}, layer_url=base_url)
+        params = _with_read_token_params(
+            {"f": "json"},
+            layer_url=base_url,
+            request_url=base_url.rstrip("/"),
+        )
         r = _session.get(base_url.rstrip("/"), params=params, timeout=timeout)
         r.raise_for_status()
         ctype = r.headers.get("Content-Type", "")
@@ -1930,7 +1993,7 @@ def get_project_aoi_geometry(project_name: str):
     logger.info(f"Using ORTHOMOSAIC URL: {ortho_url}")
     try:
         base = ortho_url.rstrip("/")
-        params = _with_read_token_params({"f": "json"}, layer_url=base)
+        params = _with_read_token_params({"f": "json"}, layer_url=base, request_url=base)
         r = _session.get(base, params=params, timeout=30)
         r.raise_for_status()
         if "json" not in r.headers.get("Content-Type", ""):
@@ -1999,20 +2062,16 @@ def get_project_coords(project_name: str):
         logger.error("ORTHOMOSAIC URL missing for this project.")
         raise ValueError("ORTHOMOSAIC URL missing.")
     try:
-        # Request metadata from the ArcGIS Service
         base = ortho_url.rstrip("/")
-        params = _with_read_token_params({"f": "json"}, layer_url=base)
+        params = _with_read_token_params({"f": "json"}, layer_url=base, request_url=base)
         r = _session.get(base, params=params, timeout=30)
         r.raise_for_status()
         meta = r.json()
-        # Extract the extent (xmin, ymin, xmax, ymax)
         extent = meta.get("extent") or meta.get("fullExtent")
         if not extent:
             raise ValueError("Service metadata does not contain an extent.")
-        # Determine the coordinate system (WKID)
         sr = extent.get("spatialReference") or meta.get("spatialReference") or {}
         wkid = sr.get("wkid") or 4326
-        # Return strictly the numeric coordinates and SR
         return {
             "xmin": extent["xmin"],
             "ymin": extent["ymin"],
@@ -2083,7 +2142,9 @@ def _supports_pagination(layer_url: str) -> bool:
     try:
         lu = _sanitise_layer_url(layer_url)
         meta = _session.get(
-            lu, params=_with_read_token_params({"f": "json"}, layer_url=lu), timeout=20
+            lu,
+            params=_with_read_token_params({"f": "json"}, layer_url=lu, request_url=lu),
+            timeout=20,
         ).json()
         return bool(
             meta.get("advancedQueryCapabilities", {}).get(
@@ -2098,7 +2159,9 @@ def _get_objectid_field(layer_url: str) -> str:
     try:
         lu = _sanitise_layer_url(layer_url)
         meta = _session.get(
-            lu, params=_with_read_token_params({"f": "json"}, layer_url=lu), timeout=20
+            lu,
+            params=_with_read_token_params({"f": "json"}, layer_url=lu, request_url=lu),
+            timeout=20,
         ).json()
         if meta.get("objectIdField"):
             return meta["objectIdField"]
@@ -2127,7 +2190,7 @@ def _count_features_in_aoi(
         "returnCountOnly": "true",
         "f": "json",
     }
-    params = _with_read_token_params(params, layer_url=lyr)
+    params = _with_read_token_params(params, layer_url=lyr, request_url=f"{lyr}/query")
     try:
         r = _session.post(f"{lyr}/query", data=params, timeout=timeout)
         r.raise_for_status()
@@ -2172,7 +2235,6 @@ def _paginate_urls_for_aoi(
                 f"{base}&orderByFields={_q(oid + ' ASC')}"
                 f"&resultRecordCount={page_size}&resultOffset={offset}"
             )
-            # Keep page URLs tokenless; token added only when actually requesting.
             urls.append(page)
         return urls
 
@@ -2189,7 +2251,7 @@ def _paginate_urls_for_aoi(
             "returnIdsOnly": "true",
             "f": "json",
         }
-        params = _with_token_data(params, layer_url=lyr)
+        params = _with_token_data(params, layer_url=lyr, request_url=f"{lyr}/query")
         r = _session.post(f"{lyr}/query", data=params, timeout=40)
         r.raise_for_status()
         ids = r.json().get("objectIds") or []
@@ -2219,7 +2281,9 @@ def _supports_distinct(layer_url: str) -> bool:
     try:
         lu = _sanitise_layer_url(layer_url)
         meta = _session.get(
-            lu, params=_with_read_token_params({"f": "json"}, layer_url=lu), timeout=20
+            lu,
+            params=_with_read_token_params({"f": "json"}, layer_url=lu, request_url=lu),
+            timeout=20,
         ).json()
         return bool(
             meta.get("advancedQueryCapabilities", {}).get("supportsDistinct", False)
@@ -2281,7 +2345,7 @@ def _distinct_values_via_service(
             params["resultRecordCount"] = page_size
             params["resultOffset"] = offset
 
-        params = _with_read_token_params(params, layer_url=lyr)
+        params = _with_read_token_params(params, layer_url=lyr, request_url=f"{lyr}/query")
         r = _session.post(f"{lyr}/query", data=params, timeout=40)
         r.raise_for_status()
         js = r.json()
@@ -2326,7 +2390,6 @@ def _sample_values_via_geojson(
         urls.append(u2)
 
     for u in urls:
-        # Token added only at request time if needed
         u = _append_token_to_url(u)
         try:
             r = _session.get(u, timeout=60)
@@ -2413,7 +2476,9 @@ def _get_layer_columns(layer_url: str, timeout: int = 20) -> list[str]:
     # Fast path: metadata fields[]
     try:
         r = _session.get(
-            lu, params=_with_read_token_params({"f": "json"}, layer_url=lu), timeout=timeout
+            lu,
+            params=_with_read_token_params({"f": "json"}, layer_url=lu, request_url=lu),
+            timeout=timeout,
         )
         r.raise_for_status()
         if "json" in (r.headers.get("Content-Type") or "").lower():
@@ -2437,7 +2502,11 @@ def _get_layer_columns(layer_url: str, timeout: int = 20) -> list[str]:
             "resultRecordCount": 1,
             "outSR": 4326,
         }
-        params = _with_token_params(params, layer_url=lu)
+        params = _with_token_params(
+            params,
+            layer_url=lu,
+            request_url=f"{lu}/query",
+        )
         qurl = f"{lu}/query"
         rr = _session.get(qurl, params=params, timeout=timeout)
         rr.raise_for_status()
@@ -2509,7 +2578,7 @@ def _get_layer_last_edit_metadata(layer_url: str):
     if base_url.lower().endswith("/query"):
         base_url = base_url[: base_url.lower().rfind("/query")]
 
-    params = _with_read_token_params({"f": "json"}, layer_url=base_url)
+    params = _with_read_token_params({"f": "json"}, layer_url=base_url, request_url=base_url)
     try:
         r = _session.get(base_url, params=params, timeout=30)
         r.raise_for_status()
@@ -2523,7 +2592,6 @@ def _get_layer_last_edit_metadata(layer_url: str):
     if ts is None:
         return None, None
 
-    # ArcGIS usually returns epoch ms
     if isinstance(ts, (int, float)):
         epoch_ms = int(ts)
         try:
@@ -2533,11 +2601,11 @@ def _get_layer_last_edit_metadata(layer_url: str):
             display = None
         return epoch_ms, display
 
-    # If it’s a string, just pass it through as display
     if isinstance(ts, str):
         return None, ts
 
     return None, None
+
 
 def make_project_data_locations(
     project_name: str, include_seasons: bool, attrs: dict
@@ -2545,14 +2613,11 @@ def make_project_data_locations(
     logger.info(
         f"Building data locations for project '{project_name}' (include_seasons={include_seasons})."
     )
-    # Always refresh from the project index (keeps behaviour consistent with your original)
     attrs = get_project_urls(project_name)
 
-    # Ensure cache dir exists
     os.makedirs(DATA_LOCATIONS_CACHE_DIR, exist_ok=True)
     cache_path = os.path.join(DATA_LOCATIONS_CACHE_DIR, f"{project_name}.json")
 
-    # Load previous cache (if any)
     cached: dict[str, Any] = {}
     try:
         if os.path.exists(cache_path):
@@ -2564,14 +2629,12 @@ def make_project_data_locations(
         )
         cached = {}
 
-    # --- AOI metadata tracking ------------------------------------------------
     aoi_source_url = (
         (get_attr(attrs, "CHAT_INPUT") or get_attr(attrs, "ORTHOMOSAIC") or "")
         .strip()
         or None
     )
 
-    # IMPORTANT: build AOI geometry once and fingerprint it, so cache detects real geometry changes
     try:
         aoi_geom = get_project_aoi_geometry(project_name)
     except Exception:
@@ -2593,7 +2656,6 @@ def make_project_data_locations(
     prev_aoi_last = cached_aoi.get("last_updated")
     prev_aoi_fp = cached_aoi.get("fingerprint") or ""
 
-    # Decide "updated"
     if not cached_aoi:
         aoi_is_updated_flag = True
     else:
@@ -2603,7 +2665,6 @@ def make_project_data_locations(
             aoi_is_updated_flag = True
         elif (aoi_last_ms is not None) and (prev_aoi_last is not None) and (aoi_last_ms != prev_aoi_last):
             aoi_is_updated_flag = True
-        # If we can’t compare reliably, be conservative (treat as updated)
         elif (aoi_last_ms is None) or (prev_aoi_last is None) or (not prev_aoi_fp) or (not aoi_fingerprint):
             aoi_is_updated_flag = True
         else:
@@ -2611,20 +2672,13 @@ def make_project_data_locations(
 
     aoi_unchanged = not aoi_is_updated_flag
 
-    # --- Per-layer cache from previous run -----------------------------------
     previous_layer_cache: dict[str, Any] = cached.get("layers") or {}
     new_layer_cache: dict[str, Any] = {}
 
-    # Core project layer
     tree_crowns_url = get_attr(attrs, "TREE_CROWNS")
     data_locations: list[str] = []
 
-    # Helper to check for non-empty layers
     def _layer_has_features(url: str) -> bool:
-        """
-        Returns True if the FeatureServer/MapServer layer has >0 features.
-        Uses returnCountOnly for efficiency.
-        """
         if not url:
             return False
         query_url = url.rstrip("/")
@@ -2636,7 +2690,7 @@ def make_project_data_locations(
             "where": "1=1",
             "returnCountOnly": "true",
         }
-        params = _with_token_params(params, layer_url=url)
+        params = _with_token_params(params, layer_url=url, request_url=query_url)
         try:
             r = _session.get(query_url, params=params, timeout=30)
             r.raise_for_status()
@@ -2650,20 +2704,17 @@ def make_project_data_locations(
         except Exception:
             return False
 
-    # Helper to add AOI-filtered layer URLs
     def _add(layer_url: str, label_prefix: str, insert_at: Optional[int] = None):
         nonlocal data_locations
         if not layer_url:
             return
 
-        # Stable key for layer+label (for cache)
         try:
             norm_url = _sanitise_layer_url(layer_url)
         except Exception:
             norm_url = layer_url.strip()
         layer_key = f"{label_prefix}|{norm_url}"
 
-        # Last-edit metadata
         layer_last_ms, layer_last_display = _get_layer_last_edit_metadata(layer_url)
         cached_entry = (
             previous_layer_cache.get(layer_key)
@@ -2681,7 +2732,6 @@ def make_project_data_locations(
         is_new_layer = cached_entry is None
         layer_updated_flag = bool(layer_changed or is_new_layer)
 
-        # If AOI hasn't changed *and* layer last-edit time matches cached, reuse URLs
         can_use_cache = (
             cached_entry is not None
             and aoi_unchanged
@@ -2695,7 +2745,6 @@ def make_project_data_locations(
             )
             entries = cached_entry.get("entries") or []
 
-            # Attach token only if needed for returned list
             for entry in entries:
                 entry_display = _attach_token_in_entry(entry)
                 if insert_at is None or insert_at < 0:
@@ -2705,7 +2754,6 @@ def make_project_data_locations(
                     data_locations.insert(pos, entry_display)
                     insert_at += 1
 
-            # Keep cached entries tokenless
             new_layer_cache[layer_key] = {
                 "layer_url": layer_url,
                 "label_prefix": label_prefix,
@@ -2716,9 +2764,7 @@ def make_project_data_locations(
             }
             return
 
-        # Otherwise, recompute entries
         try:
-            # Skip empty layers quickly
             if not _layer_has_features(layer_url):
                 logger.info(f"Skipping empty layer: {layer_url}")
                 return
@@ -2726,16 +2772,13 @@ def make_project_data_locations(
             pass
 
         try:
-            # AOI in layer CRS
             aoi_layer_crs = get_aoi_in_layer_crs(project_name, layer_url)
             label = _label_for_layer(label_prefix, layer_url)
 
-            # Build AOI-filtered, paginated URLs (NO TOKEN EMBEDDED)
             page_urls = _paginate_urls_for_aoi(
                 layer_url, aoi_layer_crs, out_fields="*"
             )
 
-            # Column + schema info for first page only
             _cols = _get_layer_columns(layer_url)
             _cols_str = _format_columns_inline(_cols)
             _schema = _extract_schema_for_layer(
@@ -2754,10 +2797,8 @@ def make_project_data_locations(
                     if len(page_urls) > 1
                     else ""
                 )
-                # Raw entry (tokenless) for cache
                 entry_raw = f"{label}{suffix}: {url}"
 
-                # Attach cols + schema + last_updated on first page only
                 if idx == 1:
                     if _cols_str:
                         entry_raw += f"\n{_cols_str}"
@@ -2765,7 +2806,6 @@ def make_project_data_locations(
                     if _last_updated_str:
                         entry_raw += f"\n  last_updated: {_last_updated_str}"
 
-                # Tokenised entry for returning to caller only if needed
                 entry_display = _attach_token_in_entry(entry_raw)
 
                 if insert_at is None or insert_at < 0:
@@ -2775,7 +2815,6 @@ def make_project_data_locations(
                     data_locations.insert(pos, entry_display)
                     insert_at += 1
 
-                # Cache keeps tokenless entries
                 layer_entries.append(entry_raw)
 
             new_layer_cache[layer_key] = {
@@ -2790,7 +2829,6 @@ def make_project_data_locations(
         except Exception as ex:
             logger.error(f"Failed to add data location for {label_prefix}: {ex}")
 
-    # Helper to add raw (non-AOI-filtered) URLs
     def _add_raw(raw_url: str, label: str, insert_at: Optional[int] = None):
         if not raw_url:
             return
@@ -2806,12 +2844,7 @@ def make_project_data_locations(
         except Exception as ex:
             logger.error(f"Failed to add raw data location for {label}: {ex}")
 
-    # ---------------- TREE "always keep" logic --------------------------------
     def _is_tree_related(label: Optional[str], url: Optional[str]) -> bool:
-        """
-        Return True if this layer is clearly tree-related.
-        Tree-related layers are NEVER deduped (always kept).
-        """
         lbl = (label or "").lower()
         u = (url or "").lower()
         tokens = [
@@ -2839,7 +2872,6 @@ def make_project_data_locations(
             ]
         )
 
-        # --- Tree-first detection (so it doesn't get mis-bucketed) ---
         if _is_tree_related(label, url):
             if any(k in lbl for k in ["tree points", "arbotrackpoints"]) or "points" in lbl:
                 base = "tree_points"
@@ -2851,14 +2883,12 @@ def make_project_data_locations(
                 base = "tree_related"
             return f"{base}::{'national' if is_national else 'local'}"
 
-        # --- Core base type detection ---
         if any(k in lbl for k in ["building", "buildings"]) or "openmap_local_buildings" in u:
             base = "buildings"
         elif any(k in lbl for k in ["road"]) or "openroads" in u:
             base = "roads"
         elif any(k in lbl for k in ["green space", "greenspace"]) or "open_greenspace" in u:
             base = "greenspace"
-        # IMPORTANT: non-operational must be checked BEFORE operational to avoid substring clash
         elif any(
             k in lbl for k in ["non operational property", "non-operational property"]
         ):
@@ -2871,7 +2901,6 @@ def make_project_data_locations(
         return f"{base}::{'national' if is_national else 'local'}"
 
     def _category_already_present(category_key: str, label: Optional[str] = None, url: Optional[str] = None) -> bool:
-        # Always keep all tree-related entries (never dedup them)
         if _is_tree_related(label, url) or category_key.startswith(("tree_", "tree")):
             return False
 
@@ -2879,9 +2908,6 @@ def make_project_data_locations(
 
         for line in data_locations:
             low = line.lower()
-
-            # Only look at the part before any URL so schema / query params
-            # (e.g. "buildingnu") don't accidentally trigger category matches.
             text = low.split("http://", 1)[0]
             text = text.split("https://", 1)[0]
 
@@ -2896,7 +2922,6 @@ def make_project_data_locations(
             ):
                 return True
 
-            # IMPORTANT: make sure we don't treat "non operational" as "operational"
             if base == "operational_property":
                 if (
                     "operational property" in text
@@ -2912,11 +2937,9 @@ def make_project_data_locations(
 
         return False
 
-    # --- 1) Core tree crowns layer -------------------------------------------
     if tree_crowns_url:
         _add(tree_crowns_url, "Tree crowns")
 
-    # --- 2) Seasonal layers (if requested) -----------------------------------
     if include_seasons and project_name.__contains__("TT_"):
         logger.info("Including seasonal crown layers.")
         try:
@@ -2952,7 +2975,6 @@ def make_project_data_locations(
         except Exception as e:
             logger.error(f"Error including seasonal data locations: {e}")
 
-    # --- 3) YAML-based extras -------------------------------------------------
     extras = _iter_project_extra_entries(project_name, YAML_DEFAULT_PATH)
 
     def _infer_priority(item: dict) -> int:
@@ -2960,7 +2982,6 @@ def make_project_data_locations(
             return item["priority"]
         lbl = item.get("label") or ""
         if project_name.lower() in lbl.lower() or "national" not in lbl.lower():
-            # Default: local / project-specific stuff higher priority
             return 10
         return 100
 
@@ -2974,7 +2995,6 @@ def make_project_data_locations(
         aoifilter: bool = bool(item.get("aoifilter", True))
         insert_at: Optional[int] = item.get("insert_at", None)
 
-        # Resolve the URL: either from attributes or fixed URL
         layer_url: Optional[str] = None
         if item.get("use_attr"):
             try:
@@ -3001,7 +3021,6 @@ def make_project_data_locations(
         cat_key = _infer_category(label, layer_url)
         base_key = cat_key.split("::", 1)[0]
 
-        # IMPORTANT: pass label+url so tree-related layers are never deduped
         if _category_already_present(cat_key, label=label, url=layer_url):
             logger.info(
                 f"Skipping '{label}' ({base_key}) because a {base_key} layer already exists (local preferred)."
@@ -3016,7 +3035,6 @@ def make_project_data_locations(
         except Exception as ex:
             logger.error(f"Failed to apply YAML extra '{label}': {ex}")
 
-    # --- Write updated cache --------------------------------------------------
     try:
         cache_obj = {
             "version": 1,
@@ -3030,7 +3048,6 @@ def make_project_data_locations(
                 "is_updated": aoi_is_updated_flag,
             },
             "layers": new_layer_cache,
-            # Store tokenless variants of the entries on disk
             "full_list": [_strip_token_param(x) for x in data_locations],
         }
 
@@ -3053,7 +3070,6 @@ def make_project_data_locations(
     return data_locations
 
 
-
 def get_layer_geometry_type(layer_url: str) -> str:
     """
     Returns one of:
@@ -3062,7 +3078,7 @@ def get_layer_geometry_type(layer_url: str) -> str:
     """
     try:
         url = layer_url.rstrip("/")
-        params = _with_token_params({"f": "json"}, layer_url=url)
+        params = _with_token_params({"f": "json"}, layer_url=url, request_url=url)
         meta = _session.get(url, params=params, timeout=30).json()
         return (meta.get("geometryType") or "").strip()
     except Exception:
