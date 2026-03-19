@@ -23,7 +23,7 @@ from typing import Any, Dict, List, Optional, Union, Tuple
 from pandas.api.types import is_datetime64_any_dtype, is_datetime64tz_dtype
 import time
 
-# READS: long-lived API key (ArcGIS calls accept it via `token=<API_KEY>`), reset per yesr
+# READS: long-lived API key (ArcGIS calls accept it via `token=<API_KEY>`), reset per year
 ARCGIS_READ_API_KEY = os.getenv("ARCGIS_READ_API_KEY", "").strip()
 
 ARCGIS_TOKEN_API = os.getenv(
@@ -34,6 +34,10 @@ INTERNAL_API_KEY = os.getenv("INTERNAL_API_KEY", "xyz")
 
 # Simple in-memory cache: { "token": str, "expires_at": unix_ts }
 _token_cache: dict = {}
+
+# NEW: public-access probe caches
+_PUBLIC_LAYER_ACCESS_CACHE: dict = {}
+_PUBLIC_URL_ACCESS_CACHE: dict = {}
 
 try:
     import yaml  # PyYAML
@@ -180,26 +184,163 @@ def get_arcgis_read_token() -> str:
         return get_arcgis_write_token()
     raise RuntimeError("READ mode is token but fallback disabled.")
 
-def _with_read_token_params(params: dict | None = None) -> dict:
+
+def _arcgis_json_looks_public_success(js: Any) -> bool:
+    """
+    Treat as public success only if the ArcGIS response is valid JSON and not an auth error.
+    """
+    if not isinstance(js, dict):
+        return False
+    if _is_arcgis_auth_error(js):
+        return False
+    # Typical success payloads have one or more of these keys
+    if any(
+        k in js
+        for k in (
+            "fields",
+            "features",
+            "geometryType",
+            "type",
+            "objectIdField",
+            "count",
+            "maxRecordCount",
+            "advancedQueryCapabilities",
+            "spatialReference",
+            "extent",
+            "fullExtent",
+            "currentVersion",
+            "name",
+            "capabilities",
+        )
+    ):
+        return True
+    return False
+
+
+def _public_probe_cache_key(url_or_layer: str) -> str:
+    try:
+        parsed = urlparse(url_or_layer)
+        qs = [(k, v) for (k, v) in parse_qsl(parsed.query, keep_blank_values=True) if k.lower() != "token"]
+        clean_q = urlencode(qs, doseq=True)
+        return urlunparse(parsed._replace(query=clean_q))
+    except Exception:
+        return url_or_layer
+
+
+def _is_public_arcgis_resource(url: str, timeout: int = 12) -> bool:
+    """
+    Probe whether a specific ArcGIS resource can be read without token.
+    Result is cached by cleaned URL.
+    """
+    if not isinstance(url, str) or not url.strip():
+        return False
+
+    cache_key = _public_probe_cache_key(url)
+    cached = _PUBLIC_URL_ACCESS_CACHE.get(cache_key)
+    if cached is not None:
+        return cached
+
+    try:
+        parsed = urlparse(cache_key)
+        qs = parse_qsl(parsed.query, keep_blank_values=True)
+        has_f = any(k.lower() == "f" for k, _ in qs)
+        if not has_f:
+            qs.append(("f", "json"))
+        probe_url = urlunparse(parsed._replace(query=urlencode(qs, doseq=True)))
+
+        r = _session.get(probe_url, timeout=timeout)
+        if not r.ok:
+            _PUBLIC_URL_ACCESS_CACHE[cache_key] = False
+            return False
+
+        ctype = (r.headers.get("Content-Type") or "").lower()
+        if "json" not in ctype:
+            _PUBLIC_URL_ACCESS_CACHE[cache_key] = False
+            return False
+
+        js = r.json()
+        ok = _arcgis_json_looks_public_success(js)
+        _PUBLIC_URL_ACCESS_CACHE[cache_key] = ok
+        return ok
+    except Exception:
+        _PUBLIC_URL_ACCESS_CACHE[cache_key] = False
+        return False
+
+
+def _is_public_arcgis_layer(layer_url: str, timeout: int = 12) -> bool:
+    """
+    Probe whether the layer/service metadata is readable without token.
+    Cached per sanitized layer URL.
+    """
+    if not isinstance(layer_url, str) or not layer_url.strip():
+        return False
+
+    try:
+        layer = _sanitise_layer_url(layer_url)
+    except Exception:
+        layer = layer_url.strip()
+
+    cache_key = _public_probe_cache_key(layer)
+    cached = _PUBLIC_LAYER_ACCESS_CACHE.get(cache_key)
+    if cached is not None:
+        return cached
+
+    try:
+        r = _session.get(layer, params={"f": "json"}, timeout=timeout)
+        if not r.ok:
+            _PUBLIC_LAYER_ACCESS_CACHE[cache_key] = False
+            return False
+
+        ctype = (r.headers.get("Content-Type") or "").lower()
+        if "json" not in ctype:
+            _PUBLIC_LAYER_ACCESS_CACHE[cache_key] = False
+            return False
+
+        js = r.json()
+        ok = _arcgis_json_looks_public_success(js)
+        _PUBLIC_LAYER_ACCESS_CACHE[cache_key] = ok
+        return ok
+    except Exception:
+        _PUBLIC_LAYER_ACCESS_CACHE[cache_key] = False
+        return False
+
+
+def _with_read_token_params(params: dict | None = None, layer_url: Optional[str] = None) -> dict:
+    """
+    Add read token only when required.
+    If the layer/service is publicly accessible, leave params unchanged.
+    """
     p = dict(params or {})
+
+    if "token" in {str(k).lower() for k in p.keys()}:
+        return p
+
+    try:
+        if layer_url and _is_public_arcgis_layer(layer_url):
+            return p
+    except Exception:
+        pass
+
     try:
         token = get_arcgis_read_token()
     except Exception as exc:
         logger.error(f"Failed to get ArcGIS READ credential: {exc}")
         return p
-    if token and "token" not in p:
+
+    if token:
         p["token"] = token
     return p
 
+
 def _append_token_to_url(url: str) -> str:
     """
-    Append the chosen READ credential to a URL using formal parsing.
-    Prevents character mutation by avoiding redundant regex/encoding.
+    Append the chosen READ credential to a URL only if needed.
+    Prevents character mutation by using formal URL parsing.
+    If the target URL is publicly readable, it is returned unchanged.
     """
     if not isinstance(url, str) or not url.strip():
         return url
 
-    # Use formal parsing to check for existing token
     parsed = urlparse(url)
     qs_pairs = parse_qsl(parsed.query, keep_blank_values=True)
     qs_dict = {k.lower(): v for k, v in qs_pairs}
@@ -208,28 +349,32 @@ def _append_token_to_url(url: str) -> str:
         return url
 
     try:
+        # If the exact query URL is public, do not append token.
+        if _is_public_arcgis_resource(url):
+            return url
+    except Exception:
+        pass
+
+    try:
         token = get_arcgis_read_token()
     except Exception as exc:
         logger.error(f"Failed to get ArcGIS READ credential for URL '{url}': {exc}")
         return url
 
-    # Reconstruct query string with the new token
-    # We append to the original list to preserve order and duplicate keys if any
     new_qs = qs_pairs + [("token", token)]
     new_query = urlencode(new_qs, doseq=True)
-
     return urlunparse(parsed._replace(query=new_query))
 
 
 def get_arcgis_write_token(force_refresh: bool = False) -> str:
     return get_arcgis_token(force_refresh=force_refresh)
 
-def _with_token_params(params: Optional[Dict] = None) -> Dict:
-    return _with_read_token_params(params)
+def _with_token_params(params: Optional[Dict] = None, layer_url: Optional[str] = None) -> Dict:
+    return _with_read_token_params(params, layer_url=layer_url)
 
 
-def _with_token_data(data: dict | None = None) -> dict:
-    return _with_read_token_data(data)
+def _with_token_data(data: dict | None = None, layer_url: Optional[str] = None) -> dict:
+    return _with_read_token_data(data, layer_url=layer_url)
 
 
 def get_arcgis_token(force_refresh: bool = False) -> str:
@@ -295,14 +440,29 @@ def _with_write_token_params(params: dict | None = None) -> dict:
         p["token"] = token
     return p
 
-def _with_read_token_data(data: dict | None = None) -> dict:
+def _with_read_token_data(data: dict | None = None, layer_url: Optional[str] = None) -> dict:
+    """
+    Add read token to POST form data only when required.
+    If the layer/service is public, leave data unchanged.
+    """
     d = dict(data or {})
+
+    if "token" in {str(k).lower() for k in d.keys()}:
+        return d
+
+    try:
+        if layer_url and _is_public_arcgis_layer(layer_url):
+            return d
+    except Exception:
+        pass
+
     try:
         token = get_arcgis_read_token()
     except Exception as exc:
         logger.error(f"Failed to get ArcGIS READ credential: {exc}")
         return d
-    if token and "token" not in d:
+
+    if token:
         d["token"] = token
     return d
 
@@ -462,8 +622,9 @@ def _strip_token_param(url: str) -> str:
 
 def _attach_token_in_entry(entry: str) -> str:
     """
-    Safely injects a token into a data location entry string.
-    Splits by line to ensure only the URL portion is modified.
+    Safely inject a token into a data location entry string only when needed.
+    Splits by line so only the URL portion is modified.
+    Publicly readable layers keep tokenless URLs.
     """
     try:
         lines = entry.splitlines()
@@ -642,7 +803,7 @@ def get_project_urls(project_name):
         "outFields": ",".join(fields),
         "f": "json",
     }
-    params = _with_read_token_params(params)
+    params = _with_read_token_params(params, layer_url=query_url)
     logger.debug(f"Querying project index with WHERE clause: {params['where']}")
 
     try:
@@ -711,7 +872,7 @@ def _get_layer_max_record_count(layer_url: str, timeout: int = 20) -> int:
     logger.debug(f"Attempting to fetch maxRecordCount for {layer_url}")
     default_mrc = 1000
     try:
-        params = _with_read_token_params({"f": "json"})
+        params = _with_read_token_params({"f": "json"}, layer_url=layer_url)
         r = _session.get(layer_url.rstrip("/"), params=params, timeout=timeout)
         r.raise_for_status()
         if "json" not in r.headers.get("Content-Type", ""):
@@ -784,7 +945,7 @@ def extract_geojson(
                 "resultOffset": offset,
                 "resultRecordCount": page_size,
             }
-            params = _with_read_token_params(params)
+            params = _with_read_token_params(params, layer_url=layer_url)
             logger.debug(f"Querying with offset={offset}, count={page_size}")
 
             resp = _session.get(f"{layer_url}/query", params=params, timeout=timeout)
@@ -1128,7 +1289,7 @@ def _get_layer_epsg(layer_url: str) -> int:
     """Fetch target layer EPSG from ArcGIS REST."""
     try:
         url = layer_url.rstrip("/")
-        params = _with_read_token_params({"f": "json"})
+        params = _with_read_token_params({"f": "json"}, layer_url=layer_url)
         resp = _session.get(url, params=params, timeout=10)
         resp.raise_for_status()
         js = resp.json()
@@ -1556,7 +1717,7 @@ def _gdf_from_layer_all(
             "resultOffset": offset,
             "resultRecordCount": page_size,
         }
-        params = _with_token_params(params)
+        params = _with_token_params(params, layer_url=layer_url)
         logger.debug(f"Querying all features with offset={offset}, count={page_size}")
 
         try:
@@ -1640,7 +1801,7 @@ def fetch_crs(base_url, timeout=20, default_wkid=4326):
         f"Fetching CRS for base URL: {base_url}. Default WKID: {default_wkid}"
     )
     try:
-        params = _with_read_token_params({"f": "json"})
+        params = _with_read_token_params({"f": "json"}, layer_url=base_url)
         r = _session.get(base_url.rstrip("/"), params=params, timeout=timeout)
         r.raise_for_status()
         ctype = r.headers.get("Content-Type", "")
@@ -1769,7 +1930,7 @@ def get_project_aoi_geometry(project_name: str):
     logger.info(f"Using ORTHOMOSAIC URL: {ortho_url}")
     try:
         base = ortho_url.rstrip("/")
-        params = _with_read_token_params({"f": "json"})
+        params = _with_read_token_params({"f": "json"}, layer_url=base)
         r = _session.get(base, params=params, timeout=30)
         r.raise_for_status()
         if "json" not in r.headers.get("Content-Type", ""):
@@ -1840,7 +2001,7 @@ def get_project_coords(project_name: str):
     try:
         # Request metadata from the ArcGIS Service
         base = ortho_url.rstrip("/")
-        params = _with_read_token_params({"f": "json"})
+        params = _with_read_token_params({"f": "json"}, layer_url=base)
         r = _session.get(base, params=params, timeout=30)
         r.raise_for_status()
         meta = r.json()
@@ -1922,7 +2083,7 @@ def _supports_pagination(layer_url: str) -> bool:
     try:
         lu = _sanitise_layer_url(layer_url)
         meta = _session.get(
-            lu, params=_with_read_token_params({"f": "json"}), timeout=20
+            lu, params=_with_read_token_params({"f": "json"}, layer_url=lu), timeout=20
         ).json()
         return bool(
             meta.get("advancedQueryCapabilities", {}).get(
@@ -1937,7 +2098,7 @@ def _get_objectid_field(layer_url: str) -> str:
     try:
         lu = _sanitise_layer_url(layer_url)
         meta = _session.get(
-            lu, params=_with_read_token_params({"f": "json"}), timeout=20
+            lu, params=_with_read_token_params({"f": "json"}, layer_url=lu), timeout=20
         ).json()
         if meta.get("objectIdField"):
             return meta["objectIdField"]
@@ -1966,7 +2127,7 @@ def _count_features_in_aoi(
         "returnCountOnly": "true",
         "f": "json",
     }
-    params = _with_read_token_params(params)
+    params = _with_read_token_params(params, layer_url=lyr)
     try:
         r = _session.post(f"{lyr}/query", data=params, timeout=timeout)
         r.raise_for_status()
@@ -2028,7 +2189,7 @@ def _paginate_urls_for_aoi(
             "returnIdsOnly": "true",
             "f": "json",
         }
-        params = _with_token_data(params)
+        params = _with_token_data(params, layer_url=lyr)
         r = _session.post(f"{lyr}/query", data=params, timeout=40)
         r.raise_for_status()
         ids = r.json().get("objectIds") or []
@@ -2058,7 +2219,7 @@ def _supports_distinct(layer_url: str) -> bool:
     try:
         lu = _sanitise_layer_url(layer_url)
         meta = _session.get(
-            lu, params=_with_read_token_params({"f": "json"}), timeout=20
+            lu, params=_with_read_token_params({"f": "json"}, layer_url=lu), timeout=20
         ).json()
         return bool(
             meta.get("advancedQueryCapabilities", {}).get("supportsDistinct", False)
@@ -2120,7 +2281,7 @@ def _distinct_values_via_service(
             params["resultRecordCount"] = page_size
             params["resultOffset"] = offset
 
-        params = _with_read_token_params(params)
+        params = _with_read_token_params(params, layer_url=lyr)
         r = _session.post(f"{lyr}/query", data=params, timeout=40)
         r.raise_for_status()
         js = r.json()
@@ -2165,7 +2326,7 @@ def _sample_values_via_geojson(
         urls.append(u2)
 
     for u in urls:
-        # Token added only at request time (URLs in cache stay tokenless)
+        # Token added only at request time if needed
         u = _append_token_to_url(u)
         try:
             r = _session.get(u, timeout=60)
@@ -2252,7 +2413,7 @@ def _get_layer_columns(layer_url: str, timeout: int = 20) -> list[str]:
     # Fast path: metadata fields[]
     try:
         r = _session.get(
-            lu, params=_with_read_token_params({"f": "json"}), timeout=timeout
+            lu, params=_with_read_token_params({"f": "json"}, layer_url=lu), timeout=timeout
         )
         r.raise_for_status()
         if "json" in (r.headers.get("Content-Type") or "").lower():
@@ -2276,7 +2437,7 @@ def _get_layer_columns(layer_url: str, timeout: int = 20) -> list[str]:
             "resultRecordCount": 1,
             "outSR": 4326,
         }
-        params = _with_token_params(params)
+        params = _with_token_params(params, layer_url=lu)
         qurl = f"{lu}/query"
         rr = _session.get(qurl, params=params, timeout=timeout)
         rr.raise_for_status()
@@ -2348,7 +2509,7 @@ def _get_layer_last_edit_metadata(layer_url: str):
     if base_url.lower().endswith("/query"):
         base_url = base_url[: base_url.lower().rfind("/query")]
 
-    params = _with_read_token_params({"f": "json"})
+    params = _with_read_token_params({"f": "json"}, layer_url=base_url)
     try:
         r = _session.get(base_url, params=params, timeout=30)
         r.raise_for_status()
@@ -2475,7 +2636,7 @@ def make_project_data_locations(
             "where": "1=1",
             "returnCountOnly": "true",
         }
-        params = _with_token_params(params)
+        params = _with_token_params(params, layer_url=url)
         try:
             r = _session.get(query_url, params=params, timeout=30)
             r.raise_for_status()
@@ -2534,7 +2695,7 @@ def make_project_data_locations(
             )
             entries = cached_entry.get("entries") or []
 
-            # Attach token at read-time only for returned list
+            # Attach token only if needed for returned list
             for entry in entries:
                 entry_display = _attach_token_in_entry(entry)
                 if insert_at is None or insert_at < 0:
@@ -2604,7 +2765,7 @@ def make_project_data_locations(
                     if _last_updated_str:
                         entry_raw += f"\n  last_updated: {_last_updated_str}"
 
-                # Tokenised entry for returning to caller
+                # Tokenised entry for returning to caller only if needed
                 entry_display = _attach_token_in_entry(entry_raw)
 
                 if insert_at is None or insert_at < 0:
@@ -2901,7 +3062,7 @@ def get_layer_geometry_type(layer_url: str) -> str:
     """
     try:
         url = layer_url.rstrip("/")
-        params = _with_token_params({"f": "json"})
+        params = _with_token_params({"f": "json"}, layer_url=url)
         meta = _session.get(url, params=params, timeout=30).json()
         return (meta.get("geometryType") or "").strip()
     except Exception:
