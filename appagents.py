@@ -22,7 +22,7 @@ from typing import List, Optional, Any, Tuple
 from pydantic import PrivateAttr
 from vertexai.generative_models import GenerativeModel
 from google.api_core.exceptions import ResourceExhausted
-from appbackend import filter as push_to_map
+from appbackend import filter as push_to_map, safe_read_arcgis
 from LLM_Heroku_Kernel import Solution
 
 import hashlib
@@ -546,13 +546,24 @@ def try_llm_fix(code, error_message=None, max_attempts=2):
         try:
             if error_message:
                 prompt = (
+                    "The runtime already provides shared ArcGIS authentication through appbackend. "
+                    "Do not create placeholder ArcGIS tokens, do not ask for manual token replacement, "
+                    "and do not append token= to URLs. "
+                    "For ArcGIS FeatureServer/MapServer reads, import and use safe_read_arcgis from appbackend. "
+                    "Output only corrected Python code.\n\n"
                     f"The following Python code produced the error: \n"
                     f"{error_message}\n"
                     f"Please fix the code (e.g., fixing unmatched parentheses and ensuring the code compiles) "
                     f"and output only the corrected Python code:\n{fixed_code}\n"
                 )
             else:
-                prompt = f"Fix the following Python code and output only the corrected code:\n{fixed_code}\n"
+                prompt = (
+                    "The runtime already provides shared ArcGIS authentication through appbackend. "
+                    "Do not create placeholder ArcGIS tokens, do not ask for manual token replacement, "
+                    "and do not append token= to URLs. "
+                    "For ArcGIS FeatureServer/MapServer reads, import and use safe_read_arcgis from appbackend. "
+                    f"Fix the following Python code and output only the corrected code:\n{fixed_code}\n"
+                )
 
             response = model.generate_content(prompt)
             fixed_code = helper.extract_code(response.text)

@@ -12,7 +12,14 @@ import configparser
 # --- Robust ArcGIS/GeoJSON fetch policy helper --------------------------------
 arcgis_fetch_policy = r"""
 When loading a URL with GeoPandas, if gpd.read_file(URL) fails OR the server returns non-GeoJSON (HTML/login/error JSON),
-recover automatically:
+recover automatically.
+
+Critical ArcGIS auth rule:
+- The runtime already has a shared authenticated ArcGIS session from appbackend using env credentials.
+- Never create code like arcgis_token = None.
+- Never tell the user to manually replace a token.
+- Never append token= to ArcGIS URLs.
+- For ArcGIS FeatureServer/MapServer URLs, always import and use safe_read_arcgis from appbackend.
 
 1) Probe:
 - Prefer the shared ArcGIS-authenticated helpers from appbackend when the source is an ArcGIS FeatureServer/MapServer URL.
@@ -40,14 +47,22 @@ recover automatically:
 -If no features are returned, return an empty GeoDataFrame with a geometry column and CRS EPSG:4326.
 
 
--Reference helper the model may write when needed:
+-Reference helper usage the model should prefer:
 
-def safe_read_arcgis(url: str):
-    import requests
-    import geopandas as gpd
-    from shapely.geometry import shape
+from appbackend import safe_read_arcgis
 
-    def _looks_like_html(text):
+# Then call:
+# gdf = safe_read_arcgis(url)
+
+-Only if a local wrapper is absolutely necessary, it must delegate to appbackend.safe_read_arcgis and must not introduce manual token variables. Example:
+
+def safe_read_arcgis_local(url: str):
+    from appbackend import safe_read_arcgis as _safe_read_arcgis
+    return _safe_read_arcgis(url)
+
+# Legacy internal example of what the shared helper behavior covers:
+
+def _looks_like_html(text):
         t = text.lstrip().lower()
         return t.startswith("<") or "<html" in t[:500]
         
@@ -381,7 +396,8 @@ operation_requirement = [
     # ---- Right-side field control in joins (added) ----
     "When carrying right-side attributes across a join, include only essential identifiers (e.g., ESRIUKCASTID, name1) and avoid bringing measurement fields (Shape__Area, Shape__Length) from the right side unless explicitly requested.",
     "When loading remote spatial data from ArcGIS FeatureServer/MapServer or URLs using 'f=geojson', follow the Robust ArcGIS/GeoJSON fetch policy and implement/use a helper like safe_read_arcgis(url) when gpd.read_file(url) fails.",
-    "Prefer gpd.read_file(url) first; on exception or non-GeoJSON, call safe_read_arcgis(url) and continue with the returned GeoDataFrame.",
+    "Prefer gpd.read_file(url) first; on exception or non-GeoJSON, call safe_read_arcgis(url) from appbackend and continue with the returned GeoDataFrame.",
+    "Never generate placeholder ArcGIS token variables or instructions to manually replace a token; the runtime session already handles ArcGIS auth.",
     "When loading layers, always prioritize project-local entries from config/data_locations.yml and project index attrs; use national context layers strictly as fallbacks when no local equivalent exists.",
     "If the user asks about which trees that are a hazardous, use their height information to determine: a) If height of tree > distance to road = hazardous b) Height of tree < distance to road = non-haardous.",
     arcgis_fetch_policy
@@ -434,7 +450,8 @@ assembly_requirement = ['You can think step by step. ',
                     "If using GeoPandas for spatial analysis, when doing overlay analysis, carefully think about use Geopandas.GeoSeries.intersects() or geopandas.sjoin(). ",
                     "Geopandas.GeoSeries.intersects(other, align=True) returns a Series of dtype('bool') with value True for each aligned geometry that intersects other. other:GeoSeries or geometric object. ",
                     "Note geopandas.sjoin() returns all joined pairs, i.e., the return could be one-to-many. E.g., the intersection result of a polygon with two points inside it contains two rows; in each row, the polygon attribute is the same. If you need of extract the polygons intersecting with the points, please remember to remove the duplicated rows in the results.",
-                    "All data loads from URLs must be resilient: try gpd.read_file(url) first; if it fails or returns non-GeoJSON, call safe_read_arcgis(url).",
+                    "All data loads from URLs must be resilient: try gpd.read_file(url) first; if it fails or returns non-GeoJSON, call safe_read_arcgis(url) from appbackend.",
+                    "Do not create arcgis_token variables, token placeholders, or manual token replacement instructions.",
                     arcgis_fetch_policy,
                     "When constructing ArcGIS REST API queries, the spatialRel should always be esriSpatialRelIntersects.",
                     "If the result is a geodataframe ensure that before returning it only the index (important to preserve as it is used by arcgis to filter which tree to show on the map) and geometry columns are remaining, because the other columns face problems during serialization.",
@@ -485,7 +502,8 @@ direct_request_requirement = [
                         "When read FIPS or GEOID columns from CSV files, read those columns as str or int, never as float.",
                         "FIPS or GEOID columns may be str type with leading zeros (digits: state: 2, county: 5, tract: 11, block group: 12), or integer type without leading zeros. Thus, when joining they, you can convert the integer colum to str type with leading zeros to ensure the success.",
                         "If you need to make a map and the map size is not given, set the map size to 15*10 inches.",
-                        "If reading a URL fails with 'Failed to read GeoJSON data' or similar, automatically switch to the robust loader per the ArcGIS/GeoJSON fetch policy (use safe_read_arcgis(url)).",
+                        "If reading a URL fails with 'Failed to read GeoJSON data' or similar, automatically switch to the robust loader per the ArcGIS/GeoJSON fetch policy (use safe_read_arcgis(url) from appbackend).",
+                        "Never solve ArcGIS auth errors by adding placeholder token variables; rely on the shared authenticated session.",
                         arcgis_fetch_policy,
                         "Ensure the program's final output has no pandas.Timestamp/numpy.datetime64 columns; convert to ISO 8601 strings (UTC) with dtype=object before return.",
                         timestamp_output_rules,
@@ -525,7 +543,8 @@ debug_requirement = [
                         "When read FIPS or GEOID columns from CSV files, read those columns as str or int, never as float.",
                         "FIPS or GEOID columns may be str type with leading zeros (digits: state: 2, county: 5, tract: 11, block group: 12), or integer type without leading zeros. Thus, when joining using they, you can convert the integer column to str type with leading zeros to ensure the success.",
                         "If you need to make a map and the map size is not given, set the map size to 15*10 inches.",
-                        "If the reported error involves 'Failed to read GeoJSON data' or unexpected HTML/Content-Type, fix the program by replacing direct gpd.read_file(url) with a resilient call using the ArcGIS/GeoJSON fetch policy and the safe_read_arcgis(url) helper.",
+                        "If the reported error involves 'Failed to read GeoJSON data' or unexpected HTML/Content-Type, fix the program by replacing direct gpd.read_file(url) with a resilient call using the ArcGIS/GeoJSON fetch policy and the safe_read_arcgis(url) helper from appbackend.",
+                        "Never add manual ArcGIS token placeholders or ask the user to paste a token.",
                         arcgis_fetch_policy,
                         "If the bug relates to ArcGIS Online ingestion, ensure no datetime-like dtypes remain in outputs; convert to ISO 8601 strings (UTC) with dtype=object.",
                         timestamp_output_rules,
