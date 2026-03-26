@@ -14,17 +14,3 @@ The worflow automation triggers when: Someone opens a pull request against the m
 
 
 Conncecting Vertex to hosted github: https://docs.google.com/document/d/1yaeu1pjWm-B51a8NmYapWe1_28ITkxCHbAruwEJ1gq8/edit?usp=sharing
-
-
-## ArcGIS authentication
-
-ArcGIS data access now uses the ArcGIS API for Python session instead of manual token or API key plumbing.
-Set these environment variables:
-
-- `ARCGIS_PORTAL_URL` (default: `https://www.arcgis.com`)
-- `ARCGIS_USERNAME`
-- `ARCGIS_PASSWORD`
-- `ARCGIS_VERIFY_CERT` (optional, default `true`)
-- `ARCGIS_USE_GEN_TOKEN` (optional, default `false`)
-
-The API process and the LLM execution path both reuse the same authenticated `GIS.session`, so FeatureServer and MapServer reads/writes can run without adding `token=` parameters to URLs.
