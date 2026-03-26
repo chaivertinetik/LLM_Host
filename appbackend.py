@@ -23,21 +23,15 @@ from typing import Any, Dict, List, Optional, Union, Tuple
 from pandas.api.types import is_datetime64_any_dtype, is_datetime64tz_dtype
 import time
 
-# READS: long-lived API key (ArcGIS calls accept it via `token=<API_KEY>`), reset per year
-ARCGIS_READ_API_KEY = os.getenv("ARCGIS_READ_API_KEY", "").strip()
-
-ARCGIS_TOKEN_API = os.getenv(
-    "ARCGIS_TOKEN_API",
-    "https://arcgis-token-microservice-1042524106019.europe-west1.run.app",
-)
-INTERNAL_API_KEY = os.getenv("INTERNAL_API_KEY", "xyz")
-
-# Simple in-memory cache: { "token": str, "expires_at": unix_ts }
-_token_cache: dict = {}
-
-# Public access probe caches
-_PUBLIC_LAYER_ACCESS_CACHE: dict = {}
-_PUBLIC_URL_ACCESS_CACHE: dict = {}
+# Shared ArcGIS Python API connection/session.
+# Configure with:
+#   ARCGIS_PORTAL_URL=https://www.arcgis.com
+#   ARCGIS_USERNAME=<username>
+#   ARCGIS_PASSWORD=<password>
+# Optional:
+#   ARCGIS_VERIFY_CERT=true|false
+#   ARCGIS_USE_GEN_TOKEN=true|false
+from credentials import get_arcgis_gis, get_arcgis_session
 
 try:
     import yaml  # PyYAML
@@ -47,20 +41,60 @@ except ImportError:
 # NEW: local reprojection
 from pyproj import CRS, Transformer
 
-# --- networking: single session with retries ---------------------------------
+# --- networking: ArcGIS-aware shared session with retries --------------------
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
-_session = requests.Session()
-_retry = Retry(
-    total=3,
-    backoff_factor=0.5,
-    status_forcelist=(429, 502, 503, 504),
-    allowed_methods=["GET", "POST"],
-    raise_on_status=False,
-)
-_session.mount("http://", HTTPAdapter(max_retries=_retry))
-_session.mount("https://", HTTPAdapter(max_retries=_retry))
+
+def _build_base_requests_session() -> requests.Session:
+    session = requests.Session()
+    retry = Retry(
+        total=3,
+        backoff_factor=0.5,
+        status_forcelist=(429, 502, 503, 504),
+        allowed_methods=["GET", "POST"],
+        raise_on_status=False,
+    )
+    adapter = HTTPAdapter(max_retries=retry)
+    session.mount("http://", adapter)
+    session.mount("https://", adapter)
+    return session
+
+
+_BASE_REQUESTS_SESSION = _build_base_requests_session()
+
+
+class _ArcGISAwareSession:
+    """Use ArcGIS-authenticated GIS.session for ArcGIS URLs and plain requests elsewhere."""
+
+    def __init__(self, fallback_session: requests.Session):
+        self._fallback = fallback_session
+
+    def _is_arcgis_url(self, url: str) -> bool:
+        try:
+            host = (urlparse(url).netloc or "").lower()
+        except Exception:
+            host = ""
+        return any(part in host for part in ("arcgis.com", "arcgisonline.com"))
+
+    def _pick_session(self, url: str):
+        if self._is_arcgis_url(url):
+            try:
+                gis_session = get_arcgis_session()
+                if gis_session is not None:
+                    return gis_session
+            except Exception as exc:
+                logger.warning(f"ArcGIS authenticated session unavailable for {url}: {exc}")
+        return self._fallback
+
+    def get(self, url: str, **kwargs):
+        return self._pick_session(url).get(url, **kwargs)
+
+    def post(self, url: str, **kwargs):
+        return self._pick_session(url).post(url, **kwargs)
+
+
+_session = _ArcGISAwareSession(_BASE_REQUESTS_SESSION)
 
 YAML_DEFAULT_PATH = os.environ.get(
     "EXTRA_DATA_LOCATIONS_YAML", "config/data_locations.yml"
@@ -87,245 +121,64 @@ class ClearRequest(BaseModel):
     task_name: str
 
 
-# --------------------- ARC GIS TOKEN + HELPERS ---------------------
-
-ALLOW_READ_FALLBACK_TO_WRITE = os.getenv("ALLOW_READ_FALLBACK_TO_WRITE", "1") == "1"
-
-# --------------------- READ AUTH SELECTION (API key OR token service) ---------------------
-
-# One-time decision cache: "api_key" or "token"
-_READ_AUTH_MODE: Optional[str] = None
-_READ_AUTH_REASON: Optional[str] = None
-
-# Use something that is very likely to be readable if key works.
-# ArcGIS REST endpoint accepts token=<api_key> for API keys.
-_ARCGIS_READ_PROBE_URL = os.getenv(
-    "ARCGIS_READ_PROBE_URL",
-    "https://www.arcgis.com/sharing/rest/community/self"
-)
-
-def _is_arcgis_auth_error(js: Any) -> bool:
-    if not isinstance(js, dict):
-        return False
-    err = js.get("error")
-    if not isinstance(err, dict):
-        return False
-    code = err.get("code")
-    # 498/499 are common token errors; 403/401 can appear depending on endpoint.
-    return code in (498, 499, 401, 403) or bool(err.get("message"))
-
-def _probe_api_key_once() -> Tuple[bool, str]:
-    """
-    Returns (ok, reason). OK means ARCGIS_READ_API_KEY can read ArcGIS REST.
-    Only used once during auth selection.
-    """
-    if not ARCGIS_READ_API_KEY:
-        return False, "ARCGIS_READ_API_KEY missing"
-
-    try:
-        params = {"f": "json", "token": ARCGIS_READ_API_KEY}
-        r = _session.get(_ARCGIS_READ_PROBE_URL, params=params, timeout=15)
-        # Even if HTTP 200, ArcGIS might return {"error": {...}}
-        try:
-            js = r.json()
-        except Exception:
-            return False, f"Probe non-JSON (HTTP {r.status_code})"
-
-        if _is_arcgis_auth_error(js):
-            return False, f"Probe ArcGIS error: {js.get('error')}"
-        # community/self returns user info when valid
-        return True, "API key probe succeeded"
-    except Exception as e:
-        return False, f"Probe exception: {e}"
-
-def _ensure_read_auth_mode() -> str:
-    """
-    Decide once per process whether READs use API key or token service.
-    """
-    global _READ_AUTH_MODE, _READ_AUTH_REASON
-
-    if _READ_AUTH_MODE:
-        return _READ_AUTH_MODE
-
-    ok, reason = _probe_api_key_once()
-    if ok:
-        _READ_AUTH_MODE = "api_key"
-        _READ_AUTH_REASON = reason
-        logger.info(f"READ auth mode selected: api_key ({reason})")
-        return _READ_AUTH_MODE
-
-    # fallback (optional)
-    if not ALLOW_READ_FALLBACK_TO_WRITE:
-        _READ_AUTH_MODE = "api_key"  # stays "api_key" but will fail later; explicit reason logged
-        _READ_AUTH_REASON = f"API key failed and fallback disabled ({reason})"
-        logger.warning(f"READ auth mode could not fallback: {_READ_AUTH_REASON}")
-        return _READ_AUTH_MODE
-
-    _READ_AUTH_MODE = "token"
-    _READ_AUTH_REASON = f"API key failed, falling back to token service ({reason})"
-    logger.warning(f"READ auth mode selected: token ({_READ_AUTH_REASON})")
-    return _READ_AUTH_MODE
+# --------------------- ARC GIS AUTH HELPERS ---------------------
 
 def get_arcgis_read_token() -> str:
     """
-    Return the working READ credential:
-    - If API key works: return ARCGIS_READ_API_KEY
-    - Else: return token from token microservice (requires ALLOW_READ_FALLBACK_TO_WRITE=1)
+    Compatibility shim for older code paths.
+    Returns the ArcGIS session token created from ARCGIS_USERNAME / ARCGIS_PASSWORD.
     """
-    mode = _ensure_read_auth_mode()
+    gis = get_arcgis_gis()
+    session = get_arcgis_session()
+    token = None
+    try:
+        token = getattr(getattr(session, "auth", None), "token", None)
+    except Exception:
+        token = None
+    if token:
+        return token
+    try:
+        token = getattr(getattr(gis, "session", None), "auth", None)
+        token = getattr(token, "token", None)
+    except Exception:
+        token = None
+    if token:
+        return token
+    raise RuntimeError(
+        "ArcGIS session token is unavailable. Set ARCGIS_PORTAL_URL, ARCGIS_USERNAME and ARCGIS_PASSWORD."
+    )
 
-    if mode == "api_key":
-        if not ARCGIS_READ_API_KEY:
-            raise RuntimeError("ARCGIS_READ_API_KEY missing.")
-        return ARCGIS_READ_API_KEY
 
-    # token mode
-    if ALLOW_READ_FALLBACK_TO_WRITE:
-        return get_arcgis_write_token()
-    raise RuntimeError("READ mode is token but fallback disabled.")
+def get_arcgis_write_token(force_refresh: bool = False) -> str:
+    return get_arcgis_read_token()
+
+
+def get_arcgis_token(force_refresh: bool = False) -> str:
+    return get_arcgis_read_token()
 
 
 def _arcgis_json_looks_public_success(js: Any) -> bool:
-    """
-    Treat as public success only if the ArcGIS response is valid JSON and not an auth error.
-    """
     if not isinstance(js, dict):
         return False
-    if _is_arcgis_auth_error(js):
+    if "error" in js:
         return False
-    if any(
-        k in js
-        for k in (
-            "fields",
-            "features",
-            "geometryType",
-            "type",
-            "objectIdField",
-            "count",
-            "maxRecordCount",
-            "advancedQueryCapabilities",
-            "spatialReference",
-            "extent",
-            "fullExtent",
-            "currentVersion",
-            "name",
-            "capabilities",
-            "addResults",
-            "updateResults",
-            "deleteResults",
-            "success",
-        )
-    ):
-        return True
-    return False
+    return True
 
 
 def _public_probe_cache_key(url_or_layer: str) -> str:
-    try:
-        parsed = urlparse(url_or_layer)
-        qs = [(k, v) for (k, v) in parse_qsl(parsed.query, keep_blank_values=True) if k.lower() != "token"]
-        clean_q = urlencode(qs, doseq=True)
-        return urlunparse(parsed._replace(query=clean_q))
-    except Exception:
-        return url_or_layer
+    return url_or_layer
 
 
 def _is_public_arcgis_resource(url: str, timeout: int = 12) -> bool:
-    """
-    Probe whether a specific ArcGIS resource can be accessed without token.
-    Result is cached by cleaned URL.
-    """
-    if not isinstance(url, str) or not url.strip():
-        return False
-
-    cache_key = _public_probe_cache_key(url)
-    cached = _PUBLIC_URL_ACCESS_CACHE.get(cache_key)
-    if cached is not None:
-        return cached
-
-    try:
-        parsed = urlparse(cache_key)
-        qs = parse_qsl(parsed.query, keep_blank_values=True)
-        has_f = any(k.lower() == "f" for k, _ in qs)
-        if not has_f:
-            qs.append(("f", "json"))
-        probe_url = urlunparse(parsed._replace(query=urlencode(qs, doseq=True)))
-
-        r = _session.get(probe_url, timeout=timeout)
-        if not r.ok:
-            _PUBLIC_URL_ACCESS_CACHE[cache_key] = False
-            return False
-
-        ctype = (r.headers.get("Content-Type") or "").lower()
-        if "json" not in ctype:
-            _PUBLIC_URL_ACCESS_CACHE[cache_key] = False
-            return False
-
-        js = r.json()
-        ok = _arcgis_json_looks_public_success(js)
-        _PUBLIC_URL_ACCESS_CACHE[cache_key] = ok
-        return ok
-    except Exception:
-        _PUBLIC_URL_ACCESS_CACHE[cache_key] = False
-        return False
+    return False
 
 
 def _is_public_arcgis_layer(layer_url: str, timeout: int = 12) -> bool:
-    """
-    Probe whether the layer/service metadata is readable without token.
-    Cached per sanitized layer URL.
-    """
-    if not isinstance(layer_url, str) or not layer_url.strip():
-        return False
-
-    try:
-        layer = _sanitise_layer_url(layer_url)
-    except Exception:
-        layer = layer_url.strip()
-
-    cache_key = _public_probe_cache_key(layer)
-    cached = _PUBLIC_LAYER_ACCESS_CACHE.get(cache_key)
-    if cached is not None:
-        return cached
-
-    try:
-        r = _session.get(layer, params={"f": "json"}, timeout=timeout)
-        if not r.ok:
-            _PUBLIC_LAYER_ACCESS_CACHE[cache_key] = False
-            return False
-
-        ctype = (r.headers.get("Content-Type") or "").lower()
-        if "json" not in ctype:
-            _PUBLIC_LAYER_ACCESS_CACHE[cache_key] = False
-            return False
-
-        js = r.json()
-        ok = _arcgis_json_looks_public_success(js)
-        _PUBLIC_LAYER_ACCESS_CACHE[cache_key] = ok
-        return ok
-    except Exception:
-        _PUBLIC_LAYER_ACCESS_CACHE[cache_key] = False
-        return False
+    return False
 
 
 def _needs_token_for_request(layer_url: Optional[str] = None, url: Optional[str] = None) -> bool:
-    """
-    Returns True only if token is needed.
-    Checks public access first for exact URL, then layer metadata.
-    """
-    try:
-        if url and _is_public_arcgis_resource(url):
-            return False
-    except Exception:
-        pass
-
-    try:
-        if layer_url and _is_public_arcgis_layer(layer_url):
-            return False
-    except Exception:
-        pass
-
-    return True
+    return False
 
 
 def _with_read_token_params(
@@ -333,64 +186,13 @@ def _with_read_token_params(
     layer_url: Optional[str] = None,
     request_url: Optional[str] = None,
 ) -> dict:
-    """
-    Add read token only when required.
-    If the layer/service is publicly accessible, leave params unchanged.
-    """
-    p = dict(params or {})
-
-    if "token" in {str(k).lower() for k in p.keys()}:
-        return p
-
-    if not _needs_token_for_request(layer_url=layer_url, url=request_url):
-        return p
-
-    try:
-        token = get_arcgis_read_token()
-    except Exception as exc:
-        logger.error(f"Failed to get ArcGIS READ credential: {exc}")
-        return p
-
-    if token:
-        p["token"] = token
-    return p
+    """No-op: ArcGIS authentication is handled by the shared GIS session, not token params."""
+    return dict(params or {})
 
 
 def _append_token_to_url(url: str) -> str:
-    """
-    Append the chosen READ credential to a URL only if needed.
-    Prevents character mutation by using formal URL parsing.
-    If the target URL is publicly readable, it is returned unchanged.
-    """
-    if not isinstance(url, str) or not url.strip():
-        return url
-
-    parsed = urlparse(url)
-    qs_pairs = parse_qsl(parsed.query, keep_blank_values=True)
-    qs_dict = {k.lower(): v for k, v in qs_pairs}
-
-    if "token" in qs_dict:
-        return url
-
-    try:
-        if _is_public_arcgis_resource(url):
-            return url
-    except Exception:
-        pass
-
-    try:
-        token = get_arcgis_read_token()
-    except Exception as exc:
-        logger.error(f"Failed to get ArcGIS READ credential for URL '{url}': {exc}")
-        return url
-
-    new_qs = qs_pairs + [("token", token)]
-    new_query = urlencode(new_qs, doseq=True)
-    return urlunparse(parsed._replace(query=new_query))
-
-
-def get_arcgis_write_token(force_refresh: bool = False) -> str:
-    return get_arcgis_token(force_refresh=force_refresh)
+    """No-op: ArcGIS authentication is handled by the shared GIS session, not tokenized URLs."""
+    return url
 
 
 def _with_token_params(
@@ -398,7 +200,7 @@ def _with_token_params(
     layer_url: Optional[str] = None,
     request_url: Optional[str] = None,
 ) -> Dict:
-    return _with_read_token_params(params, layer_url=layer_url, request_url=request_url)
+    return dict(params or {})
 
 
 def _with_token_data(
@@ -406,58 +208,7 @@ def _with_token_data(
     layer_url: Optional[str] = None,
     request_url: Optional[str] = None,
 ) -> dict:
-    return _with_read_token_data(data, layer_url=layer_url, request_url=request_url)
-
-
-def get_arcgis_token(force_refresh: bool = False) -> str:
-    """
-    Get an ArcGIS token from your Cloud Run microservice.
-    - Uses INTERNAL_API_KEY header for auth.
-    - Caches the token in memory until close to expiry.
-    - Raises RuntimeError on failure.
-    Returns
-    -------
-    str
-        The ArcGIS access token string.
-    """
-    global _token_cache
-    now = time.time()
-    token = _token_cache.get("token")
-    expires_at = _token_cache.get("expires_at")
-    if (
-        not force_refresh
-        and token is not None
-        and expires_at is not None
-        and now < expires_at - 60  # 60s safety margin
-    ):
-        return token
-
-    url = f"{ARCGIS_TOKEN_API.rstrip('/')}/token"
-    headers = {"X-Internal-Key": INTERNAL_API_KEY}
-    try:
-        resp = requests.get(url, headers=headers, timeout=15)
-    except Exception as exc:
-        raise RuntimeError(f"Error calling token microservice: {exc}") from exc
-    if not resp.ok:
-        raise RuntimeError(f"Token service error {resp.status_code}: {resp.text}")
-    try:
-        data = resp.json()
-    except Exception as exc:
-        raise RuntimeError(f"Token service returned non-JSON: {resp.text}") from exc
-
-    token = data.get("access_token") or data.get("token")
-    expires_in = data.get("expires_in") or data.get("expires")
-    if not token:
-        raise RuntimeError(f"Token service returned no token field: {data}")
-
-    if isinstance(expires_in, (int, float)):
-        expires_at = now + float(expires_in)
-    else:
-        expires_at = now + 3600
-
-    _token_cache["token"] = token
-    _token_cache["expires_at"] = expires_at
-    return token
+    return dict(data or {})
 
 
 def _with_write_token_params(
@@ -465,27 +216,7 @@ def _with_write_token_params(
     layer_url: Optional[str] = None,
     request_url: Optional[str] = None,
 ) -> dict:
-    """
-    Add write token only when required.
-    If the target write endpoint/layer is public for that operation, leave unchanged.
-    """
-    p = dict(params or {})
-
-    if "token" in {str(k).lower() for k in p.keys()}:
-        return p
-
-    if not _needs_token_for_request(layer_url=layer_url, url=request_url):
-        return p
-
-    try:
-        token = get_arcgis_write_token()
-    except Exception as exc:
-        logger.error(f"Failed to get ArcGIS WRITE token: {exc}")
-        return p
-
-    if token:
-        p["token"] = token
-    return p
+    return dict(params or {})
 
 
 def _with_read_token_data(
@@ -493,27 +224,7 @@ def _with_read_token_data(
     layer_url: Optional[str] = None,
     request_url: Optional[str] = None,
 ) -> dict:
-    """
-    Add read token to POST form data only when required.
-    If the layer/service is public, leave data unchanged.
-    """
-    d = dict(data or {})
-
-    if "token" in {str(k).lower() for k in d.keys()}:
-        return d
-
-    if not _needs_token_for_request(layer_url=layer_url, url=request_url):
-        return d
-
-    try:
-        token = get_arcgis_read_token()
-    except Exception as exc:
-        logger.error(f"Failed to get ArcGIS READ credential: {exc}")
-        return d
-
-    if token:
-        d["token"] = token
-    return d
+    return dict(data or {})
 
 
 def _with_write_token_data(
@@ -521,7 +232,69 @@ def _with_write_token_data(
     layer_url: Optional[str] = None,
     request_url: Optional[str] = None,
 ) -> dict:
-    return _with_write_token_params(data, layer_url=layer_url, request_url=request_url)
+    return dict(data or {})
+
+
+def arcgis_request_json(
+    method: str,
+    url: str,
+    *,
+    params: Optional[Dict[str, Any]] = None,
+    data: Optional[Dict[str, Any]] = None,
+    timeout: int = 60,
+) -> Dict[str, Any]:
+    """Issue an ArcGIS request through the shared authenticated session and return JSON."""
+    method = (method or "GET").upper()
+    if method == "POST":
+        resp = _session.post(url, data=data, params=params, timeout=timeout)
+    else:
+        resp = _session.get(url, params=params, timeout=timeout)
+    resp.raise_for_status()
+    ctype = (resp.headers.get("Content-Type") or "").lower()
+    if "json" not in ctype and "geojson" not in ctype:
+        raise ValueError(f"Expected JSON from {url}, got Content-Type={ctype}")
+    js = resp.json()
+    if isinstance(js, dict) and "error" in js:
+        raise ValueError(f"ArcGIS error from {url}: {js['error']}")
+    return js
+
+
+def safe_read_arcgis(
+    url: str,
+    *,
+    where: str = "1=1",
+    out_fields: str = "*",
+    out_wkid: int = 4326,
+    timeout: int = 60,
+) -> gpd.GeoDataFrame:
+    """Robust ArcGIS reader that always uses the shared GIS session for ArcGIS-hosted layers."""
+    try:
+        layer_url = _sanitise_layer_url(url)
+    except Exception:
+        layer_url = None
+
+    if layer_url:
+        gdf = extract_geojson(layer_url, where=where, out_fields=out_fields, timeout=timeout)
+        if gdf is None:
+            return gpd.GeoDataFrame({"geometry": []}, geometry="geometry", crs=f"EPSG:{out_wkid}")
+        if gdf.crs is None:
+            gdf = gdf.set_crs(epsg=4326, allow_override=True)
+        if out_wkid and int(out_wkid) != 4326:
+            try:
+                gdf = gdf.to_crs(epsg=int(out_wkid))
+            except Exception:
+                pass
+        return gdf
+
+    try:
+        gdf = gpd.read_file(url)
+        if gdf is None:
+            return gpd.GeoDataFrame({"geometry": []}, geometry="geometry", crs=f"EPSG:{out_wkid}")
+        if gdf.crs is None:
+            gdf = gdf.set_crs(epsg=4326, allow_override=True)
+        return gdf
+    except Exception:
+        return gpd.GeoDataFrame({"geometry": []}, geometry="geometry", crs=f"EPSG:{out_wkid}")
 
 
 def _json_default(obj):
