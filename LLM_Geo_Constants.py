@@ -15,7 +15,8 @@ When loading a URL with GeoPandas, if gpd.read_file(URL) fails OR the server ret
 recover automatically:
 
 1) Probe:
-- GET the URL with requests (timeout=60). If Content-Type is not JSON/GeoJSON, or text starts with "<" or contains "<html"
+- Prefer the shared ArcGIS-authenticated helpers from appbackend when the source is an ArcGIS FeatureServer/MapServer URL.
+- GET the URL with requests (timeout=60) only for non-ArcGIS sources. If Content-Type is not JSON/GeoJSON, or text starts with "<" or contains "<html"
   in the first 500 chars, treat as non-GeoJSON.
 
 2) Fallback (same upstream URL):
